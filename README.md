@@ -29,7 +29,6 @@ Example data expressed in Turtle 1.2
 :t :statedBy :govBE
 ```
 
-
 #### Interop spec/ RDF reification
 -- to RDF1.1 ->
 ```
@@ -40,44 +39,44 @@ Example data expressed in Turtle 1.2
 _:temp a rdftripleTerm .
 _:temp rdf:ttSubject :me .
 _:temp rdf:ttPredicate :name .
-_:temp rdf:ttObject "jitse" .  
+_:temp rdf:ttObject "jitse" .
 ```
 
 construct to go back:
 ```
 CONSTRUCT {
-	?t rdf:reifies <<( ?s ?p ?o )>>
+    ?t rdf:reifies <<( ?s ?p ?o )>>
 } WHERE {
-	?t rdf:reifies [
-		a rdf:tripleTerm ;
-		rdf:ttSubject ?s ;
-		rdf:ttPredicate ?p ;
-		rdf:ttObject ?o ;
-	]
+    ?t rdf:reifies [
+        a rdf:tripleTerm ;
+        rdf:ttSubject ?s ;
+        rdf:ttPredicate ?p ;
+        rdf:ttObject ?o ;
+    ]
 }
 CONSTRUCT {
-	?s ?p ?o .
+    ?s ?p ?o .
 } WHERE {
-	?s ?p ?o .
-	# Next filter is not needed since in 1.1 the function does not exist
-	FILTER ( !isTripleTerm(?o)) . 
-	FILTER ( ?p != "rdf:reifies" && NOT EXISTS {
-		?sRoot rdf:reifies ?s . 
-	})
+    ?s ?p ?o .
+    # Next filter is not needed since in 1.1 the function does not exist
+    FILTER ( !isTripleTerm(?o)) .
+    FILTER ( ?p != "rdf:reifies" && NOT EXISTS {
+        ?sRoot rdf:reifies ?s .
+    })
 }
 ```
 Construct to go to: (Because 2 ways, can do GLAV)
 ```
 CONSTRUCT {
-	?t rdf:reifies [
-		a rdf:tripleTerm ;
-		rdf:ttSubject ?s ;
-		rdf:ttPredicate ?p ;
-		rdf:ttObject ?o ;
-	]
+    ?t rdf:reifies [
+        a rdf:tripleTerm ;
+        rdf:ttSubject ?s ;
+        rdf:ttPredicate ?p ;
+        rdf:ttObject ?o ;
+    ]
 } WHERE {
-	?t rdf:reifies <<( ?s ?p ?o )>>
-} 
+    ?t rdf:reifies <<( ?s ?p ?o )>>
+}
 ```
 
 #### Singleton Property
@@ -86,16 +85,16 @@ CONSTRUCT {
 :me :name "jitse"
 :me :name#1 "jitse"
 :name#1 rdf:singletonProperyOf :name ;
-		:statedBy :govBE .
+        :statedBy :govBE .
 ```
 
 Construct to go back:
 ```
 CONSTRUCT {
-	?p rdf:reifies <<( ?s ?trueProp ?o )>>
+    ?p rdf:reifies <<( ?s ?trueProp ?o )>>
 } WHERE {
-	?s ?p ?o .
-	?p rdf:singletonPropertyOf ?trueProp .
+    ?s ?p ?o .
+    ?p rdf:singletonPropertyOf ?trueProp .
 }
 ```
 
@@ -115,26 +114,26 @@ _:temp :statedBy :govBE .
 Construct to go back:
 ```
 CONSTRUCT {
-	?t rdf:reifies <<( ?s ?p ?o )>> ; ?p1 ?o1 .
+    ?t rdf:reifies <<( ?s ?p ?o )>> ; ?p1 ?o1 .
 } WHERE {
-	GRAPH ?t { ?s ?p ?o } .
-	?t ?p1 ?o1 .
-	OPTIONAL { ?t a some:reificationGraph }
+    GRAPH ?t { ?s ?p ?o } .
+    ?t ?p1 ?o1 .
+    OPTIONAL { ?t a some:reificationGraph }
 }
 ```
 
 Construct to go back with a check for only one triple
 ```
 CONSTRUCT {
-	?t rdf:reifies <<( ?s ?p ?o )>> ; ?p1 ?o1 .
+    ?t rdf:reifies <<( ?s ?p ?o )>> ; ?p1 ?o1 .
 } WHERE {
-	{
-		SELECT ?t WHERE {
-			GRAPH ?t { ?s ?p ?o } 
-		} GROUP BY (?t) having (count(*) = 1)
-	}
-	GRAPH ?t { ?s ?p ?o } .
-	?t ?p1 ?o1 .
+    {
+        SELECT ?t WHERE {
+            GRAPH ?t { ?s ?p ?o }
+        } GROUP BY (?t) having (count(*) = 1)
+    }
+    GRAPH ?t { ?s ?p ?o } .
+    ?t ?p1 ?o1 .
 }
 ```
 
@@ -156,14 +155,14 @@ _:temp :namePs "jitse" .
 Construct to go back:
 ```
 CONSTRUCT {
-	?rel rdf:reifies <<( ?s ?trueProp ?o )>> ; ?p1 ?o1 .
+    ?rel rdf:reifies <<( ?s ?trueProp ?o )>> ; ?p1 ?o1 .
 } WHERE {
-	?s ?p ?rel .
-	?rel ?p1 ?o1 ;
-		 ?ps ?o .
-	 
-	 ?p :hasDirectProp :name ;
-		:hasPropertyStatement ?ps ;
+    ?s ?p ?rel .
+    ?rel ?p1 ?o1 ;
+         ?ps ?o .
+
+     ?p :hasDirectProp :name ;
+        :hasPropertyStatement ?ps ;
 }
 ```
 

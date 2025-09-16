@@ -1,0 +1,4 @@
+yarn run build
+yarn run lint
+yarn run depcheck
+yarn run test

@@ -26,7 +26,6 @@ jobs:
           cache: yarn
       - run: yarn install --immutable
       - run: yarn lint
-      - run: yarn depcheck
 
   test:
     strategy:

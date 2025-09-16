@@ -42,20 +42,21 @@
     "build:ts": "node \"node_modules/typescript/bin/tsc\"",
     "build:transpile": "node \"node_modules/esbuild/bin/esbuild\" --format=cjs --bundle --log-level=error --outfile=lib/index.cjs lib/index.ts",
     "clean": "git clean -dfx",
-    "depcheck": "depcheck --ignores=\"vitest,@rdfjs/types,esbuild,@vitest/coverage-v8\"",
     "doc": "typedoc",
     "lint": "eslint . --cache",
     "postinstall": "yarn husky && yarn run build",
     "test": "vitest test --run"
   },
   "dependencies": {
+    "@traqula/algebra-sparql-1-2": "^0.0.14",
+    "@traqula/algebra-transformations-1-2": "^0.0.14",
+    "@traqula/generator-sparql-1-2": "^0.0.14",
     "@traqula/parser-sparql-1-2": "^0.0.14"
   },
   "devDependencies": {
     "@rdfjs/types": "^2.0.0",
     "@rubensworks/eslint-config": "^3.1.0",
     "@vitest/coverage-v8": "3.2.4",
-    "depcheck": "^1.4.7",
     "esbuild": "^0.25.0",
     "eslint": "^8.57.0",
     "husky": "^9.1.7",

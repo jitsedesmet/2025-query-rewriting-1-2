@@ -12,6 +12,17 @@ There is a working draft for a spec describing the mapping between RDF1.1 and RD
 
 Example data expressed in Turtle 1.2
 
+### Sparql 1.2 rewrite
+
+The intention is that you have a SPARQL 1.2 query and mapping using construct queries.
+The body of this mapping should not contain any SPARQL 1.2 syntax, but the head can contain triple terms.
+Using this approach means that you cannot rewrite recursive triple terms for arbitrary depth,
+you will need a construct for every depth you want to support.
+What our rewriter will do is map each triple pattern in your BGP to a list of unions for each construct over some selects.
+When you are solving the variables of your mapping head, it should be noted that triple term binding appears outside the SUB-SELECTS,
+thereby creating a toplevel query that can use SPARQL 1.2 construct, but does not contain any BGPs, and a bunch of subselects that only use SPARQL1.1 and do contain the BGPs.
+![](assets/query-rewritten.jpg)
+
 ### RDF 1.2 examples
 
 ```

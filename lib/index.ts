@@ -99,23 +99,37 @@ function bgpTransform(input: Alg.Bgp): Alg.Join {
 function prettifyQuery(query: string): string {
   const builder: string[] = [];
   let indentation = 0;
-  let last = -1;
-  let nextOpen = query.indexOf('{');
-  let nextClose = query.indexOf('}');
-  while (nextOpen >= last || nextClose >= last) {
-    if (nextOpen >= last && nextOpen < nextClose) {
-      // We open a bracket
-      builder.push(' '.repeat(indentation), query.slice(last + 1, nextOpen + 1).trim(), '\n');
-      indentation += 2;
-      last = nextOpen;
-      nextOpen = query.indexOf('{', last + 1);
-    } else {
-      // We close a bracket
-      builder.push(' '.repeat(indentation), query.slice(last + 1, nextClose).trim(), '\n');
-      indentation -= 2;
-      builder.push(' '.repeat(indentation), '}', '\n');
-      last = nextClose;
-      nextClose = query.indexOf('}', last + 1);
+  function addNewLine(): void {
+    builder.push('\n', ' '.repeat(indentation));
+  }
+  let inIri = false;
+  for (const char of query) {
+    switch (char) {
+      case '{': {
+        builder.push(char);
+        indentation += 2;
+        addNewLine();
+        break;
+      }
+      case '}': {
+        builder.push(char);
+        indentation -= 2;
+        addNewLine();
+        break;
+      }
+      case '.': {
+        builder.push(char);
+        if (!inIri) {
+          addNewLine();
+        }
+        break;
+      }
+      case '>':
+      case '<':
+        inIri = char === '<';
+      // eslint-disable-next-line no-fallthrough
+      default:
+        builder.push(char);
     }
   }
   return builder.join('');

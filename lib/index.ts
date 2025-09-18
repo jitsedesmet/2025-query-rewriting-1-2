@@ -1,86 +1,13 @@
 /* eslint-disable no-console */
 import { toAlgebra, toAst } from '@traqula/algebra-sparql-1-2';
-import { Algebra as Alg, utils, Factory } from '@traqula/algebra-transformations-1-2';
+import { Algebra as Alg, utils } from '@traqula/algebra-transformations-1-2';
 import { Generator } from '@traqula/generator-sparql-1-2';
 import { Parser } from '@traqula/parser-sparql-1-2';
-
-const tripleTermConstruct = `
-PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-CONSTRUCT {
-  ?t rdf:reifies <<( ?s ?p ?o )>>
-} WHERE {
-  ?t rdf:reifies [
-      a rdf:tripleTerm ;
-      rdf:ttSubject ?s ;
-      rdf:ttPredicate ?p ;
-      rdf:ttObject ?o ;
-  ]
-}
-`;
-
-const nonTripleTermConstruct = `
-PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-CONSTRUCT {
-  ?s ?p ?o .
-} WHERE {
-  ?s ?p ?o .
-  # Next filter is not needed since in 1.1 the function does not exist
-  FILTER ( !isTriple(?o) ) . 
-  FILTER ( ?p != "rdf:reifies" && NOT EXISTS {
-    ?sRoot rdf:reifies ?s . 
-  } )
-}
-`;
-
-const testQuery = `
-PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-PREFIX : <https://example.com/>
-
-SELECT * WHERE {
-  :t rdf:reifies <<( :me :name ?name )>> .
-  :t :statedBy :govBE
-}`;
-
-const expectedQuery = `
-PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-PREFIX : <https://example.com/>
-
-SELECT * WHERE {
-  { 
-    ?t rdf:reifies [
-      a rdf:tripleTerm ;
-      rdf:ttSubject ?s ;
-      rdf:ttPredicate ?p ;
-      rdf:ttObject ?o ;
-  ] }
-  UNION {
-    ?s ?p ?o .
-  # Next filter is not needed since in 1.1 the function does not exist
-  FILTER ( !isTriple(?o) ) . 
-  FILTER ( ?p != "rdf:reifies" && NOT EXISTS {
-    ?sRoot rdf:reifies ?s . 
-  } )
-  }
-  { 
-    ?t rdf:reifies [
-      a rdf:tripleTerm ;
-      rdf:ttSubject ?s ;
-      rdf:ttPredicate ?p ;
-      rdf:ttObject ?o ;
-  ] }
-  UNION {
-    ?s ?p ?o .
-  # Next filter is not needed since in 1.1 the function does not exist
-  FILTER ( !isTriple(?o) ) . 
-  FILTER ( ?p != "rdf:reifies" && NOT EXISTS {
-    ?sRoot rdf:reifies ?s . 
-  } )
-  } 
-}`;
+import { expectedQuery, nonTripleTermConstruct, testQuery, tripleTermConstruct } from './queries.js';
+import { BgpTransformer } from './transformBgp.js';
 
 const parser = new Parser();
 const generator = new Generator();
-const algFact = new Factory();
 const algebraTransformer = new utils.AlgebraTransformer();
 export const construct1 = <Alg.Construct> toAlgebra(parser.parse(tripleTermConstruct), { quads: true });
 export const construct2 = <Alg.Construct> toAlgebra(parser.parse(nonTripleTermConstruct), { quads: true });
@@ -90,11 +17,6 @@ const _expectedAlg = toAlgebra(expectedAst, { quads: true });
 const mappers = <const> [ construct1, construct2 ];
 
 // Console.log(JSON.stringify(construct1, null, 2));
-//
-function bgpTransform(input: Alg.Bgp): Alg.Join {
-  return algFact.createJoin(input.patterns.map(_ =>
-    algFact.createUnion(mappers.map(x => x.input), true)), true);
-}
 
 function prettifyQuery(query: string): string {
   const builder: string[] = [];
@@ -112,8 +34,12 @@ function prettifyQuery(query: string): string {
         break;
       }
       case '}': {
-        builder.push(char);
+        const build = builder.join('').trimEnd();
+        builder.length = 0;
+        builder.push(build);
         indentation -= 2;
+        addNewLine();
+        builder.push(char);
         addNewLine();
         break;
       }
@@ -142,10 +68,11 @@ export function rewrite(input: Alg.Operation): Alg.Operation {
 ${JSON.stringify(faultyMapper.template, null, 2)}`);
   }
 
+  const transformer = new BgpTransformer(mappers);
   const transformed = <Alg.Operation> algebraTransformer.transformNode<'unsafe'>(
     input,
     { [Alg.Types.BGP]: {
-      transform: input => bgpTransform(input),
+      transform: input => transformer.bgpTransform(input),
     },
     },
   );

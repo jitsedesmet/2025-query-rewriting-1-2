@@ -32,7 +32,8 @@ PREFIX : <https://example.com/>
 
 SELECT * WHERE {
   :t rdf:reifies <<( :me :name ?name )>> .
-  :t :statedBy :govBE
+  :t :statedBy :govBE .
+  ?s ?p ?o .
 }`;
 
 export const expectedQuery = `

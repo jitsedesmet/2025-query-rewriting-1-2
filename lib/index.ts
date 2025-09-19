@@ -18,7 +18,7 @@ const mappers = <const> [ construct1, construct2 ];
 
 // Console.log(JSON.stringify(construct1, null, 2));
 
-function prettifyQuery(query: string): string {
+function _prettifyQuery(query: string): string {
   const builder: string[] = [];
   let indentation = 0;
   function addNewLine(): void {
@@ -78,7 +78,7 @@ ${JSON.stringify(faultyMapper.template, null, 2)}`);
   );
   const asAst = toAst(transformed);
   const asQuery = generator.generate(asAst);
-  console.log(prettifyQuery(asQuery));
+  console.log(asQuery);
 
   return transformed;
 }

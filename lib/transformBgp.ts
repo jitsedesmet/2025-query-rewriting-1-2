@@ -1,5 +1,8 @@
 import type * as RDF from '@rdfjs/types';
-import { Factory, Algebra as Alg } from '@traqula/algebra-transformations-1-2';
+import { toAlgebra, toAst } from '@traqula/algebra-sparql-1-2';
+import { Factory, Algebra as Alg, utils } from '@traqula/algebra-transformations-1-2';
+import { Generator } from '@traqula/generator-sparql-1-2';
+import { Parser } from '@traqula/parser-sparql-1-2';
 import { DataFactory } from 'rdf-data-factory';
 
 const AF = new Factory();
@@ -10,7 +13,33 @@ function patternSPO(pattern: Alg.Pattern | RDF.BaseQuad): RDF.Term[] {
 }
 
 export class BgpTransformer {
-  public constructor(private readonly mappers: readonly Alg.Construct[]) {}
+  private readonly parser = new Parser();
+  private readonly generator = new Generator();
+  private readonly algebraTransformer = new utils.AlgebraTransformer();
+  public constructor(private readonly mappers: readonly Alg.Construct[]) {
+    const faultyMapper = this.mappers.find(mapper => mapper.template.length !== 1);
+    if (faultyMapper) {
+      throw new Error(`Mappers should have only a single mapping head, found:
+${JSON.stringify(faultyMapper.template, null, 2)}`);
+    }
+  }
+
+  public queryTransform(input: string): string {
+    const transformed = this.operationTransform(toAlgebra(this.parser.parse(input), { quads: true }));
+    const asAst = toAst(transformed);
+    return this.generator.generate(asAst);
+  }
+
+  public operationTransform(input: Alg.Operation): Alg.Operation {
+    const transformed = <Alg.Operation> this.algebraTransformer.transformNode<'unsafe'>(
+      input,
+      { [Alg.Types.BGP]: {
+        transform: input => this.bgpTransform(input),
+      },
+      },
+    );
+    return transformed;
+  }
 
   public bgpTransform(input: Alg.Bgp): Alg.Join {
     return AF.createJoin(input.patterns.map(_ => this.mapPattern(_)), true);
@@ -81,7 +110,20 @@ export class BgpTransformer {
       inProject = AF.createJoin([ mappingHeadExtensions, inProject ]);
     }
 
-    const variablesToSelect = Object.keys(triplePatternAsMappingHead).map(x => DF.variable(x));
+    const variablesToSelect: RDF.Variable[] = [];
+    function registerVars(cur: RDF.Term): void {
+      if (cur.termType === 'Variable') {
+        variablesToSelect.push(cur);
+      }
+      if (cur.termType === 'Quad') {
+        registerVars(cur.subject);
+        registerVars(cur.predicate);
+        registerVars(cur.object);
+      }
+    }
+    for (const var_ of Object.values(triplePatternAsMappingHead)) {
+      registerVars(var_);
+    }
     if (variablesToSelect.length === 0) {
       // You cannot select nothing, but actually we just want this subquery to validate if data exists.
       // You cannot have a subAsk, but you can do a select over a dummy var: SELECT (1 as ?dummy)

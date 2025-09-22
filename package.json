@@ -48,10 +48,10 @@
     "test": "vitest test --run"
   },
   "dependencies": {
-    "@traqula/algebra-sparql-1-2": "^0.0.14",
-    "@traqula/algebra-transformations-1-2": "^0.0.14",
-    "@traqula/generator-sparql-1-2": "^0.0.14",
-    "@traqula/parser-sparql-1-2": "^0.0.14",
+    "@traqula/algebra-sparql-1-2": "^0.0.16",
+    "@traqula/algebra-transformations-1-2": "^0.0.16",
+    "@traqula/generator-sparql-1-2": "^0.0.16",
+    "@traqula/parser-sparql-1-2": "^0.0.16",
     "rdf-data-factory": "^2.0.2"
   },
   "devDependencies": {

@@ -1,11 +1,12 @@
 import type * as RDF from '@rdfjs/types';
 import { toAlgebra, toAst } from '@traqula/algebra-sparql-1-2';
-import { Factory, Algebra as Alg, utils } from '@traqula/algebra-transformations-1-2';
+import { AlgebraFactory, Algebra as Alg, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { Generator } from '@traqula/generator-sparql-1-2';
 import { Parser } from '@traqula/parser-sparql-1-2';
 import { DataFactory } from 'rdf-data-factory';
+import { BoundSolver } from './BoundSolver.js';
 
-const AF = new Factory();
+const AF = new AlgebraFactory();
 const DF = new DataFactory();
 
 function patternSPO(pattern: Alg.Pattern | RDF.BaseQuad): RDF.Term[] {
@@ -15,8 +16,13 @@ function patternSPO(pattern: Alg.Pattern | RDF.BaseQuad): RDF.Term[] {
 export class BgpTransformer {
   private readonly parser = new Parser();
   private readonly generator = new Generator();
-  private readonly algebraTransformer = new utils.AlgebraTransformer();
-  public constructor(private readonly mappers: readonly Alg.Construct[]) {
+  private readonly algebraTransformer = new algebraUtils.AlgebraTransformer();
+  private readonly boundSolver = new BoundSolver();
+  private readonly mappers: Alg.Construct[];
+
+  public constructor(mappers: readonly string[]) {
+    this.mappers = mappers.map(mapper =>
+      <Alg.Construct> toAlgebra(this.parser.parse(mapper), { quads: true, blankToVariable: true }));
     const faultyMapper = this.mappers.find(mapper => mapper.template.length !== 1);
     if (faultyMapper) {
       throw new Error(`Mappers should have only a single mapping head, found:
@@ -25,9 +31,14 @@ ${JSON.stringify(faultyMapper.template, null, 2)}`);
   }
 
   public queryTransform(input: string): string {
-    const transformed = this.operationTransform(toAlgebra(this.parser.parse(input), { quads: true }));
-    const asAst = toAst(transformed);
-    return this.generator.generate(asAst);
+    const inputAST = this.parser.parse(input);
+    const inputAlgebra = toAlgebra(inputAST, {
+      quads: true,
+      blankToVariable: true,
+    });
+    const transformedAlgebra = this.operationTransform(inputAlgebra);
+    const transformedAst = toAst(transformedAlgebra);
+    return this.generator.generate(transformedAst);
   }
 
   public operationTransform(input: Alg.Operation): Alg.Operation {
@@ -48,13 +59,18 @@ ${JSON.stringify(faultyMapper.template, null, 2)}`);
   private mapPattern(pattern: Alg.Pattern): Alg.Union {
     return AF.createUnion(this.mappers.flatMap((mapper) => {
       try {
-        return [ this.mapSingleSubSelect(pattern, mapper) ];
+        return [ this.mapSingleMapper(pattern, mapper) ];
       } catch {
         return [];
       }
     }), true);
   }
 
+  // You register the mapping head and link the variables. After that, you solve.
+  // Once you have solved, go over the mapping head again.
+  //  If mapping head is variable, check whether bound to a non-var (check if only one).
+  //    If not bound to non-var, it is because the user query has a var in this position.
+  // For the user query, if there is a var in this position, look whether it is bound to a term and does not conflict.
   private iterateMappingHead(
     mHAT: Record<string, RDF.Term>,
     tPAMH: Record<string, RDF.Term>,
@@ -86,7 +102,7 @@ ${JSON.stringify(faultyMapper.template, null, 2)}`);
     }
   }
 
-  private mapSingleSubSelect(pattern: Alg.Pattern, mapper: Alg.Construct): Alg.Project | Alg.Extend {
+  private mapSingleMapper(pattern: Alg.Pattern, mapper: Alg.Construct): Alg.Project | Alg.Extend {
     // If triple pattern term is bound, and mapping head is var, put here.
     const mappingHeadAsTriplePattern: Record<string, RDF.Term> = {};
     // If the triple pattern term is a var, and mapping head is not, or is - put in here.

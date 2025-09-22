@@ -54,6 +54,10 @@ export class BoundSolver {
       .sort((a, b) => {
         // Variables last
         if (a.termType === 'Variable') {
+          if (b.termType === 'Variable') {
+            // Make sure 'm' (mapping) vars are before 'uq' (user query) vars
+            return b.value.localeCompare(a.value);
+          }
           return 1;
         }
         if (b.termType === 'Variable') {

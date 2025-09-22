@@ -75,9 +75,8 @@ ${JSON.stringify(faultyMapper.template, null, 2)}`);
     return AF.createUnion(this.mappers.flatMap((mapper) => {
       try {
         return [ this.mapSingleMapper(pattern, mapper) ];
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.error(e);
+      } catch {
+        // Console.error(e);
         return [];
       }
     }), true);
@@ -127,28 +126,64 @@ ${JSON.stringify(faultyMapper.template, null, 2)}`);
 
     // If triple pattern term is bound, and mapping head is var, put here.
     const mappingHeadBinds: Record<string, RDF.Term> = {};
+    const headVarsRemap: Record<string, RDF.Variable> = {};
     // If the triple pattern term is a var, and mapping head is not, or is - put in here.
     const triplePatternBinds: Record<string, RDF.Term> = {};
     for (const variable of Object.values(mappingHeadVars)) {
+      if (headVarsRemap[variable.value]) {
+        continue;
+      }
       const boundList = this.boundSolver.getConnected(variable);
+      if (boundList.every(bounding => bounding.termType === 'Variable')) {
+        // TODO: If all in boundList are variables, and boundlist contains other mappingHead Variables,
+        //  you need to create a new variable for the matching mappingHead vars.
+        //  Since any group links to each-other, the first such match is enough to find all equal vars.
+        //  All future vars in the group can be ignored.
+        //  Furthermore it is essential to capture the new variable in the triplePatternBinds
+        // Note that Head does not bind to var,
+        // if a var in the head is equal to a var in the pattern, we handle it on the pattern
+        const otherMappingVars = boundList.filter(x => x.value.startsWith('m'));
+        if (otherMappingVars.length > 0) {
+          const varNamespacePrefix = otherMappingVars[0].value
+            .slice(0, otherMappingVars[0].value.indexOf('_'));
+          const newVarName = [
+            varNamespacePrefix,
+            '_',
+            [ variable, ...otherMappingVars ].map(x => x.value.slice(varNamespacePrefix.length + 1)).join('_AND_'),
+          ].join('');
+          const newVar = DF.variable(newVarName);
+          headVarsRemap[variable.value] = newVar;
+          for (const variable of otherMappingVars) {
+            headVarsRemap[variable.value] = newVar;
+          }
+        }
+      }
       const boundTo = boundList[0];
-      // TODO: If all in boundList are variables, and boundlist contains other mappingHead Variables,
-      //  you need to create a new variable for the matching mappingHead vars.
-      //  Since any group links to each-other, the first such match is enough to find all equal vars.
-      //  All future vars in the group can be ignored.
-      //  Furthermore it is essential to capture the new variable in the triplePatternBinds
-      // Head does not bind to var, if a var in the head is equal to a var in the pattern, we handle it on the pattern
       if (boundTo.termType !== 'Variable') {
         mappingHeadBinds[variable.value] = boundTo;
       }
     }
     for (const variable of Object.values(triplePatternVars)) {
       const boundList = this.boundSolver.getConnected(variable);
-      triplePatternBinds[variable.value] = boundList[0];
+      let boundTo = boundList[0];
+      if (boundTo.termType === 'Variable' && headVarsRemap[boundTo.value]) {
+        boundTo = headVarsRemap[boundTo.value];
+      }
+      triplePatternBinds[variable.value] = boundTo;
     }
 
     // Now, after we know the binds, we can bind them. We bind triplePatternBinds after the subselect:
     let inProject: Alg.Operation = mapper.input;
+    // Translate vars in Project
+    if (Object.keys(headVarsRemap).length > 0) {
+      inProject = <Alg.Operation> this.algebraTransformer.transformObject(inProject, (something) => {
+        if ('termType' in something && 'value' in something && something.termType === 'Variable' &&
+          typeof something.value === 'string' && headVarsRemap[something.value]) {
+          return headVarsRemap[something.value];
+        }
+        return something;
+      });
+    }
     let mappingHeadExtensions: Alg.Extend | Alg.Bgp = AF.createBgp([]);
     for (const [ variable, expr ] of Object.entries(mappingHeadBinds)) {
       mappingHeadExtensions = AF.createExtend(

@@ -132,11 +132,15 @@ ${JSON.stringify(faultyMapper.template, null, 2)}`);
     for (const variable of Object.values(mappingHeadVars)) {
       const boundList = this.boundSolver.getConnected(variable);
       const boundTo = boundList[0];
+      // TODO: If all in boundList are variables, and boundlist contains other mappingHead Variables,
+      //  you need to create a new variable for the matching mappingHead vars.
+      //  Since any group links to each-other, the first such match is enough to find all equal vars.
+      //  All future vars in the group can be ignored.
+      //  Furthermore it is essential to capture the new variable in the triplePatternBinds
       // Head does not bind to var, if a var in the head is equal to a var in the pattern, we handle it on the pattern
       if (boundTo.termType !== 'Variable') {
         mappingHeadBinds[variable.value] = boundTo;
       }
-      // TODO: you need to rewrite your query if you entail that two mapping head vars are the same.
     }
     for (const variable of Object.values(triplePatternVars)) {
       const boundList = this.boundSolver.getConnected(variable);

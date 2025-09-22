@@ -31,9 +31,10 @@ PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 PREFIX : <https://example.com/>
 
 SELECT * WHERE {
-  :t rdf:reifies <<( :me :name ?name )>> .
-  :t :statedBy :govBE .
-  ?s ?p ?o .
+  #:t rdf:reifies <<( :me :name ?name )>> .
+  #:t :statedBy :govBE .
+  #?s ?p ?o .
+  ?s1 ?s1 ?o1 .
 }`;
 
 export const expectedQuery = `

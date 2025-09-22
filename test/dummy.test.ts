@@ -5,7 +5,7 @@ import { Parser } from '@traqula/parser-sparql-1-2';
 // @ts-expect-error 7016
 import unify from 'unify';
 import { describe, it } from 'vitest';
-import { expectedQuery, nonTripleTermConstruct, testQuery, tripleTermConstruct } from '../lib/queries.js';
+import { expectedQuery, nonTripleTermConstruct, testQuery } from '../lib/queries.js';
 import { BgpTransformer } from '../lib/transformBgp.js';
 
 describe('dummy', () => {
@@ -22,7 +22,10 @@ describe('dummy', () => {
     });
   }
 
-  test('simple', testQuery, expectedQuery, [ tripleTermConstruct, nonTripleTermConstruct ]);
+  test('simple', testQuery, expectedQuery, [
+    // TripleTermConstruct,
+    nonTripleTermConstruct,
+  ]);
 
   it.skip('reifiaction', () => {
     const varA = unify.variable('A');

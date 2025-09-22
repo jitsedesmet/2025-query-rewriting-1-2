@@ -1,22 +1,40 @@
 import type * as RDF from '@rdfjs/types';
 
+type BasicTerm = Exclude<RDF.Term, RDF.Quad | RDF.DefaultGraph>;
+
+/**
+ * Solver that can solve what variables are equal to each-other and potentially what terms they are equal to.
+ * When two mapping head vars are equal to each-other,
+ * query rewriting needs to happen on the mapping to ensure they are equal.
+ */
 export class BoundSolver {
-  private readonly binds: Record<string, RDF.Term[]> = {};
+  private binds: Record<string, BasicTerm[]> = {};
 
   public constructor() {}
 
-  public register(from: RDF.Variable, to: RDF.Term): void {
-    this.registerOne(from, to);
-    if (to.termType === 'Variable') {
-      this.registerOne(to, from);
-    }
+  public clear(): void {
+    this.binds = {};
   }
 
-  private registerOne(from: RDF.Variable, to: RDF.Term): void {
-    if (!this.binds[from.value]) {
-      this.binds[from.value] = [];
+  /**
+   * 'from' var is now linked to 'to' var.
+   */
+  public register(from: BasicTerm, to: BasicTerm): void {
+    if (from.termType !== 'Variable' && to.termType !== 'Variable' && !from.equals(to)) {
+      throw new Error(`Cannot match Term ${JSON.stringify(from)} with term ${JSON.stringify(to)}`);
     }
-    this.binds[from.value].push(to);
+    for (const [ fromIter, toIter ] of [[ from, to ], [ to, from ]]) {
+      // Only on vars
+      if (fromIter.termType === 'Variable') {
+        // Register var if not exists
+        if (!this.binds[fromIter.value]) {
+          this.binds[fromIter.value] = [];
+        }
+        if (!this.binds[fromIter.value].some(x => x.equals(toIter))) {
+          this.binds[fromIter.value].push(toIter);
+        }
+      }
+    }
   }
 
   /**
@@ -27,11 +45,12 @@ export class BoundSolver {
    * Then the vars, if you match a var, you should align yourself to that var.
    * @param from
    */
-  public getConnected(from: RDF.Variable): RDF.Term[] {
-    const found: RDF.Term[] = [];
+  public getConnected(from: RDF.Variable): BasicTerm[] {
+    let found: BasicTerm[] = [];
     this.registerConnected(from, found);
 
-    found
+    found = found
+      .filter(x => !x.equals(from))
       .sort((a, b) => {
         // Variables last
         if (a.termType === 'Variable') {
@@ -46,19 +65,23 @@ export class BoundSolver {
     return found;
   }
 
-  private registerConnected(from: RDF.Variable, found: RDF.Term[]): void {
-    if (found.some(x => x.equals(from))) {
+  /**
+   * Find all vars and terms that are connected with this one.
+   * @param from
+   * @param found
+   * @private
+   */
+  private registerConnected(from: BasicTerm, found: BasicTerm[]): void {
+    // You already found, return
+    if (found.some(x => from.equals(x))) {
       return;
     }
+    // Register yourself
+    found.push(from);
 
-    // You also found the connection this is connected to:
-    const newFound = (this.binds[from.value] ?? [])
-      .filter(newly => !found.some(registered => newly.equals(registered)));
-
-    found.push(...newFound);
-    for (const newly of newFound) {
-      if (newly.termType === 'Variable') {
-        this.registerConnected(newly, found);
+    if (from.termType === 'Variable') {
+      for (const other of this.binds[from.value]) {
+        this.registerConnected(other, found);
       }
     }
   }

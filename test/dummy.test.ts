@@ -1,5 +1,9 @@
 import { toAlgebra } from '@traqula/algebra-sparql-1-2';
 import { Parser } from '@traqula/parser-sparql-1-2';
+
+// eslint-disable-next-line ts/ban-ts-comment
+// @ts-expect-error 7016
+import unify from 'unify';
 import { describe, it } from 'vitest';
 import { expectedQuery, nonTripleTermConstruct, testQuery, tripleTermConstruct } from '../lib/queries.js';
 import { BgpTransformer } from '../lib/transformBgp.js';
@@ -19,4 +23,23 @@ describe('dummy', () => {
   }
 
   test('simple', testQuery, expectedQuery, [ tripleTermConstruct, nonTripleTermConstruct ]);
+
+  it.skip('reifiaction', () => {
+    const varA = unify.variable('A');
+    const varB = unify.variable('B');
+    const varC = unify.variable('C');
+    const left = unify.box([
+      [ varA ],
+      [ varB ],
+      [ varB ],
+    ]);
+    const right = unify.box([
+      [ varB ],
+      [ 2 ],
+      [ varC ],
+    ]);
+    const solved = left.unify(right);
+    // eslint-disable-next-line no-console
+    console.log(solved);
+  });
 });

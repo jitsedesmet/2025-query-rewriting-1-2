@@ -68,27 +68,24 @@ ${JSON.stringify(faultyMapper.template, null, 2)}`);
   }
 
   public bgpTransform(input: Alg.Bgp): Alg.Join {
-    return AF.createJoin(input.patterns.map(_ => this.mapPattern(_)), true);
+    return AF.createJoin(input.patterns.map(pattern => this.mapPattern(pattern)), true);
   }
 
   private mapPattern(pattern: Alg.Pattern): Alg.Union {
     return AF.createUnion(this.mappers.flatMap((mapper) => {
       try {
         return [ this.mapSingleMapper(pattern, mapper) ];
-      } catch {
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error(e);
         return [];
       }
     }), true);
   }
 
-  // You register the mapping head and link the variables. After that, you solve.
-  // Once you have solved, go over the mapping head again.
-  //  If mapping head is variable, check whether bound to a non-var (check if only one).
-  //    If not bound to non-var, it is because the user query has a var in this position.
-  // For the user query, if there is a var in this position, look whether it is bound to a term and does not conflict.
   private iterateMappingHead(
-    mHAT: Record<string, RDF.Term>,
-    tPAMH: Record<string, RDF.Term>,
+    mHVars: Record<string, RDF.Variable>,
+    tPVars: Record<string, RDF.Variable>,
     head: Alg.Pattern | RDF.BaseQuad,
     pattern: Alg.Pattern | RDF.BaseQuad,
   ): void {
@@ -96,42 +93,60 @@ ${JSON.stringify(faultyMapper.template, null, 2)}`);
     for (const [ index, headTerm ] of patternSPO(head).entries()) {
       const patternTerm = spoPattern[index];
       if (headTerm.termType === 'Quad' && patternTerm.termType === 'Quad') {
-        this.iterateMappingHead(mHAT, tPAMH, headTerm, patternTerm);
-      } else if (patternTerm.termType === 'Variable') {
-        tPAMH[patternTerm.value] = headTerm;
+        // Recursion in triple term
+        this.iterateMappingHead(mHVars, tPVars, headTerm, patternTerm);
       } else if (patternTerm.termType === 'Quad') {
-        // Pattern term is quad but head is not. - will not match IF mapping where is SPARQL 1.1.
+        // Shortcutting, pattern term is quad but head is not. - will not match IF mapping where is SPARQL 1.1.
         throw new Error(
           `The user query contain quad ${JSON.stringify(patternTerm)} and cannot be matched to mapping head ${JSON.stringify(headTerm)}`,
         );
-      } else if (headTerm.termType === 'Variable') {
-        // We can pinpoint the variable
-        mHAT[headTerm.value] = patternTerm;
-      } else if (headTerm.termType === 'BlankNode') {
-        // TODO: If the mapping head is a blank node, that is valid:
-        //  The blanknode should be used in the bound using; BOUND( BNODE( {label} ) as ?myVar ).
-      } else if (!headTerm.equals(patternTerm)) {
-        throw new Error(
-            `Head term (${JSON.stringify(headTerm)}) and pattern term (${JSON.stringify(patternTerm)}) are both bounded but do not match.`,
-        );
+      } else {
+        if (headTerm.termType === 'Variable') {
+          mHVars[headTerm.value] = headTerm;
+        }
+        if (patternTerm.termType === 'Variable') {
+          tPVars[patternTerm.value] = patternTerm;
+        }
+        if (headTerm.termType !== 'DefaultGraph' && patternTerm.termType !== 'DefaultGraph') {
+          this.boundSolver.register(headTerm, patternTerm);
+        }
       }
     }
   }
 
+  // You register the mapping head and link the variables. After that, you solve.
+  // Once you have solved, go over the mapping head again.
+  //  If mapping head is variable, check whether bound to a non-var (check if only one).
+  //    If not bound to non-var, it is because the user query has a var in this position.
+  // For the user query, if there is a var in this position, look whether it is bound to a term and does not conflict.
   private mapSingleMapper(pattern: Alg.Pattern, mapper: Alg.Construct): Alg.Project | Alg.Extend {
-    // If triple pattern term is bound, and mapping head is var, put here.
-    const mappingHeadAsTriplePattern: Record<string, RDF.Term> = {};
-    // If the triple pattern term is a var, and mapping head is not, or is - put in here.
-    const triplePatternAsMappingHead: Record<string, RDF.Term> = {};
-    // Match current triple pattern with mapping head.
-    // look at the mapping head, for each term, see if it matches.
-    // TODO: use an actual solver
-    this.iterateMappingHead(mappingHeadAsTriplePattern, triplePatternAsMappingHead, mapper.template[0], pattern);
+    this.boundSolver.clear();
+    const mappingHeadVars: Record<string, RDF.Variable> = {};
+    const triplePatternVars: Record<string, RDF.Variable> = {};
+    this.iterateMappingHead(mappingHeadVars, triplePatternVars, mapper.template[0], pattern);
 
-    // Now, after we know the binds, we can bind them. We bind triplePatternAsMappingHead after the subselect:
+    // If triple pattern term is bound, and mapping head is var, put here.
+    const mappingHeadBinds: Record<string, RDF.Term> = {};
+    // If the triple pattern term is a var, and mapping head is not, or is - put in here.
+    const triplePatternBinds: Record<string, RDF.Term> = {};
+    for (const variable of Object.values(mappingHeadVars)) {
+      const boundList = this.boundSolver.getConnected(variable);
+      const boundTo = boundList[0];
+      // Head does not bind to var, if a var in the head is equal to a var in the pattern, we handle it on the pattern
+      if (boundTo.termType !== 'Variable') {
+        mappingHeadBinds[variable.value] = boundTo;
+      }
+      // TODO: you need to rewrite your query if you entail that two mapping head vars are the same.
+    }
+    for (const variable of Object.values(triplePatternVars)) {
+      const boundList = this.boundSolver.getConnected(variable);
+      triplePatternBinds[variable.value] = boundList[0];
+    }
+
+    // Now, after we know the binds, we can bind them. We bind triplePatternBinds after the subselect:
     let inProject: Alg.Operation = mapper.input;
     let mappingHeadExtensions: Alg.Extend | Alg.Bgp = AF.createBgp([]);
-    for (const [ variable, expr ] of Object.entries(mappingHeadAsTriplePattern)) {
+    for (const [ variable, expr ] of Object.entries(mappingHeadBinds)) {
       mappingHeadExtensions = AF.createExtend(
         mappingHeadExtensions,
         DF.variable(variable),
@@ -153,7 +168,7 @@ ${JSON.stringify(faultyMapper.template, null, 2)}`);
         registerVars(cur.object);
       }
     }
-    for (const var_ of Object.values(triplePatternAsMappingHead)) {
+    for (const var_ of Object.values(triplePatternBinds)) {
       registerVars(var_);
     }
     if (variablesToSelect.length === 0) {
@@ -171,7 +186,7 @@ ${JSON.stringify(faultyMapper.template, null, 2)}`);
     const subQuery = AF.createProject(inProject, variablesToSelect);
 
     let result: Alg.Project | Alg.Extend = subQuery;
-    for (const [ variable, expr ] of Object.entries(triplePatternAsMappingHead)) {
+    for (const [ variable, expr ] of Object.entries(triplePatternBinds)) {
       result = AF.createExtend(
         result,
         DF.variable(variable),

@@ -1,8 +1,10 @@
 import type * as RDF from '@rdfjs/types';
 import { toAlgebra, toAst } from '@traqula/algebra-sparql-1-2';
+import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { AlgebraFactory, Algebra as Alg, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { Generator } from '@traqula/generator-sparql-1-2';
 import { Parser } from '@traqula/parser-sparql-1-2';
+import { AstTransformer, AstFactory } from '@traqula/rules-sparql-1-2';
 import { DataFactory } from 'rdf-data-factory';
 import { BoundSolver } from './BoundSolver.js';
 
@@ -17,12 +19,29 @@ export class BgpTransformer {
   private readonly parser = new Parser();
   private readonly generator = new Generator();
   private readonly algebraTransformer = new algebraUtils.AlgebraTransformer();
+  private readonly astFactory = new AstFactory();
+  private readonly astTransformer = new AstTransformer();
   private readonly boundSolver = new BoundSolver();
   private readonly mappers: Alg.Construct[];
 
+  private parseQueryAndPrefixVars(query: string, prefix: string): Algebra.Operation {
+    const ast = this.parser.parse(query);
+    const renamedAst = this.astTransformer.transformNodeSpecific<'unsafe'>(
+      ast,
+      {},
+      { term: { variable: {
+        transform: ast => this.astFactory.variable(
+            `${prefix}${ast.value}`,
+            this.astFactory.sourceLocationNodeReplaceUnsafe(ast.loc),
+        ),
+      }}},
+    );
+    return <Alg.Construct> toAlgebra(renamedAst, { quads: true, blankToVariable: true });
+  }
+
   public constructor(mappers: readonly string[]) {
-    this.mappers = mappers.map(mapper =>
-      <Alg.Construct> toAlgebra(this.parser.parse(mapper), { quads: true, blankToVariable: true }));
+    this.mappers = [ ...mappers.entries() ].map(([ index, mapper ]) =>
+      <Algebra.Construct> this.parseQueryAndPrefixVars(mapper, `m${index}_`));
     const faultyMapper = this.mappers.find(mapper => mapper.template.length !== 1);
     if (faultyMapper) {
       throw new Error(`Mappers should have only a single mapping head, found:
@@ -31,11 +50,7 @@ ${JSON.stringify(faultyMapper.template, null, 2)}`);
   }
 
   public queryTransform(input: string): string {
-    const inputAST = this.parser.parse(input);
-    const inputAlgebra = toAlgebra(inputAST, {
-      quads: true,
-      blankToVariable: true,
-    });
+    const inputAlgebra = this.parseQueryAndPrefixVars(input, 'uq_');
     const transformedAlgebra = this.operationTransform(inputAlgebra);
     const transformedAst = toAst(transformedAlgebra);
     return this.generator.generate(transformedAst);
@@ -93,7 +108,8 @@ ${JSON.stringify(faultyMapper.template, null, 2)}`);
         // We can pinpoint the variable
         mHAT[headTerm.value] = patternTerm;
       } else if (headTerm.termType === 'BlankNode') {
-        // TODO: ignore this case for now... Can it have a blanknode? What does that mean?
+        // TODO: If the mapping head is a blank node, that is valid:
+        //  The blanknode should be used in the bound using; BOUND( BNODE( {label} ) as ?myVar ).
       } else if (!headTerm.equals(patternTerm)) {
         throw new Error(
             `Head term (${JSON.stringify(headTerm)}) and pattern term (${JSON.stringify(patternTerm)}) are both bounded but do not match.`,

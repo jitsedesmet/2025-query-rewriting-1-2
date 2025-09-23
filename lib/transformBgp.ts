@@ -71,15 +71,16 @@ ${JSON.stringify(faultyMapper.template, null, 2)}`);
     return AF.createJoin(input.patterns.map(pattern => this.mapPattern(pattern)), true);
   }
 
-  private mapPattern(pattern: Alg.Pattern): Alg.Union {
-    return AF.createUnion(this.mappers.flatMap((mapper) => {
+  private mapPattern(pattern: Alg.Pattern): Alg.Union | Alg.Group {
+    const mappedPatterns = this.mappers.map((mapper) => {
       try {
-        return [ this.mapSingleMapper(pattern, mapper) ];
+        return this.mapSingleMapper(pattern, mapper);
       } catch {
         // Console.error(e);
-        return [];
+        return AF.createBgp([]);
       }
-    }), true);
+    });
+    return AF.createUnion(mappedPatterns, true);
   }
 
   private iterateMappingHead(
@@ -136,6 +137,9 @@ ${JSON.stringify(faultyMapper.template, null, 2)}`);
       }
       const cluster = this.boundSolver.getCluster(variable);
       if (cluster.term) {
+        if (cluster.term.termType === 'BlankNode') {
+          throw new Error('mapping variable being bound to a blank node will result in empty result');
+        }
         mappingHeadBinds[variable.value] = cluster.term;
       } else {
         // If your cluster is not bound to a term, and boundlist contains other mappingHead Variables,
@@ -150,6 +154,7 @@ ${JSON.stringify(faultyMapper.template, null, 2)}`);
           const varNamespacePrefix = otherMappingVars[0].value
             .slice(0, otherMappingVars[0].value.indexOf('_'));
           const newVarName = [
+            'r',
             varNamespacePrefix,
             '_',
             [ variable, ...otherMappingVars ].map(x => x.value.slice(varNamespacePrefix.length + 1)).join('_AND_'),
@@ -229,10 +234,13 @@ ${JSON.stringify(faultyMapper.template, null, 2)}`);
 
     let result: Alg.Project | Alg.Extend = subQuery;
     for (const [ variable, expr ] of Object.entries(triplePatternBinds)) {
+      const termExpression: Algebra.TermExpression | Algebra.OperatorExpression = expr.termType === 'BlankNode' ?
+        AF.createOperatorExpression('BNODE', [ AF.createTermExpression(DF.literal(expr.value)) ]) :
+        AF.createTermExpression(expr);
       result = AF.createExtend(
         result,
         DF.variable(variable),
-        AF.createTermExpression(expr),
+        termExpression,
       );
     }
     return result;

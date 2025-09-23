@@ -53,8 +53,7 @@
     "@traqula/generator-sparql-1-2": "^0.0.16",
     "@traqula/parser-sparql-1-2": "^0.0.16",
     "@traqula/rules-sparql-1-2": "^0.0.16",
-    "rdf-data-factory": "^2.0.2",
-    "unify": "^0.9.10"
+    "rdf-data-factory": "^2.0.2"
   },
   "devDependencies": {
     "@rdfjs/types": "^2.0.0",

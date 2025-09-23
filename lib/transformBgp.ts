@@ -6,7 +6,7 @@ import { Generator } from '@traqula/generator-sparql-1-2';
 import { Parser } from '@traqula/parser-sparql-1-2';
 import { AstTransformer, AstFactory } from '@traqula/rules-sparql-1-2';
 import { DataFactory } from 'rdf-data-factory';
-import { BoundSolver } from './BoundSolver.js';
+import { ClusterSolver } from './ClusterSolver.js';
 
 const AF = new AlgebraFactory();
 const DF = new DataFactory();
@@ -21,7 +21,7 @@ export class BgpTransformer {
   private readonly algebraTransformer = new algebraUtils.AlgebraTransformer();
   private readonly astFactory = new AstFactory();
   private readonly astTransformer = new AstTransformer();
-  private readonly boundSolver = new BoundSolver();
+  private readonly boundSolver = new ClusterSolver();
   private readonly mappers: Alg.Construct[];
 
   private parseQueryAndPrefixVars(query: string, prefix: string): Algebra.Operation {
@@ -129,20 +129,23 @@ ${JSON.stringify(faultyMapper.template, null, 2)}`);
     const headVarsRemap: Record<string, RDF.Variable> = {};
     // If the triple pattern term is a var, and mapping head is not, or is - put in here.
     const triplePatternBinds: Record<string, RDF.Term> = {};
+    this.boundSolver.sortClusters();
     for (const variable of Object.values(mappingHeadVars)) {
       if (headVarsRemap[variable.value]) {
         continue;
       }
-      const boundList = this.boundSolver.getConnected(variable);
-      if (boundList.every(bounding => bounding.termType === 'Variable')) {
-        // TODO: If all in boundList are variables, and boundlist contains other mappingHead Variables,
-        //  you need to create a new variable for the matching mappingHead vars.
+      const cluster = this.boundSolver.getCluster(variable);
+      if (cluster.term) {
+        mappingHeadBinds[variable.value] = cluster.term;
+      } else {
+        // If your cluster is not bound to a term, and boundlist contains other mappingHead Variables,
+        //  you need to create a new variable for the matching mappingHead vars since they are the same.
         //  Since any group links to each-other, the first such match is enough to find all equal vars.
         //  All future vars in the group can be ignored.
         //  Furthermore it is essential to capture the new variable in the triplePatternBinds
         // Note that Head does not bind to var,
         // if a var in the head is equal to a var in the pattern, we handle it on the pattern
-        const otherMappingVars = boundList.filter(x => x.value.startsWith('m'));
+        const otherMappingVars = cluster.vars.filter(x => x.value.startsWith('m'));
         if (otherMappingVars.length > 0) {
           const varNamespacePrefix = otherMappingVars[0].value
             .slice(0, otherMappingVars[0].value.indexOf('_'));
@@ -158,18 +161,18 @@ ${JSON.stringify(faultyMapper.template, null, 2)}`);
           }
         }
       }
-      const boundTo = boundList[0];
-      if (boundTo.termType !== 'Variable') {
-        mappingHeadBinds[variable.value] = boundTo;
-      }
     }
     for (const variable of Object.values(triplePatternVars)) {
-      const boundList = this.boundSolver.getConnected(variable);
-      let boundTo = boundList[0];
-      if (boundTo.termType === 'Variable' && headVarsRemap[boundTo.value]) {
-        boundTo = headVarsRemap[boundTo.value];
+      const cluster = this.boundSolver.getCluster(variable);
+      if (cluster.term) {
+        triplePatternBinds[variable.value] = cluster.term;
+      } else {
+        let boundTo = cluster.vars[0];
+        if (headVarsRemap[boundTo.value]) {
+          boundTo = headVarsRemap[boundTo.value];
+        }
+        triplePatternBinds[variable.value] = boundTo;
       }
-      triplePatternBinds[variable.value] = boundTo;
     }
 
     // Now, after we know the binds, we can bind them. We bind triplePatternBinds after the subselect:

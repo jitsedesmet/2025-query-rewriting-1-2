@@ -1,17 +1,29 @@
 import { toAlgebra } from '@traqula/algebra-sparql-1-2';
 import { Parser } from '@traqula/parser-sparql-1-2';
 import { describe, it } from 'vitest';
-import { expectedQuery, nonTripleTermConstruct, testQuery, tripleTermConstruct } from '../lib/queries.js';
+import {
+  expectedQuery,
+  expectedQueryOptimizedBounds,
+  nonTripleTermConstruct,
+  testQuery,
+  tripleTermConstruct,
+} from '../lib/queries.js';
 import { queryTransform } from '../lib/transformBgp.js';
 import { createTransformContext } from '../lib/transformContext.js';
 
 describe('dummy', () => {
   const parser = new Parser();
 
-  function test(name: string, userQuery: string, expectedQuery: string, mappers: string[]): void {
+  function test(
+    name: string,
+    userQuery: string,
+    expectedQuery: string,
+    mappers: string[],
+    optimizeBinds = false,
+  ): void {
     it(name, ({ expect }) => {
       const transformerContext = createTransformContext(mappers);
-      expect(queryTransform(transformerContext, userQuery).trim()).toEqual(expectedQuery.trim());
+      expect(queryTransform(transformerContext, userQuery, { optimizeBinds }).trim()).toEqual(expectedQuery.trim());
 
       const _expectedAst = parser.parse(expectedQuery);
       const _expectedAlgebra = toAlgebra(_expectedAst, { quads: true });
@@ -23,6 +35,11 @@ describe('dummy', () => {
     tripleTermConstruct,
     nonTripleTermConstruct,
   ]);
+
+  test('simple', testQuery, expectedQueryOptimizedBounds, [
+    tripleTermConstruct,
+    nonTripleTermConstruct,
+  ], true);
 
   test(
     'spo with blank in mapping head',

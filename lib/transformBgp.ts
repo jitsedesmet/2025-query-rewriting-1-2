@@ -1,12 +1,16 @@
 import { toAst } from '@traqula/algebra-sparql-1-2';
 import { Algebra as Alg } from '@traqula/algebra-transformations-1-2';
 import { mapSingleMapper } from './mapperTransformer.js';
+import { substituteVarsThatArePreBoundToTerms } from './termBoundVarSubsititution.js';
 import type { TransformContext } from './transformContext.js';
 import { parseQueryAndPrefixVars } from './transformContext.js';
 
-export function queryTransform(c: TransformContext, input: string): string {
+export function queryTransform(c: TransformContext, input: string, context: { optimizeBinds?: boolean } = {}): string {
   const inputAlgebra = parseQueryAndPrefixVars(c, input, 'uq_');
-  const transformedAlgebra = operationTransform(c, inputAlgebra);
+  let transformedAlgebra = operationTransform(c, inputAlgebra);
+  if (context?.optimizeBinds ?? false) {
+    transformedAlgebra = substituteVarsThatArePreBoundToTerms(c, transformedAlgebra);
+  }
   const transformedAst = toAst(transformedAlgebra);
   return c.generator.generate(transformedAst);
 }

@@ -1,13 +1,16 @@
 import { toAlgebra } from '@traqula/algebra-sparql-1-2';
 import { Parser } from '@traqula/parser-sparql-1-2';
 import { describe, it } from 'vitest';
+import type { expect as Expect } from 'vitest';
 import {
   expectedQuery,
   expectedQueryOptimizedBounds,
+  expectedQueryOptimizedBoundsAndEmptyRes,
   nonTripleTermConstruct,
   testQuery,
   tripleTermConstruct,
 } from '../lib/queries.js';
+import type { QueryTransFormContext } from '../lib/transformBgp.js';
 import { queryTransform } from '../lib/transformBgp.js';
 import { createTransformContext } from '../lib/transformContext.js';
 
@@ -15,34 +18,40 @@ describe('dummy', () => {
   const parser = new Parser();
 
   function test(
-    name: string,
+    expect: typeof Expect,
     userQuery: string,
     expectedQuery: string,
     mappers: string[],
-    optimizeBinds = false,
+    context: QueryTransFormContext = {},
   ): void {
-    it(name, ({ expect }) => {
-      const transformerContext = createTransformContext(mappers);
-      expect(queryTransform(transformerContext, userQuery, { optimizeBinds }).trim()).toEqual(expectedQuery.trim());
+    const transformerContext = createTransformContext(mappers);
+    expect(queryTransform(transformerContext, userQuery, context).trim()).toEqual(expectedQuery.trim());
 
-      const _expectedAst = parser.parse(expectedQuery);
-      const _expectedAlgebra = toAlgebra(_expectedAst, { quads: true });
-      const _me = 2;
-    });
+    const _expectedAst = parser.parse(expectedQuery);
+    const _expectedAlgebra = toAlgebra(_expectedAst, { quads: true });
+    const _me = 2;
   }
 
-  test('simple', testQuery, expectedQuery, [
-    tripleTermConstruct,
-    nonTripleTermConstruct,
-  ]);
+  it('simple', ({ expect }) => test(expect, testQuery, expectedQuery, [ tripleTermConstruct, nonTripleTermConstruct ]));
 
-  test('simple', testQuery, expectedQueryOptimizedBounds, [
-    tripleTermConstruct,
-    nonTripleTermConstruct,
-  ], true);
+  it('simple & optimizeBinds', ({ expect }) => test(
+    expect,
+    testQuery,
+    expectedQueryOptimizedBounds,
+    [ tripleTermConstruct, nonTripleTermConstruct ],
+    { optimizeBinds: true },
+  ));
 
-  test(
-    'spo with blank in mapping head',
+  it('simple & optimizeBinds & optimizeEmptyResultSets', ({ expect }) => test(
+    expect,
+    testQuery,
+    expectedQueryOptimizedBoundsAndEmptyRes,
+    [ tripleTermConstruct, nonTripleTermConstruct ],
+    { optimizeBinds: true, optimizeEmptyResultSets: true },
+  ));
+
+  it('spo with blank in mapping head', ({ expect }) => test(
+    expect,
 `SELECT * { ?s ?p ?o }`,
 `SELECT ?uq_o ?uq_p ?uq_s WHERE {
   {
@@ -57,10 +66,10 @@ describe('dummy', () => {
   }  
 }`,
 [ `CONSTRUCT { ?s ?p _:blank } WHERE { ?s ?p ?o }` ],
-  );
+  ));
 
-  test(
-    'sps with blank in mapping head',
+  it('sps with blank in mapping head', ({ expect }) => test(
+    expect,
 `SELECT * { ?s ?p ?s }`,
 `SELECT ?uq_p ?uq_s WHERE {
   {
@@ -70,5 +79,33 @@ describe('dummy', () => {
   }  
 }`,
 [ `CONSTRUCT { ?s ?p _:blank } WHERE { ?s ?p ?o }` ],
-  );
+  ));
+
+  it('handle no matching query', ({ expect }) => test(
+    expect,
+    `SELECT * { ?s <ex://a> ?o }`,
+    `SELECT ?uq_o ?uq_s WHERE {
+  {
+    {
+      FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )      
+    }    
+  }
+  UNION {
+    {
+      FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )      
+    }    
+  }  
+}`,
+    [ `CONSTRUCT WHERE { ?s <ex://b> ?o }`, `CONSTRUCT WHERE { ?s <ex://c> ?o }` ],
+  ));
+
+  it('handle no matching query & optimizeBinds & optimizeEmptyResultSets', ({ expect }) => test(
+    expect,
+    `SELECT * { ?s <ex://a> ?o }`,
+    `SELECT ?uq_o ?uq_s WHERE {
+  FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )  
+}`,
+    [ `CONSTRUCT WHERE { ?s <ex://b> ?o }`, `CONSTRUCT WHERE { ?s <ex://c> ?o }` ],
+    { optimizeBinds: true, optimizeEmptyResultSets: true },
+  ));
 });

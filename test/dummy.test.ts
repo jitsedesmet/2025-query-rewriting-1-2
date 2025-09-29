@@ -63,7 +63,10 @@ describe('dummy', () => {
     'sps with blank in mapping head',
 `SELECT * { ?s ?p ?s }`,
 `SELECT ?uq_p ?uq_s WHERE {
-  {    
+  {
+    {
+      FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )      
+    }    
   }  
 }`,
 [ `CONSTRUCT { ?s ?p _:blank } WHERE { ?s ?p ?o }` ],

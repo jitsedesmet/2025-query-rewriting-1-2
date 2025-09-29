@@ -54,9 +54,15 @@ SELECT ?uq_name ?uq_o ?uq_o1 ?uq_p ?uq_s ?uq_s1 WHERE {
     }
     BIND( ?m0_o AS ?uq_name )    
   }
-  UNION {    
+  UNION {
+    {
+      FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )      
+    }    
   }
-  {    
+  {
+    {
+      FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )      
+    }    
   }
   UNION {
     {
@@ -145,9 +151,15 @@ SELECT ?uq_name ?uq_o ?uq_o1 ?uq_p ?uq_s ?uq_s1 WHERE {
     }
     BIND( ?m0_o AS ?uq_name )    
   }
-  UNION {    
+  UNION {
+    {
+      FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )      
+    }    
   }
-  {    
+  {
+    {
+      FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )      
+    }    
   }
   UNION {
     {

@@ -4,6 +4,7 @@ import { mapSingleMapper } from './mapperTransformer.js';
 import { substituteVarsThatArePreBoundToTerms } from './termBoundVarSubsititution.js';
 import type { TransformContext } from './transformContext.js';
 import { parseQueryAndPrefixVars } from './transformContext.js';
+import { termFalse } from './utils.js';
 
 export function queryTransform(c: TransformContext, input: string, context: { optimizeBinds?: boolean } = {}): string {
   const inputAlgebra = parseQueryAndPrefixVars(c, input, 'uq_');
@@ -35,7 +36,10 @@ export function mapPattern(c: TransformContext, pattern: Alg.Pattern): Alg.Union
       return mapSingleMapper(c, pattern, mapper);
     } catch {
       // Console.error(e);
-      return c.AF.createBgp([]);
+      return c.AF.createFilter(
+        c.AF.createBgp([]),
+        c.AF.createTermExpression(termFalse),
+      );
     }
   });
   return c.AF.createUnion(mappedPatterns, true);

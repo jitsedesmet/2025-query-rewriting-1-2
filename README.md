@@ -192,3 +192,12 @@ Your solver will now be able to say conclude:
 ?p -> p1
 ?o -> o1
 ```
+
+### Quirks documented
+
+Empty groups emit a single binding that does not bind to anything ([proof](https://www.w3.org/TR/sparql11-query/#emptyGroupPattern)):
+* `SELECT * {}`  gives 1 binding ([query](https://query.comunica.dev/#transientDatasources=%2F%2Ffragments.dbpedia.org%2F2016-04%2Fen&query=SELECT%20*%0AWHERE%20%7B%0A%0A%7D))
+* `SELECT * { {} UNION {} }` gives 2 bindings [(query](https://query.comunica.dev/#transientDatasources=%2F%2Ffragments.dbpedia.org%2F2016-04%2Fen&query=SELECT%20*%0AWHERE%20%7B%0A%20%20%7B%7D%20UNION%20%7B%7D%0A%7D))
+
+Therefore, a mapping that does not match under a union does **NOT produce the empty group**.
+It does not produce results. To visualize this, one can also use the group: `{ FILTER(false) }` ([query](https://query.comunica.dev/#transientDatasources=%2F%2Ffragments.dbpedia.org%2F2016-04%2Fen&query=SELECT%20*%0AWHERE%20%7B%0A%20%20%7B%20FILTER%28false%29%20%7D%20UNION%20%7B%20FILTER%28false%29%20%7D%0A%7D))

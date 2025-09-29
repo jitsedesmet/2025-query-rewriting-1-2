@@ -38,7 +38,7 @@ function substituteAndUnwrapExtends(c: TransformContext, projection: Algebra.Pro
 
   // Find the variables that are bounded to a term. on this level
   const assignments: Record<string, RDF.Term> = {};
-  const findAssignments = (op: Algebra.Operation): Algebra.Operation => {
+  const findAssignmentsAndUnwrap = (op: Algebra.Operation): Algebra.Operation => {
     if (op.type === 'extend') {
       // If the variable is dependent on outside this joins scope, we cannot safely remove it
       const varIsProjected = stillUsedVars.some(var_ => var_.equals(op.variable));
@@ -47,15 +47,15 @@ function substituteAndUnwrapExtends(c: TransformContext, projection: Algebra.Pro
       if (!varIsProjected && expressionIsBasicTerm) {
         assignments[op.variable.value] = (<Algebra.TermExpression>op.expression).term;
         // Unwrap
-        return findAssignments(op.input);
+        return findAssignmentsAndUnwrap(op.input);
       }
-      op.input = findAssignments(op.input);
+      op.input = findAssignmentsAndUnwrap(op.input);
       return op;
     }
     return op;
   };
   // Iterate over the join and find extends that bind to a term on the top level.
-  join.input = join.input.map(input => findAssignments(input));
+  join.input = join.input.map(input => findAssignmentsAndUnwrap(input));
 
   const transformedProjection = c.algebraTransformer.transformNode<'unsafe'>(
     projection,

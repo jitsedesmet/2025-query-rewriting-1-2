@@ -2,6 +2,9 @@ import { toAlgebra } from '@traqula/algebra-sparql-1-2';
 import { Parser } from '@traqula/parser-sparql-1-2';
 import { describe, it } from 'vitest';
 import type { expect as Expect } from 'vitest';
+import type { QueryTransFormContext } from '../lib/transformBgp.js';
+import { queryTransform } from '../lib/transformBgp.js';
+import { createTransformContext } from '../lib/transformContext.js';
 import {
   expectedQuery,
   expectedQueryOptimizedBounds,
@@ -9,10 +12,7 @@ import {
   nonTripleTermConstruct,
   testQuery,
   tripleTermConstruct,
-} from '../lib/queries.js';
-import type { QueryTransFormContext } from '../lib/transformBgp.js';
-import { queryTransform } from '../lib/transformBgp.js';
-import { createTransformContext } from '../lib/transformContext.js';
+} from './queries.js';
 
 describe('dummy', () => {
   const parser = new Parser();
@@ -48,7 +48,7 @@ describe('dummy', () => {
     testQuery,
     expectedQueryOptimizedBoundsAndEmptyRes,
     [ tripleTermConstruct, nonTripleTermConstruct ],
-    { optimizeBinds: true, optimizeEmptyResultSets: true },
+    { optimizeBinds: true, optimizeFilterFalse: true },
   ));
 
   it('spo with blank in mapping head', ({ expect }) => test(
@@ -107,7 +107,7 @@ describe('dummy', () => {
   FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )  
 }`,
     [ `CONSTRUCT WHERE { ?s <ex://b> ?o }`, `CONSTRUCT WHERE { ?s <ex://c> ?o }` ],
-    { optimizeBinds: true, optimizeEmptyResultSets: true },
+    { optimizeBinds: true, optimizeFilterFalse: true },
   ));
 
   it('pushUpBinds', ({ expect }) => test(
@@ -135,6 +135,6 @@ describe('dummy', () => {
   BIND( <ex://b> AS ?uq_p )  
 }`,
     [ `CONSTRUCT WHERE { ?s <ex://b> ?o }`, `CONSTRUCT WHERE { ?s <ex://b> ?o }` ],
-    { optimizeBinds: true, optimizeEmptyResultSets: true, pushUpBinds: true },
+    { optimizeBinds: true, optimizeFilterFalse: true, pushUpBinds: true },
   ));
 });

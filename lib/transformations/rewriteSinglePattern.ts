@@ -1,12 +1,12 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra as Alg } from '@traqula/algebra-transformations-1-2';
-import type { TransformContext } from './transformContext.js';
+import type { TransformContext } from '../transformContext.js';
 
 function patternSPO(pattern: Alg.Pattern | RDF.BaseQuad): RDF.Term[] {
   return [ pattern.subject, pattern.predicate, pattern.object ];
 }
 
-export function iterateMappingHead(
+function iterateMappingHead(
   c: TransformContext,
   mHVars: Record<string, RDF.Variable>,
   tPVars: Record<string, RDF.Variable>,
@@ -45,7 +45,7 @@ export function iterateMappingHead(
  *    If not bound to non-var, it is because the user query has a var in this position.
  * For the user query, if there is a var in this position, look whether it is bound to a term and does not conflict.
  */
-export function mapSingleMapper(
+export function rewriteSinglePattern(
   c: TransformContext,
   pattern: Alg.Pattern,
   mapper: Alg.Construct,

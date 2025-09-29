@@ -1,6 +1,6 @@
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
-import type { TransformContext } from './transformContext.js';
-import { deleteVarExtensionsInPlace, directExtensions } from './utils.js';
+import type { TransformContext } from '../transformContext.js';
+import { deleteVarExtensionsInPlace, directExtensions } from '../utils.js';
 
 /**
  * If the same variable is bound to the same term for all union entries,
@@ -11,7 +11,7 @@ import { deleteVarExtensionsInPlace, directExtensions } from './utils.js';
  * @param c
  * @param op
  */
-export function termBindPushUp<T extends Algebra.Operation>(c: TransformContext, op: T): T {
+export function pushUpBoundedFromUnion<T extends Algebra.Operation>(c: TransformContext, op: T): T {
   return c.algebraTransformer.transformNode<'unsafe'>(
     op,
     {

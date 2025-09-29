@@ -9,6 +9,15 @@ export const xsd = 'http://www.w3.org/2001/XMLSchema#';
 export const datatypeBoolean = DF.namedNode(`${xsd}boolean`);
 export const termFalse = DF.literal('false', datatypeBoolean);
 
+export function isFilterFalse(c: TransformContext, op: Algebra.Operation): boolean {
+  return op.type === Algebra.Types.FILTER && op.expression.expressionType === Algebra.ExpressionTypes.TERM &&
+    op.expression.term.equals(termFalse);
+}
+
+export function createFilterFalse(c: TransformContext, op?: Algebra.Operation): Algebra.Filter {
+  return c.AF.createFilter(op ?? c.AF.createBgp([]), c.AF.createTermExpression(termFalse));
+}
+
 export function directExtensions(c: TransformContext, op: Algebra.Operation): Record<string, RDF.Term> {
   const assignments: Record<string, RDF.Term> = {};
 

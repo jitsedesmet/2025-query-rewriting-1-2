@@ -1,16 +1,16 @@
 import { toAst } from '@traqula/algebra-sparql-1-2';
 import { Algebra as Alg } from '@traqula/algebra-transformations-1-2';
-import { pruneUnionOfEmptyBindings } from './joinEmptyBgp.js';
-import { mapSingleMapper } from './mapperTransformer.js';
-import { termBindPushUp } from './termBindPushUp.js';
-import { substituteVarsThatArePreBoundToTerms } from './termBoundVarSubsititution.js';
+import { substituteVarsThatArePreBoundToTerms } from './transformations/boundedVarSubstitution.js';
+import { transformFilterFalse } from './transformations/filterFalse.js';
+import { pushUpBoundedFromUnion } from './transformations/pushUpBoundedFromUnion.js';
+import { rewriteSinglePattern } from './transformations/rewriteSinglePattern.js';
 import type { TransformContext } from './transformContext.js';
 import { parseQueryAndPrefixVars } from './transformContext.js';
 import { termFalse } from './utils.js';
 
 export type QueryTransFormContext = Partial<{
   optimizeBinds: boolean;
-  optimizeEmptyResultSets: boolean;
+  optimizeFilterFalse: boolean;
   pushUpBinds: boolean;
 }>;
 
@@ -20,11 +20,11 @@ export function queryTransform(c: TransformContext, input: string, context: Quer
   if (context?.optimizeBinds ?? false) {
     transformedAlgebra = substituteVarsThatArePreBoundToTerms(c, transformedAlgebra);
   }
-  if (context?.optimizeEmptyResultSets ?? false) {
-    transformedAlgebra = pruneUnionOfEmptyBindings(c, transformedAlgebra);
+  if (context?.optimizeFilterFalse ?? false) {
+    transformedAlgebra = transformFilterFalse(c, transformedAlgebra);
   }
   if (context?.pushUpBinds ?? false) {
-    transformedAlgebra = termBindPushUp(c, transformedAlgebra);
+    transformedAlgebra = pushUpBoundedFromUnion(c, transformedAlgebra);
   }
   const transformedAst = toAst(transformedAlgebra);
   return c.generator.generate(transformedAst);
@@ -47,7 +47,7 @@ export function bgpTransform(c: TransformContext, input: Alg.Bgp): Alg.Join {
 export function mapPattern(c: TransformContext, pattern: Alg.Pattern): Alg.Union | Alg.Group {
   const mappedPatterns = c.mappers.map((mapper) => {
     try {
-      return mapSingleMapper(c, pattern, mapper);
+      return rewriteSinglePattern(c, pattern, mapper);
     } catch {
       // Console.error(e);
       return c.AF.createFilter(

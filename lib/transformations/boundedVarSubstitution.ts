@@ -1,6 +1,6 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
-import type { TransformContext } from './transformContext.js';
+import type { TransformContext } from '../transformContext.js';
 
 export function substituteVarsThatArePreBoundToTerms<T extends Algebra.Operation>(c: TransformContext, op: T): T {
   const { algebraTransformer } = c;

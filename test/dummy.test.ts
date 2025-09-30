@@ -1,9 +1,14 @@
 import { toAlgebra } from '@traqula/algebra-sparql-1-2';
+import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { Parser } from '@traqula/parser-sparql-1-2';
 import { describe, it } from 'vitest';
 import type { expect as Expect } from 'vitest';
-import type { QueryTransFormContext } from '../lib/transformBgp.js';
-import { queryTransform } from '../lib/transformBgp.js';
+import { substituteVarsThatArePreBoundToTerms } from '../lib/transformations/boundedVarSubstitution.js';
+import { transformFilterFalse } from '../lib/transformations/filterFalse.js';
+import { nullifyJoinOverIncompatibleBounds } from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
+import { pushUpBoundedFromUnion } from '../lib/transformations/pushUpBoundedFromUnion.js';
+import { operationTransform, queryTransform } from '../lib/transformBgp.js';
+import type { TransformContext } from '../lib/transformContext.js';
 import { createTransformContext } from '../lib/transformContext.js';
 import {
   expectedQuery,
@@ -22,10 +27,10 @@ describe('dummy', () => {
     userQuery: string,
     expectedQuery: string,
     mappers: string[],
-    context: QueryTransFormContext = {},
+    transformations: ((c: TransformContext, op: Algebra.Operation) => Algebra.Operation)[] = [ operationTransform ],
   ): void {
     const transformerContext = createTransformContext(mappers);
-    expect(queryTransform(transformerContext, userQuery, { pushUpBinds: true, ...context }).trim())
+    expect(queryTransform(transformerContext, userQuery, transformations).trim())
       .toEqual(expectedQuery.trim());
 
     const _expectedAst = parser.parse(expectedQuery);
@@ -40,7 +45,7 @@ describe('dummy', () => {
     testQuery,
     expectedQueryOptimizedBounds,
     [ tripleTermConstruct, nonTripleTermConstruct ],
-    { optimizeBinds: true },
+    [ operationTransform, substituteVarsThatArePreBoundToTerms ],
   ));
 
   it('simple & optimizeBinds & optimizeEmptyResultSets', ({ expect }) => test(
@@ -48,7 +53,7 @@ describe('dummy', () => {
     testQuery,
     expectedQueryOptimizedBoundsAndEmptyRes,
     [ tripleTermConstruct, nonTripleTermConstruct ],
-    { optimizeBinds: true, optimizeFilterFalse: true },
+    [ operationTransform, substituteVarsThatArePreBoundToTerms, transformFilterFalse ],
   ));
 
   it('spo with blank in mapping head', ({ expect }) => test(
@@ -74,9 +79,7 @@ describe('dummy', () => {
 `SELECT * { ?s ?p ?s }`,
 `SELECT ?uq_p ?uq_s WHERE {
   {
-    {
-      FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )      
-    }    
+    FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )    
   }  
 }`,
 [ `CONSTRUCT { ?s ?p _:blank } WHERE { ?s ?p ?o }` ],
@@ -87,14 +90,10 @@ describe('dummy', () => {
     `SELECT * { ?s <ex://a> ?o }`,
     `SELECT ?uq_o ?uq_s WHERE {
   {
-    {
-      FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )      
-    }    
+    FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )    
   }
   UNION {
-    {
-      FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )      
-    }    
+    FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )    
   }  
 }`,
     [ `CONSTRUCT WHERE { ?s <ex://b> ?o }`, `CONSTRUCT WHERE { ?s <ex://c> ?o }` ],
@@ -107,7 +106,7 @@ describe('dummy', () => {
   FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )  
 }`,
     [ `CONSTRUCT WHERE { ?s <ex://b> ?o }`, `CONSTRUCT WHERE { ?s <ex://c> ?o }` ],
-    { optimizeBinds: true, optimizeFilterFalse: true },
+    [ operationTransform, substituteVarsThatArePreBoundToTerms, transformFilterFalse ],
   ));
 
   it('pushUpBinds', ({ expect }) => test(
@@ -135,19 +134,34 @@ describe('dummy', () => {
   BIND( <ex://b> AS ?uq_p )  
 }`,
     [ `CONSTRUCT WHERE { ?s <ex://b> ?o }`, `CONSTRUCT WHERE { ?s <ex://b> ?o }` ],
-    { optimizeBinds: true, optimizeFilterFalse: true, pushUpBinds: true },
+    [ operationTransform, substituteVarsThatArePreBoundToTerms, transformFilterFalse, pushUpBoundedFromUnion ],
   ));
 
-  it.skip('join optimization', ({ expect }) => test(
+  it('join optimization', ({ expect }) => test(
     expect,
     `SELECT * { ?s ?p ?o . <ex://a> ?p ?o }`,
-    `SELECT * {
-  ?s ?p ?o .
-  <ex://a> ?p ?o .
-  BIND(<ex://b> as ?p) .
-  BIND(<ex://a> as ?s)
+    `SELECT ?uq_o ?uq_p ?uq_s WHERE {
+  {
+    {
+      SELECT ?m0_o WHERE {
+        <ex://a> <ex://a> ?m0_o .        
+      }      
+    }
+    BIND( <ex://a> AS ?uq_s )
+    BIND( <ex://a> AS ?uq_p )
+    BIND( ?m0_o AS ?uq_o )    
+  }
+  {
+    {
+      SELECT ?m0_o WHERE {
+        <ex://a> <ex://a> ?m0_o .        
+      }      
+    }
+    BIND( <ex://a> AS ?uq_p )
+    BIND( ?m0_o AS ?uq_o )    
+  }  
 }`,
-    [ `CONSTRUCT WHERE { <ex://a> <ex://b> ?o }`, `CONSTRUCT WHERE { <ex://b> <ex://b> ?o }` ],
-    { optimizeJoinOverUnionBinds: true },
+    [ `CONSTRUCT WHERE { <ex://a> <ex://a> ?o }`, `CONSTRUCT WHERE { <ex://b> <ex://b> ?o }` ],
+    [ operationTransform, transformFilterFalse, nullifyJoinOverIncompatibleBounds, transformFilterFalse ],
   ));
 });

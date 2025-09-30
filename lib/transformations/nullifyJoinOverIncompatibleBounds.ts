@@ -1,7 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { TransformContext } from '../transformContext.js';
-import { directExtensions, termIsStaticTerm } from '../utils.js';
+import { createFilterFalse, directExtensions, termIsStaticTerm } from '../utils.js';
 
 class VariableSet {
   public isNoFixed: boolean;
@@ -33,8 +33,12 @@ class VariableSet {
       return VariableSet.createNoFixed();
     }
     return new VariableSet(
-      ...this.values.filter(otherVal => otherVal.equals(otherVal)),
+      ...this.values.filter(value => other.values.some(x => x.equals(value))),
     );
+  }
+
+  public termIsCompatible(term: RDF.Term): boolean {
+    return this.isNoFixed || term.termType === 'Variable' || this.values.some(x => x.equals(term));
   }
 }
 
@@ -67,16 +71,87 @@ export function nullifyJoinOverIncompatibleBounds<T extends Algebra.Operation>(
     { join: {
       transform: (join) => {
         // Find for each member of the join whether variables are bound to known terms
-        const _varSets = variableExtensionsOverJoin(c, join);
+        const varSets = variableExtensionsOverJoin(c, join);
 
         // We optimize: iterate extends and unions. An extend who's term does not match is replaced by filterFalse.
         // Finding an extend where the var is bound to another var, you can bind both vars to the new static value,
         // or you can write a filter to an includes in the subquery.
+        restrictOperations(c, join, varSets);
 
         return join;
       },
     }},
   );
+}
+
+function restrictOperations(c: TransformContext, join: Algebra.Join, varSets: Record<string, VariableSet>): void {
+  const { AF } = c;
+  const mappingVarsToScope: Record<string, VariableSet> = {};
+  const recurse = (op: Algebra.Operation): Algebra.Operation => {
+    if (op.type === Algebra.Types.EXTEND) {
+      if (op.expression.expressionType === Algebra.ExpressionTypes.TERM && varSets[op.variable.value]) {
+        const varSet = varSets[op.variable.value];
+        const exprTerm = op.expression.term;
+        if (!varSet.isNoFixed && exprTerm.termType === 'Variable' && /^[gu]/u.test(exprTerm.value)) {
+          // The mapping var can be made specific
+          mappingVarsToScope[exprTerm.value] = varSet;
+          // If the mapping var gets bound, you may aso bind the userQuery var
+          if (varSet.values.length === 1) {
+            op.expression = AF.createTermExpression(varSet.values[0]);
+          }
+          const res = recurse(op.input);
+          delete mappingVarsToScope[exprTerm.value];
+          return res;
+        }
+        // Can nullify
+        if (!varSet.termIsCompatible(exprTerm)) {
+          return createFilterFalse(c, op);
+        }
+      }
+      op.input = recurse(op.input);
+    } else if (op.type === Algebra.Types.UNION) {
+      op.input = op.input.map(x => recurse(x));
+    } else if (op.type === Algebra.Types.PROJECT) {
+      op.input = createFilterBound(c, op.input, mappingVarsToScope);
+    }
+    return op;
+  };
+  join.input = join.input.map(x => recurse(x));
+}
+
+function createFilterBound(
+  c: TransformContext,
+  input: Algebra.Operation,
+  mappingVarsToScope: Record<string, VariableSet>,
+): Algebra.Filter | Algebra.Operation {
+  const { AF, DF } = c;
+
+  function equality(var_: RDF.Variable, term: RDF.Term): Algebra.OperatorExpression {
+    return AF.createOperatorExpression('=', [ AF.createTermExpression(var_), AF.createTermExpression(term) ]);
+  }
+  function orOfEquals(var_: RDF.Variable, varSet: VariableSet): Algebra.OperatorExpression {
+    let res = equality(var_, varSet.values[0]);
+    for (const term of varSet.values.slice(1)) {
+      res = AF.createOperatorExpression('||', [ res, equality(var_, term) ]);
+    }
+    return res;
+  }
+  function andOfVars(list: readonly [RDF.Variable, VariableSet][]): Algebra.OperatorExpression {
+    let res = orOfEquals(list[0][0], list[0][1]);
+    for (const [ var_, varSet ] of list.slice(1)) {
+      res = AF.createOperatorExpression('&&', [ res, orOfEquals(var_, varSet) ]);
+    }
+    return res;
+  }
+
+  const entries = Object.entries(mappingVarsToScope);
+  if (entries.length === 0) {
+    return input;
+  }
+
+  const mappedEntries = Object.entries(mappingVarsToScope)
+    .map(([ var_, varSet ]): [RDF.Variable, VariableSet] => ([ DF.variable(var_), varSet ]));
+  return AF.createFilter(input, andOfVars(mappedEntries));
 }
 
 function variableExtensionsOverJoin(c: TransformContext, join: Algebra.Join): Record<string, VariableSet> {

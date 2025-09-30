@@ -1,35 +1,19 @@
 import { toAst } from '@traqula/algebra-sparql-1-2';
 import { Algebra as Alg } from '@traqula/algebra-transformations-1-2';
-import { substituteVarsThatArePreBoundToTerms } from './transformations/boundedVarSubstitution.js';
-import { transformFilterFalse } from './transformations/filterFalse.js';
-import { nullifyJoinOverIncompatibleBounds } from './transformations/nullifyJoinOverIncompatibleBounds.js';
-import { pushUpBoundedFromUnion } from './transformations/pushUpBoundedFromUnion.js';
 import { rewriteSinglePattern } from './transformations/rewriteSinglePattern.js';
 import type { TransformContext } from './transformContext.js';
 import { parseQueryAndPrefixVars } from './transformContext.js';
 import { termFalse } from './utils.js';
 
-export type QueryTransFormContext = Partial<{
-  optimizeBinds: boolean;
-  optimizeFilterFalse: boolean;
-  pushUpBinds: boolean;
-  optimizeJoinOverUnionBinds: boolean;
-}>;
-
-export function queryTransform(c: TransformContext, input: string, context: QueryTransFormContext = {}): string {
+export function queryTransform(
+  c: TransformContext,
+  input: string,
+  transformations: ((c: TransformContext, op: Alg.Operation) => Alg.Operation)[],
+): string {
   const inputAlgebra = parseQueryAndPrefixVars(c, input, 'uq_');
-  let transformedAlgebra = operationTransform(c, inputAlgebra);
-  if (context?.optimizeBinds ?? false) {
-    transformedAlgebra = substituteVarsThatArePreBoundToTerms(c, transformedAlgebra);
-  }
-  if (context?.optimizeFilterFalse ?? false) {
-    transformedAlgebra = transformFilterFalse(c, transformedAlgebra);
-  }
-  if (context?.pushUpBinds ?? false) {
-    transformedAlgebra = pushUpBoundedFromUnion(c, transformedAlgebra);
-  }
-  if (context?.optimizeJoinOverUnionBinds ?? false) {
-    transformedAlgebra = nullifyJoinOverIncompatibleBounds(c, transformedAlgebra);
+  let transformedAlgebra = inputAlgebra;
+  for (const transformation of transformations) {
+    transformedAlgebra = transformation(c, transformedAlgebra);
   }
   const transformedAst = toAst(transformedAlgebra);
   return c.generator.generate(transformedAst);

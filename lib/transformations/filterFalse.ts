@@ -13,8 +13,19 @@ export function transformFilterFalse(c: TransformContext, op: Algebra.Operation)
     {
       join: { transform: join => absorbJoinOnEmptyBindings(c, join) },
       union: { transform: union => pruneUnionOfEmptyBindings(c, union) },
+      extend: { transform: extend => extendsEmptyBindingsDoesNotGiveBindings(c, extend) },
     },
   );
+}
+
+export function extendsEmptyBindingsDoesNotGiveBindings(
+  c: TransformContext,
+  extend: Algebra.Extend,
+): Algebra.Extend | Algebra.Filter {
+  if (isFilterFalse(c, extend.input)) {
+    return createFilterFalse(c);
+  }
+  return extend;
 }
 
 /**

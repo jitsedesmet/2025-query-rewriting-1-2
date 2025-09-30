@@ -32,6 +32,12 @@ class VariableSet {
     if (this.isNoFixed && other.isNoFixed) {
       return VariableSet.createNoFixed();
     }
+    if (this.isNoFixed) {
+      return new VariableSet(...other.values);
+    }
+    if (other.isNoFixed) {
+      return new VariableSet(...this.values);
+    }
     return new VariableSet(
       ...this.values.filter(value => other.values.some(x => x.equals(value))),
     );

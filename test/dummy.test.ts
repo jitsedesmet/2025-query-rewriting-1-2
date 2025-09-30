@@ -164,4 +164,136 @@ describe('dummy', () => {
     [ `CONSTRUCT WHERE { <ex://a> <ex://a> ?o }`, `CONSTRUCT WHERE { <ex://b> <ex://b> ?o }` ],
     [ operationTransform, transformFilterFalse, nullifyJoinOverIncompatibleBounds, transformFilterFalse ],
   ));
+
+  it('join optimization 1', ({ expect }) => test(
+    expect,
+    `SELECT * { ?s ?p ?o . <ex://a> ?p ?o }`,
+    `SELECT ?uq_o ?uq_p ?uq_s WHERE {
+  {
+    {
+      SELECT ?m0_o WHERE {
+        <ex://a> <ex://a> ?m0_o .        
+      }      
+    }
+    BIND( <ex://a> AS ?uq_s )
+    BIND( <ex://a> AS ?uq_p )
+    BIND( ?m0_o AS ?uq_o )    
+  }
+  UNION {
+    {
+      SELECT ?m1_o WHERE {
+        <ex://a> <ex://b> ?m1_o .        
+      }      
+    }
+    BIND( <ex://a> AS ?uq_s )
+    BIND( <ex://b> AS ?uq_p )
+    BIND( ?m1_o AS ?uq_o )    
+  }
+  {
+    {
+      SELECT ?m0_o WHERE {
+        <ex://a> <ex://a> ?m0_o .        
+      }      
+    }
+    BIND( <ex://a> AS ?uq_p )
+    BIND( ?m0_o AS ?uq_o )    
+  }
+  UNION {
+    {
+      SELECT ?m1_o WHERE {
+        <ex://a> <ex://b> ?m1_o .        
+      }      
+    }
+    BIND( <ex://b> AS ?uq_p )
+    BIND( ?m1_o AS ?uq_o )    
+  }  
+}`,
+    [ `CONSTRUCT WHERE { <ex://a> <ex://a> ?o }`, `CONSTRUCT WHERE { <ex://a> <ex://b> ?o }`, `CONSTRUCT WHERE { <ex://b> <ex://c> ?o }` ],
+    [ operationTransform, transformFilterFalse, nullifyJoinOverIncompatibleBounds, transformFilterFalse ],
+  ));
+
+  it('nullifyJoinOverIncompatibleBounds - adding simple filter', ({ expect }) => test(
+    expect,
+    `SELECT * {
+  {
+    { SELECT ?sp { ?ss ?sp ?so } }
+    BIND ( ?sp AS ?s )
+  }
+  {
+    BIND( <ex://a> as ?s )
+  }
+}`,
+    `SELECT ?uq_s ?uq_sp WHERE {
+  {
+    SELECT ?uq_sp WHERE {
+      ?uq_ss ?uq_sp ?uq_so .
+      FILTER ( ( ?uq_sp = <ex://a> ) )      
+    }    
+  }
+  {
+    BIND( <ex://a> AS ?uq_s )    
+  }  
+}`,
+    [ ],
+    [ nullifyJoinOverIncompatibleBounds, transformFilterFalse ],
+  ));
+
+  it('nullifyJoinOverIncompatibleBounds - adding || filter', ({ expect }) => test(
+    expect,
+    `SELECT * {
+  {
+    { SELECT ?sp { ?ss ?sp ?so } }
+    BIND ( ?sp AS ?s )
+  }
+  { BIND( <ex://a> as ?s ) }
+  UNION
+  { BIND( <ex://b> as ?s ) }
+}`,
+    `SELECT ?uq_s ?uq_sp WHERE {
+  {
+    SELECT ?uq_sp WHERE {
+      ?uq_ss ?uq_sp ?uq_so .
+      FILTER ( ( ( ?uq_sp = <ex://a> ) || ( ?uq_sp = <ex://b> ) ) )      
+    }    
+  }
+  {
+    BIND( <ex://a> AS ?uq_s )    
+  }
+  UNION {
+    BIND( <ex://b> AS ?uq_s )    
+  }  
+}`,
+    [ ],
+    [ nullifyJoinOverIncompatibleBounds, transformFilterFalse ],
+  ));
+
+  it('nullifyJoinOverIncompatibleBounds - adding || filter on 2 vars', ({ expect }) => test(
+    expect,
+    `SELECT * {
+  {
+    { SELECT ?sp ?so { ?ss ?sp ?so } }
+    BIND ( ?sp AS ?s )
+    BIND ( ?so AS ?s )
+  }
+  { BIND( <ex://a> as ?s ) }
+  UNION
+  { BIND( <ex://b> as ?s ) }
+}`,
+    `SELECT ?uq_s ?uq_so ?uq_sp WHERE {
+  {
+    SELECT ?uq_sp ?uq_so WHERE {
+      ?uq_ss ?uq_sp ?uq_so .
+      FILTER ( ( ( ( ?uq_so = <ex://a> ) || ( ?uq_so = <ex://b> ) ) && ( ( ?uq_sp = <ex://a> ) || ( ?uq_sp = <ex://b> ) ) ) )      
+    }    
+  }
+  {
+    BIND( <ex://a> AS ?uq_s )    
+  }
+  UNION {
+    BIND( <ex://b> AS ?uq_s )    
+  }  
+}`,
+    [ ],
+    [ nullifyJoinOverIncompatibleBounds, transformFilterFalse ],
+  ));
 });

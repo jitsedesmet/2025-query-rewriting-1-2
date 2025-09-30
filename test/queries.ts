@@ -233,27 +233,23 @@ SELECT ?uq_name ?uq_o ?uq_o1 ?uq_p ?uq_s ?uq_s1 WHERE {
 export const expectedQueryOptimizedBoundsAndEmptyRes = `
 SELECT ?uq_name ?uq_o ?uq_o1 ?uq_p ?uq_s ?uq_s1 WHERE {
   {
-    {
-      SELECT ?m0_o WHERE {
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> <https://example.com/me> .
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> <https://example.com/name> .
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
-        <https://example.com/t> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?g_0 .        
-      }      
-    }
-    BIND( ?m0_o AS ?uq_name )    
+    SELECT ?m0_o WHERE {
+      ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
+      ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> <https://example.com/me> .
+      ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> <https://example.com/name> .
+      ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
+      <https://example.com/t> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?g_0 .      
+    }    
   }
+  BIND( ?m0_o AS ?uq_name )
   {
-    {
-      SELECT ( "dummy"^^<http://www.w3.org/2001/XMLSchema#string> AS ?dummy ) WHERE {
-        {
-          <https://example.com/t> <https://example.com/statedBy> <https://example.com/govBE> .
-          FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?m1_p != "rdf:reifies"^^<http://www.w3.org/2001/XMLSchema#string> ) && NOT EXISTS {
-            ?m1_sRoot <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <https://example.com/t> .            
-          }
-          ) ) )          
-        }        
+    SELECT ( "dummy"^^<http://www.w3.org/2001/XMLSchema#string> AS ?dummy ) WHERE {
+      {
+        <https://example.com/t> <https://example.com/statedBy> <https://example.com/govBE> .
+        FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?m1_p != "rdf:reifies"^^<http://www.w3.org/2001/XMLSchema#string> ) && NOT EXISTS {
+          ?m1_sRoot <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <https://example.com/t> .          
+        }
+        ) ) )        
       }      
     }    
   }

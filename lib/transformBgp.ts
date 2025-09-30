@@ -2,6 +2,7 @@ import { toAst } from '@traqula/algebra-sparql-1-2';
 import { Algebra as Alg } from '@traqula/algebra-transformations-1-2';
 import { substituteVarsThatArePreBoundToTerms } from './transformations/boundedVarSubstitution.js';
 import { transformFilterFalse } from './transformations/filterFalse.js';
+import { nullifyJoinOverIncompatibleBounds } from './transformations/nullifyJoinOverIncompatibleBounds.js';
 import { pushUpBoundedFromUnion } from './transformations/pushUpBoundedFromUnion.js';
 import { rewriteSinglePattern } from './transformations/rewriteSinglePattern.js';
 import type { TransformContext } from './transformContext.js';
@@ -12,6 +13,7 @@ export type QueryTransFormContext = Partial<{
   optimizeBinds: boolean;
   optimizeFilterFalse: boolean;
   pushUpBinds: boolean;
+  optimizeJoinOverUnionBinds: boolean;
 }>;
 
 export function queryTransform(c: TransformContext, input: string, context: QueryTransFormContext = {}): string {
@@ -25,6 +27,9 @@ export function queryTransform(c: TransformContext, input: string, context: Quer
   }
   if (context?.pushUpBinds ?? false) {
     transformedAlgebra = pushUpBoundedFromUnion(c, transformedAlgebra);
+  }
+  if (context?.optimizeJoinOverUnionBinds ?? false) {
+    transformedAlgebra = nullifyJoinOverIncompatibleBounds(c, transformedAlgebra);
   }
   const transformedAst = toAst(transformedAlgebra);
   return c.generator.generate(transformedAst);

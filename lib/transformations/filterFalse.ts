@@ -29,20 +29,30 @@ export function absorbJoinOnEmptyBindings(c: TransformContext, join: Algebra.Joi
   return join;
 }
 
+function isAlgebraTyped<T extends string>(val: { type: unknown }, type: T):
+val is Extract<Algebra.Operation, { type: T }> extends object ?
+  Extract<Algebra.Operation, { type: T }> : (T extends Algebra.Operation['type'] ? never : { type: T }) {
+  return val.type === type;
+}
+
 /**
  * A pattern that is known to emmit no binding is the identity operation for UNION.
  * We generate these patterns ourselves using FILTER(false)
  */
-export function pruneUnionOfEmptyBindings(c: TransformContext, union: Algebra.Union): Algebra.Union | Algebra.Filter {
+export function pruneUnionOfEmptyBindings(c: TransformContext, union: Algebra.Union): Algebra.Operation {
   // Filter out filterFalse
-  union.input = union.input.filter((maybeFilter) => {
-    if (maybeFilter.type === 'filter' && maybeFilter.expression.expressionType === Algebra.ExpressionTypes.TERM) {
+  union.input = union.input.filter((maybeFilter: Algebra.Operation | { type: string }) => {
+    if (isAlgebraTyped(maybeFilter, Algebra.Types.FILTER) &&
+      maybeFilter.expression.expressionType === Algebra.ExpressionTypes.TERM) {
       return !maybeFilter.expression.term.equals(termFalse);
     }
     return true;
   });
-  if (union.input.length > 0) {
+  if (union.input.length > 1) {
     return union;
+  }
+  if (union.input.length === 1) {
+    return union.input[0];
   }
   // If emptyUnion, return filterFalse
   return createFilterFalse(c);

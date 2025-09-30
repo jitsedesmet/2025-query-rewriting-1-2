@@ -137,4 +137,17 @@ describe('dummy', () => {
     [ `CONSTRUCT WHERE { ?s <ex://b> ?o }`, `CONSTRUCT WHERE { ?s <ex://b> ?o }` ],
     { optimizeBinds: true, optimizeFilterFalse: true, pushUpBinds: true },
   ));
+
+  it.skip('join optimization', ({ expect }) => test(
+    expect,
+    `SELECT * { ?s ?p ?o . <ex://a> ?p ?o }`,
+    `SELECT * {
+  ?s ?p ?o .
+  <ex://a> ?p ?o .
+  BIND(<ex://b> as ?p) .
+  BIND(<ex://a> as ?s)
+}`,
+    [ `CONSTRUCT WHERE { <ex://a> <ex://b> ?o }`, `CONSTRUCT WHERE { <ex://b> <ex://b> ?o }` ],
+    { optimizeJoinOverUnionBinds: true },
+  ));
 });

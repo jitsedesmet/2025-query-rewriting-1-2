@@ -137,6 +137,44 @@ describe('dummy', () => {
     [ operationTransform, substituteVarsThatArePreBoundToTerms, transformFilterFalse, pushUpBoundedFromUnion ],
   ));
 
+  it('no join optimization', ({ expect }) => test(
+    expect,
+    `SELECT * { ?s ?p ?o . <ex://a> ?p ?o }`,
+    `SELECT ?uq_o ?uq_p ?uq_s WHERE {
+  {
+    {
+      SELECT ?m0_o WHERE {
+        <ex://a> <ex://a> ?m0_o .        
+      }      
+    }
+    BIND( <ex://a> AS ?uq_s )
+    BIND( <ex://a> AS ?uq_p )
+    BIND( ?m0_o AS ?uq_o )    
+  }
+  UNION {
+    {
+      SELECT ?m1_o WHERE {
+        <ex://b> <ex://b> ?m1_o .        
+      }      
+    }
+    BIND( <ex://b> AS ?uq_s )
+    BIND( <ex://b> AS ?uq_p )
+    BIND( ?m1_o AS ?uq_o )    
+  }
+  {
+    {
+      SELECT ?m0_o WHERE {
+        <ex://a> <ex://a> ?m0_o .        
+      }      
+    }
+    BIND( <ex://a> AS ?uq_p )
+    BIND( ?m0_o AS ?uq_o )    
+  }  
+}`,
+    [ `CONSTRUCT WHERE { <ex://a> <ex://a> ?o }`, `CONSTRUCT WHERE { <ex://b> <ex://b> ?o }` ],
+    [ operationTransform, transformFilterFalse ],
+  ));
+
   it('join optimization', ({ expect }) => test(
     expect,
     `SELECT * { ?s ?p ?o . <ex://a> ?p ?o }`,

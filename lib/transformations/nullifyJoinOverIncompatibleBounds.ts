@@ -98,16 +98,17 @@ function restrictOperations(c: TransformContext, join: Algebra.Join, varSets: Re
       if (op.expression.expressionType === Algebra.ExpressionTypes.TERM && varSets[op.variable.value]) {
         const varSet = varSets[op.variable.value];
         const exprTerm = op.expression.term;
-        if (!varSet.isNoFixed && exprTerm.termType === 'Variable' && /^[gu]/u.test(exprTerm.value)) {
+        // Only in case the var is bound to a mapping var (we know how they are constructed)
+        if (!varSet.isNoFixed && exprTerm.termType === 'Variable' && /^[mr]/u.test(exprTerm.value)) {
           // The mapping var can be made specific
           mappingVarsToScope[exprTerm.value] = varSet;
           // If the mapping var gets bound, you may aso bind the userQuery var
           if (varSet.values.length === 1) {
             op.expression = AF.createTermExpression(varSet.values[0]);
           }
-          const res = recurse(op.input);
+          op.input = recurse(op.input);
           delete mappingVarsToScope[exprTerm.value];
-          return res;
+          return op;
         }
         // Can nullify
         if (!varSet.termIsCompatible(exprTerm)) {

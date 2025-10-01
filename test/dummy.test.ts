@@ -256,9 +256,11 @@ describe('dummy', () => {
     `SELECT ?uq_o ?uq_p WHERE {
   {
     {
-      SELECT ?m0_p ?m0_o WHERE {
-        <ex://a> ?m0_p ?m0_o .
-        FILTER ( ( ?m0_p = <ex://c> ) )        
+      SELECT ?m0_o WHERE {
+        {
+          BIND( <ex://c> AS ?m0_p )          
+        }
+        <ex://a> ?m0_p ?m0_o .        
       }      
     }
     BIND( <ex://c> AS ?uq_p )
@@ -275,7 +277,45 @@ describe('dummy', () => {
   }  
 }`,
     [ `CONSTRUCT WHERE { <ex://a> ?p ?o }`, `CONSTRUCT WHERE { <ex://b> <ex://c> ?o }` ],
-    [ operationTransform, transformFilterFalse, nullifyJoinOverIncompatibleBounds, transformFilterFalse ],
+    [
+      operationTransform,
+      transformFilterFalse,
+      nullifyJoinOverIncompatibleBounds,
+      transformFilterFalse,
+    ],
+  ));
+
+  it('nullifyJoinOverIncompatibleBounds - adding simple filter and optimizing', ({ expect }) => test(
+    expect,
+    `SELECT * { <ex://a> ?p ?o . <ex://b> ?p ?o . }`,
+    `SELECT ?uq_o ?uq_p WHERE {
+  {
+    {
+      SELECT ?m0_o WHERE {
+        <ex://a> <ex://c> ?m0_o .        
+      }      
+    }
+    BIND( <ex://c> AS ?uq_p )
+    BIND( ?m0_o AS ?uq_o )    
+  }
+  {
+    {
+      SELECT ?m1_o WHERE {
+        <ex://b> <ex://c> ?m1_o .        
+      }      
+    }
+    BIND( <ex://c> AS ?uq_p )
+    BIND( ?m1_o AS ?uq_o )    
+  }  
+}`,
+    [ `CONSTRUCT WHERE { <ex://a> ?p ?o }`, `CONSTRUCT WHERE { <ex://b> <ex://c> ?o }` ],
+    [
+      operationTransform,
+      transformFilterFalse,
+      nullifyJoinOverIncompatibleBounds,
+      transformFilterFalse,
+      substituteVarsThatArePreBoundToTerms,
+    ],
   ));
 
   it('nullifyJoinOverIncompatibleBounds - adding || filter', ({ expect }) => test(

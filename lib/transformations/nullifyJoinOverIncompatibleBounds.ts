@@ -91,7 +91,7 @@ export function nullifyJoinOverIncompatibleBounds<T extends Algebra.Operation>(
 }
 
 function restrictOperations(c: TransformContext, join: Algebra.Join, varSets: Record<string, VariableSet>): void {
-  const { AF } = c;
+  const { AF, DF } = c;
   const mappingVarsToScope: Record<string, VariableSet> = {};
   const recurse = (op: Algebra.Operation): Algebra.Operation => {
     if (op.type === Algebra.Types.EXTEND) {
@@ -119,7 +119,47 @@ function restrictOperations(c: TransformContext, join: Algebra.Join, varSets: Re
     } else if (op.type === Algebra.Types.UNION) {
       op.input = op.input.map(x => recurse(x));
     } else if (op.type === Algebra.Types.PROJECT) {
-      op.input = createFilterBound(c, op.input, mappingVarsToScope);
+      // For the vars that are filtered to a single term, you can also introduce an extension + join.
+      const staticallyBound = Object.entries(mappingVarsToScope)
+        .filter(([ _, set ]) => !set.isNoFixed && set.values.length === 1);
+      const nonStaticallyBound = Object.fromEntries(Object.entries(mappingVarsToScope)
+        .filter(([ var_ ]) => !staticallyBound.some(([ x ]) => x === var_)));
+      if (staticallyBound.length > 0) {
+        const isExtendBlock = (op: Algebra.Operation): boolean => {
+          if (op.type === Algebra.Types.EXTEND) {
+            return isExtendBlock(op.input);
+          }
+          if (op.type === Algebra.Types.BGP && op.patterns.length === 0) {
+            return true;
+          }
+          return false;
+        };
+        let toExtendAround: Algebra.Operation;
+        if (op.input.type === Algebra.Types.JOIN) {
+          if (isExtendBlock(op.input.input[0])) {
+            toExtendAround = op.input.input[0];
+          } else {
+            toExtendAround = AF.createBgp([]);
+            op.input.input.unshift(toExtendAround);
+          }
+        } else {
+          // Introduce join
+          toExtendAround = AF.createBgp([]);
+          op.input = AF.createJoin([ toExtendAround, op.input ]);
+        }
+        for (const [ var_, varSet ] of staticallyBound) {
+          toExtendAround = AF.createExtend(
+            toExtendAround,
+            DF.variable(var_),
+            AF.createTermExpression(varSet.values[0]),
+          );
+        }
+        op.input.input[0] = toExtendAround;
+      }
+      op.input = createFilterBound(c, op.input, nonStaticallyBound);
+      // The variables that are statically bounded do no longer need to be projected since
+      // they have also been bound to the static term in the extend rewriting that added the var to `mappingVarsToScope`
+      op.variables = op.variables.filter(var_ => !staticallyBound.some(([ x ]) => x === var_.value));
     }
     return op;
   };

@@ -256,9 +256,9 @@ describe('dummy', () => {
     `SELECT ?uq_o ?uq_p WHERE {
   {
     {
-      SELECT ?m0_o WHERE {
-        {
-          BIND( <ex://c> AS ?m0_p )          
+      SELECT ?m0_p ?m0_o WHERE {        
+        VALUES ?m0_p {
+          <ex://c>          
         }
         <ex://a> ?m0_p ?m0_o .        
       }      
@@ -291,8 +291,11 @@ describe('dummy', () => {
     `SELECT ?uq_o ?uq_p WHERE {
   {
     {
-      SELECT ?m0_o WHERE {
-        <ex://a> <ex://c> ?m0_o .        
+      SELECT ?m0_p ?m0_o WHERE {        
+        VALUES ?m0_p {
+          <ex://c>          
+        }
+        <ex://a> ?m0_p ?m0_o .        
       }      
     }
     BIND( <ex://c> AS ?uq_p )
@@ -324,9 +327,12 @@ describe('dummy', () => {
     `SELECT ?uq_o ?uq_p WHERE {
   {
     {
-      SELECT ?m0_p ?m0_o WHERE {
-        <ex://a> ?m0_p ?m0_o .
-        FILTER ( ( ( ?m0_p = <ex://c> ) || ( ?m0_p = <ex://d> ) ) )        
+      SELECT ?m0_p ?m0_o WHERE {        
+        VALUES ?m0_p {
+          <ex://c>
+          <ex://d>          
+        }
+        <ex://a> ?m0_p ?m0_o .        
       }      
     }
     BIND( ?m0_p AS ?uq_p )
@@ -361,9 +367,16 @@ describe('dummy', () => {
     `SELECT ?uq_o ?uq_p WHERE {
   {
     {
-      SELECT ?m0_p ?m0_o WHERE {
-        <ex://a> ?m0_p ?m0_o .
-        FILTER ( ( ( ( ?m0_o = <ex://c> ) || ( ?m0_o = <ex://d> ) ) && ( ( ?m0_p = <ex://c> ) || ( ?m0_p = <ex://d> ) ) ) )        
+      SELECT ?m0_p ?m0_o WHERE {        
+        VALUES ?m0_p {
+          <ex://c>
+          <ex://d>          
+        }        
+        VALUES ?m0_o {
+          <ex://c>
+          <ex://d>          
+        }
+        <ex://a> ?m0_p ?m0_o .        
       }      
     }
     BIND( ?m0_p AS ?uq_p )

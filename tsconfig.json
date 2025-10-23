@@ -21,7 +21,8 @@
     "removeComments": false,
     "sourceMap": true,
 
-    "esModuleInterop": true
+    "esModuleInterop": true,
+    "skipLibCheck": true
   },
   "references": [
     { "path": "../traqula/engines/generator-sparql-1-2" },

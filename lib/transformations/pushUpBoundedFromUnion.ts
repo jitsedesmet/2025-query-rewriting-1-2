@@ -1,4 +1,5 @@
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
+import { algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformContext } from '../transformContext.js';
 import { deleteVarExtensionsInPlace, directExtensions } from '../utils.js';
 
@@ -12,7 +13,7 @@ import { deleteVarExtensionsInPlace, directExtensions } from '../utils.js';
  * @param op
  */
 export function pushUpBoundedFromUnion<T extends Algebra.Operation>(c: TransformContext, op: T): T {
-  return c.algebraTransformer.transformNode<'unsafe'>(
+  return algebraUtils.mapOperation<'unsafe', typeof op>(
     op,
     {
       union: {

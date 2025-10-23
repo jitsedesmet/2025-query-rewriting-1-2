@@ -63,13 +63,13 @@ describe('dummy', () => {
   {
     {
       SELECT ?m0_s ?m0_p WHERE {
-        ?m0_s ?m0_p ?m0_o .        
-      }      
+        ?m0_s ?m0_p ?m0_o .
+      }
     }
     BIND( ?m0_s AS ?uq_s )
     BIND( ?m0_p AS ?uq_p )
-    BIND( BNODE( "e_blank"^^<http://www.w3.org/2001/XMLSchema#string> ) AS ?uq_o )    
-  }  
+    BIND( BNODE( "e_blank"^^<http://www.w3.org/2001/XMLSchema#string> ) AS ?uq_o )
+  }
 }`,
 [ `CONSTRUCT { ?s ?p _:blank } WHERE { ?s ?p ?o }` ],
   ));
@@ -79,8 +79,8 @@ describe('dummy', () => {
 `SELECT * { ?s ?p ?s }`,
 `SELECT ?uq_p ?uq_s WHERE {
   {
-    FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )    
-  }  
+    FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )
+  }
 }`,
 [ `CONSTRUCT { ?s ?p _:blank } WHERE { ?s ?p ?o }` ],
   ));
@@ -90,11 +90,11 @@ describe('dummy', () => {
     `SELECT * { ?s <ex://a> ?o }`,
     `SELECT ?uq_o ?uq_s WHERE {
   {
-    FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )    
+    FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )
   }
   UNION {
-    FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )    
-  }  
+    FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )
+  }
 }`,
     [ `CONSTRUCT WHERE { ?s <ex://b> ?o }`, `CONSTRUCT WHERE { ?s <ex://c> ?o }` ],
   ));
@@ -103,7 +103,7 @@ describe('dummy', () => {
     expect,
     `SELECT * { ?s <ex://a> ?o }`,
     `SELECT ?uq_o ?uq_s WHERE {
-  FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )  
+  FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )
 }`,
     [ `CONSTRUCT WHERE { ?s <ex://b> ?o }`, `CONSTRUCT WHERE { ?s <ex://c> ?o }` ],
     [ operationTransform, substituteVarsThatArePreBoundToTerms, transformFilterFalse ],
@@ -116,22 +116,22 @@ describe('dummy', () => {
   {
     {
       SELECT ?m0_s ?m0_o WHERE {
-        ?m0_s <ex://b> ?m0_o .        
-      }      
+        ?m0_s <ex://b> ?m0_o .
+      }
     }
     BIND( ?m0_s AS ?uq_s )
-    BIND( ?m0_o AS ?uq_o )    
+    BIND( ?m0_o AS ?uq_o )
   }
   UNION {
     {
       SELECT ?m1_s ?m1_o WHERE {
-        ?m1_s <ex://b> ?m1_o .        
-      }      
+        ?m1_s <ex://b> ?m1_o .
+      }
     }
     BIND( ?m1_s AS ?uq_s )
-    BIND( ?m1_o AS ?uq_o )    
+    BIND( ?m1_o AS ?uq_o )
   }
-  BIND( <ex://b> AS ?uq_p )  
+  BIND( <ex://b> AS ?uq_p )
 }`,
     [ `CONSTRUCT WHERE { ?s <ex://b> ?o }`, `CONSTRUCT WHERE { ?s <ex://b> ?o }` ],
     [ operationTransform, substituteVarsThatArePreBoundToTerms, transformFilterFalse, pushUpBoundedFromUnion ],
@@ -144,32 +144,32 @@ describe('dummy', () => {
   {
     {
       SELECT ?m0_o WHERE {
-        <ex://a> <ex://a> ?m0_o .        
-      }      
+        <ex://a> <ex://a> ?m0_o .
+      }
     }
     BIND( <ex://a> AS ?uq_s )
     BIND( <ex://a> AS ?uq_p )
-    BIND( ?m0_o AS ?uq_o )    
+    BIND( ?m0_o AS ?uq_o )
   }
   UNION {
     {
       SELECT ?m1_o WHERE {
-        <ex://b> <ex://b> ?m1_o .        
-      }      
+        <ex://b> <ex://b> ?m1_o .
+      }
     }
     BIND( <ex://b> AS ?uq_s )
     BIND( <ex://b> AS ?uq_p )
-    BIND( ?m1_o AS ?uq_o )    
+    BIND( ?m1_o AS ?uq_o )
   }
   {
     {
       SELECT ?m0_o WHERE {
-        <ex://a> <ex://a> ?m0_o .        
-      }      
+        <ex://a> <ex://a> ?m0_o .
+      }
     }
     BIND( <ex://a> AS ?uq_p )
-    BIND( ?m0_o AS ?uq_o )    
-  }  
+    BIND( ?m0_o AS ?uq_o )
+  }
 }`,
     [ `CONSTRUCT WHERE { <ex://a> <ex://a> ?o }`, `CONSTRUCT WHERE { <ex://b> <ex://b> ?o }` ],
     [ operationTransform, transformFilterFalse ],
@@ -182,22 +182,22 @@ describe('dummy', () => {
   {
     {
       SELECT ?m0_o WHERE {
-        <ex://a> <ex://a> ?m0_o .        
-      }      
+        <ex://a> <ex://a> ?m0_o .
+      }
     }
     BIND( <ex://a> AS ?uq_s )
     BIND( <ex://a> AS ?uq_p )
-    BIND( ?m0_o AS ?uq_o )    
+    BIND( ?m0_o AS ?uq_o )
   }
   {
     {
       SELECT ?m0_o WHERE {
-        <ex://a> <ex://a> ?m0_o .        
-      }      
+        <ex://a> <ex://a> ?m0_o .
+      }
     }
     BIND( <ex://a> AS ?uq_p )
-    BIND( ?m0_o AS ?uq_o )    
-  }  
+    BIND( ?m0_o AS ?uq_o )
+  }
 }`,
     [ `CONSTRUCT WHERE { <ex://a> <ex://a> ?o }`, `CONSTRUCT WHERE { <ex://b> <ex://b> ?o }` ],
     [ operationTransform, transformFilterFalse, nullifyJoinOverIncompatibleBounds, transformFilterFalse ],
@@ -210,41 +210,41 @@ describe('dummy', () => {
   {
     {
       SELECT ?m0_o WHERE {
-        <ex://a> <ex://a> ?m0_o .        
-      }      
+        <ex://a> <ex://a> ?m0_o .
+      }
     }
     BIND( <ex://a> AS ?uq_s )
     BIND( <ex://a> AS ?uq_p )
-    BIND( ?m0_o AS ?uq_o )    
+    BIND( ?m0_o AS ?uq_o )
   }
   UNION {
     {
       SELECT ?m1_o WHERE {
-        <ex://a> <ex://b> ?m1_o .        
-      }      
+        <ex://a> <ex://b> ?m1_o .
+      }
     }
     BIND( <ex://a> AS ?uq_s )
     BIND( <ex://b> AS ?uq_p )
-    BIND( ?m1_o AS ?uq_o )    
+    BIND( ?m1_o AS ?uq_o )
   }
   {
     {
       SELECT ?m0_o WHERE {
-        <ex://a> <ex://a> ?m0_o .        
-      }      
+        <ex://a> <ex://a> ?m0_o .
+      }
     }
     BIND( <ex://a> AS ?uq_p )
-    BIND( ?m0_o AS ?uq_o )    
+    BIND( ?m0_o AS ?uq_o )
   }
   UNION {
     {
       SELECT ?m1_o WHERE {
-        <ex://a> <ex://b> ?m1_o .        
-      }      
+        <ex://a> <ex://b> ?m1_o .
+      }
     }
     BIND( <ex://b> AS ?uq_p )
-    BIND( ?m1_o AS ?uq_o )    
-  }  
+    BIND( ?m1_o AS ?uq_o )
+  }
 }`,
     [ `CONSTRUCT WHERE { <ex://a> <ex://a> ?o }`, `CONSTRUCT WHERE { <ex://a> <ex://b> ?o }`, `CONSTRUCT WHERE { <ex://b> <ex://c> ?o }` ],
     [ operationTransform, transformFilterFalse, nullifyJoinOverIncompatibleBounds, transformFilterFalse ],
@@ -256,25 +256,25 @@ describe('dummy', () => {
     `SELECT ?uq_o ?uq_p WHERE {
   {
     {
-      SELECT ?m0_p ?m0_o WHERE {        
+      SELECT ?m0_p ?m0_o WHERE {
         VALUES ?m0_p {
-          <ex://c>          
+          <ex://c>
         }
-        <ex://a> ?m0_p ?m0_o .        
-      }      
+        <ex://a> ?m0_p ?m0_o .
+      }
     }
     BIND( <ex://c> AS ?uq_p )
-    BIND( ?m0_o AS ?uq_o )    
+    BIND( ?m0_o AS ?uq_o )
   }
   {
     {
       SELECT ?m1_o WHERE {
-        <ex://b> <ex://c> ?m1_o .        
-      }      
+        <ex://b> <ex://c> ?m1_o .
+      }
     }
     BIND( <ex://c> AS ?uq_p )
-    BIND( ?m1_o AS ?uq_o )    
-  }  
+    BIND( ?m1_o AS ?uq_o )
+  }
 }`,
     [ `CONSTRUCT WHERE { <ex://a> ?p ?o }`, `CONSTRUCT WHERE { <ex://b> <ex://c> ?o }` ],
     [
@@ -291,25 +291,25 @@ describe('dummy', () => {
     `SELECT ?uq_o ?uq_p WHERE {
   {
     {
-      SELECT ?m0_p ?m0_o WHERE {        
+      SELECT ?m0_p ?m0_o WHERE {
         VALUES ?m0_p {
-          <ex://c>          
+          <ex://c>
         }
-        <ex://a> ?m0_p ?m0_o .        
-      }      
+        <ex://a> ?m0_p ?m0_o .
+      }
     }
     BIND( <ex://c> AS ?uq_p )
-    BIND( ?m0_o AS ?uq_o )    
+    BIND( ?m0_o AS ?uq_o )
   }
   {
     {
       SELECT ?m1_o WHERE {
-        <ex://b> <ex://c> ?m1_o .        
-      }      
+        <ex://b> <ex://c> ?m1_o .
+      }
     }
     BIND( <ex://c> AS ?uq_p )
-    BIND( ?m1_o AS ?uq_o )    
-  }  
+    BIND( ?m1_o AS ?uq_o )
+  }
 }`,
     [ `CONSTRUCT WHERE { <ex://a> ?p ?o }`, `CONSTRUCT WHERE { <ex://b> <ex://c> ?o }` ],
     [
@@ -327,35 +327,35 @@ describe('dummy', () => {
     `SELECT ?uq_o ?uq_p WHERE {
   {
     {
-      SELECT ?m0_p ?m0_o WHERE {        
+      SELECT ?m0_p ?m0_o WHERE {
         VALUES ?m0_p {
           <ex://c>
-          <ex://d>          
+          <ex://d>
         }
-        <ex://a> ?m0_p ?m0_o .        
-      }      
+        <ex://a> ?m0_p ?m0_o .
+      }
     }
     BIND( ?m0_p AS ?uq_p )
-    BIND( ?m0_o AS ?uq_o )    
+    BIND( ?m0_o AS ?uq_o )
   }
   {
     {
       SELECT ?m1_o WHERE {
-        <ex://b> <ex://c> ?m1_o .        
-      }      
+        <ex://b> <ex://c> ?m1_o .
+      }
     }
     BIND( <ex://c> AS ?uq_p )
-    BIND( ?m1_o AS ?uq_o )    
+    BIND( ?m1_o AS ?uq_o )
   }
   UNION {
     {
       SELECT ?m2_o WHERE {
-        <ex://b> <ex://d> ?m2_o .        
-      }      
+        <ex://b> <ex://d> ?m2_o .
+      }
     }
     BIND( <ex://d> AS ?uq_p )
-    BIND( ?m2_o AS ?uq_o )    
-  }  
+    BIND( ?m2_o AS ?uq_o )
+  }
 }`,
     [ `CONSTRUCT WHERE { <ex://a> ?p ?o }`, `CONSTRUCT WHERE { <ex://b> <ex://c> ?o }`, `CONSTRUCT WHERE { <ex://b> <ex://d> ?o }` ],
     [ operationTransform, transformFilterFalse, nullifyJoinOverIncompatibleBounds, transformFilterFalse ],
@@ -367,39 +367,39 @@ describe('dummy', () => {
     `SELECT ?uq_o ?uq_p WHERE {
   {
     {
-      SELECT ?m0_p ?m0_o WHERE {        
+      SELECT ?m0_p ?m0_o WHERE {
         VALUES ?m0_p {
           <ex://c>
-          <ex://d>          
-        }        
+          <ex://d>
+        }
         VALUES ?m0_o {
           <ex://c>
-          <ex://d>          
+          <ex://d>
         }
-        <ex://a> ?m0_p ?m0_o .        
-      }      
+        <ex://a> ?m0_p ?m0_o .
+      }
     }
     BIND( ?m0_p AS ?uq_p )
-    BIND( ?m0_o AS ?uq_o )    
+    BIND( ?m0_o AS ?uq_o )
   }
   {
     {
       SELECT ( "dummy"^^<http://www.w3.org/2001/XMLSchema#string> AS ?dummy ) WHERE {
-        <ex://b> <ex://c> <ex://c> .        
-      }      
+        <ex://b> <ex://c> <ex://c> .
+      }
     }
     BIND( <ex://c> AS ?uq_p )
-    BIND( <ex://c> AS ?uq_o )    
+    BIND( <ex://c> AS ?uq_o )
   }
   UNION {
     {
       SELECT ( "dummy"^^<http://www.w3.org/2001/XMLSchema#string> AS ?dummy ) WHERE {
-        <ex://b> <ex://d> <ex://d> .        
-      }      
+        <ex://b> <ex://d> <ex://d> .
+      }
     }
     BIND( <ex://d> AS ?uq_p )
-    BIND( <ex://d> AS ?uq_o )    
-  }  
+    BIND( <ex://d> AS ?uq_o )
+  }
 }`,
     [ `CONSTRUCT WHERE { <ex://a> ?p ?o }`, `CONSTRUCT WHERE { <ex://b> <ex://c> <ex://c> }`, `CONSTRUCT WHERE { <ex://b> <ex://d> <ex://d> }` ],
     [ operationTransform, transformFilterFalse, nullifyJoinOverIncompatibleBounds, transformFilterFalse ],

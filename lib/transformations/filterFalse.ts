@@ -1,4 +1,4 @@
-import { Algebra } from '@traqula/algebra-transformations-1-2';
+import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformContext } from '../transformContext.js';
 import { createFilterFalse, isFilterFalse, termFalse } from '../utils.js';
 
@@ -8,7 +8,7 @@ import { createFilterFalse, isFilterFalse, termFalse } from '../utils.js';
  */
 
 export function transformFilterFalse(c: TransformContext, op: Algebra.Operation): Algebra.Operation {
-  return c.algebraTransformer.transformNode<'unsafe'>(
+  return algebraUtils.mapOperation<'unsafe', typeof op>(
     op,
     {
       join: { transform: join => absorbJoinOnEmptyBindings(c, join) },
@@ -54,7 +54,7 @@ export function pruneUnionOfEmptyBindings(c: TransformContext, union: Algebra.Un
   // Filter out filterFalse
   union.input = union.input.filter((maybeFilter: Algebra.Operation | { type: string }) => {
     if (isAlgebraTyped(maybeFilter, Algebra.Types.FILTER) &&
-      maybeFilter.expression.expressionType === Algebra.ExpressionTypes.TERM) {
+      maybeFilter.expression.subType === Algebra.ExpressionTypes.TERM) {
       return !maybeFilter.expression.term.equals(termFalse);
     }
     return true;

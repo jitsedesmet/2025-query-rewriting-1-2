@@ -1,6 +1,6 @@
 import { toAlgebra } from '@traqula/algebra-sparql-1-2';
 import type { Algebra as Alg } from '@traqula/algebra-transformations-1-1';
-import { AlgebraFactory, algebraUtils } from '@traqula/algebra-transformations-1-2';
+import { AlgebraFactory } from '@traqula/algebra-transformations-1-2';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { Generator } from '@traqula/generator-sparql-1-2';
 import { Parser } from '@traqula/parser-sparql-1-2';
@@ -11,7 +11,6 @@ import { ClusterSolver } from './ClusterSolver.js';
 export interface TransformContext {
   parser: Parser;
   generator: Generator;
-  algebraTransformer: algebraUtils.AlgebraTransformer;
   astFactory: AstFactory;
   AF: AlgebraFactory;
   DF: DataFactory;
@@ -26,11 +25,11 @@ export function parseQueryAndPrefixVars(
   prefix: string,
 ): Algebra.Operation {
   const ast = parser.parse(query);
-  const renamedAst = astTransformer.transformNodeSpecific<'unsafe'>(
+  const renamedAst = astTransformer.transformNodeSpecific<'unsafe', typeof ast>(
     ast,
     {},
     { term: { variable: {
-      transform: ast => astFactory.variable(
+      transform: ast => astFactory.termVariable(
             `${prefix}${ast.value}`,
             astFactory.sourceLocationNodeReplaceUnsafe(ast.loc),
       ),
@@ -43,7 +42,6 @@ export function createTransformContext(mappers: readonly string[]): TransformCon
   const partialContext: Omit<TransformContext, 'mappers'> = {
     parser: new Parser(),
     generator: new Generator(),
-    algebraTransformer: new algebraUtils.AlgebraTransformer(),
     astFactory: new AstFactory(),
     AF: new AlgebraFactory(),
     DF: new DataFactory(),

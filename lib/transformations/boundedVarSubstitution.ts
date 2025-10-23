@@ -1,10 +1,9 @@
 import type * as RDF from '@rdfjs/types';
-import { Algebra } from '@traqula/algebra-transformations-1-2';
+import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformContext } from '../transformContext.js';
 
 export function substituteVarsThatArePreBoundToTerms<T extends Algebra.Operation>(c: TransformContext, op: T): T {
-  const { algebraTransformer } = c;
-  return algebraTransformer.transformNode<'unsafe'>(
+  return algebraUtils.mapOperation<'unsafe', typeof op>(
     op,
     { project: {
       transform: projection => substituteAndUnwrapExtends(c, projection),
@@ -42,7 +41,7 @@ function substituteAndUnwrapExtends(c: TransformContext, projection: Algebra.Pro
     if (op.type === 'extend') {
       // If the variable is dependent on outside this joins scope, we cannot safely remove it
       const varIsProjected = stillUsedVars.some(var_ => var_.equals(op.variable));
-      const expressionIsBasicTerm = op.expression.expressionType === Algebra.ExpressionTypes.TERM && (
+      const expressionIsBasicTerm = op.expression.subType === Algebra.ExpressionTypes.TERM && (
         op.expression.term.termType === 'Literal' || op.expression.term.termType === 'NamedNode');
       if (!varIsProjected && expressionIsBasicTerm) {
         assignments[op.variable.value] = (<Algebra.TermExpression>op.expression).term;
@@ -57,7 +56,7 @@ function substituteAndUnwrapExtends(c: TransformContext, projection: Algebra.Pro
   // Iterate over the join and find extends that bind to a term on the top level.
   join.input = join.input.map(input => findAssignmentsAndUnwrap(input));
 
-  const transformedProjection = c.algebraTransformer.transformNode<'unsafe'>(
+  const transformedProjection = algebraUtils.mapOperation<'unsafe', typeof projection>(
     projection,
     {
       pattern: {

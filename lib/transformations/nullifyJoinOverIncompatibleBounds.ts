@@ -1,5 +1,5 @@
 import type * as RDF from '@rdfjs/types';
-import { Algebra } from '@traqula/algebra-transformations-1-2';
+import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformContext } from '../transformContext.js';
 import { createFilterFalse, directExtensions, termIsStaticTerm } from '../utils.js';
 
@@ -70,9 +70,9 @@ class VariableSet {
  */
 export function nullifyJoinOverIncompatibleBounds<T extends Algebra.Operation>(
   c: TransformContext,
-  op: Algebra.Operation,
+  op: T,
 ): T {
-  return c.algebraTransformer.transformNode<'unsafe'>(
+  return algebraUtils.mapOperation<'unsafe', typeof op>(
     op,
     { join: {
       transform: (join) => {
@@ -95,7 +95,7 @@ function restrictOperations(c: TransformContext, join: Algebra.Join, varSets: Re
   const mappingVarsToScope: Record<string, VariableSet> = {};
   const recurse = (op: Algebra.Operation): Algebra.Operation => {
     if (op.type === Algebra.Types.EXTEND) {
-      if (op.expression.expressionType === Algebra.ExpressionTypes.TERM && varSets[op.variable.value]) {
+      if (op.expression.subType === Algebra.ExpressionTypes.TERM && varSets[op.variable.value]) {
         const varSet = varSets[op.variable.value];
         const exprTerm = op.expression.term;
         // Only in case the var is bound to a mapping var (we know how they are constructed)
@@ -259,7 +259,7 @@ function directExtensionOverUnionsAndMore(c: TransformContext, op: Algebra.Opera
   const varSets: Record<string, VariableSet> = {};
   const traverse = (op: Algebra.Operation): void => {
     if (op.type === Algebra.Types.EXTEND) {
-      if (op.expression.expressionType === Algebra.ExpressionTypes.TERM && termIsStaticTerm(op.expression.term)) {
+      if (op.expression.subType === Algebra.ExpressionTypes.TERM && termIsStaticTerm(op.expression.term)) {
         varSets[op.variable.value] = new VariableSet(op.expression.term);
       }
       traverse(op.input);

@@ -1,5 +1,5 @@
 import { toAst } from '@traqula/algebra-sparql-1-2';
-import { Algebra as Alg } from '@traqula/algebra-transformations-1-2';
+import { Algebra as Alg, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { rewriteSinglePattern } from './transformations/rewriteSinglePattern.js';
 import type { TransformContext } from './transformContext.js';
 import { parseQueryAndPrefixVars } from './transformContext.js';
@@ -20,7 +20,7 @@ export function queryTransform(
 }
 
 export function operationTransform(c: TransformContext, input: Alg.Operation): Alg.Operation {
-  const transformed = <Alg.Operation> c.algebraTransformer.transformNode<'unsafe'>(
+  const transformed = algebraUtils.mapOperation<'unsafe', typeof input>(
     input,
     { [Alg.Types.BGP]: {
       transform: input => bgpTransform(c, input),

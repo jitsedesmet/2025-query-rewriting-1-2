@@ -50,7 +50,7 @@ export function rewriteSinglePattern(
   pattern: Alg.Pattern,
   mapper: Alg.Construct,
 ): Alg.Project | Alg.Extend {
-  const { clusterSolver, algebraTransformer, AF, DF } = c;
+  const { astTransformer, clusterSolver, AF, DF } = c;
   clusterSolver.clear();
   const mappingHeadVars: Record<string, RDF.Variable> = {};
   const triplePatternVars: Record<string, RDF.Variable> = {};
@@ -115,7 +115,7 @@ export function rewriteSinglePattern(
   let inProject: Alg.Operation = mapper.input;
   // Translate vars in Project
   if (Object.keys(headVarsRemap).length > 0) {
-    inProject = <Alg.Operation> algebraTransformer.transformObject(inProject, (something) => {
+    inProject = <Alg.Operation> astTransformer.transformObject(inProject, (something) => {
       if ('termType' in something && 'value' in something && something.termType === 'Variable' &&
           typeof something.value === 'string' && headVarsRemap[something.value]) {
         return headVarsRemap[something.value];

@@ -10,7 +10,7 @@ export const datatypeBoolean = DF.namedNode(`${xsd}boolean`);
 export const termFalse = DF.literal('false', datatypeBoolean);
 
 export function isFilterFalse(c: TransformContext, op: Algebra.Operation): boolean {
-  return op.type === Algebra.Types.FILTER && op.expression.expressionType === Algebra.ExpressionTypes.TERM &&
+  return op.type === Algebra.Types.FILTER && op.expression.subType === Algebra.ExpressionTypes.TERM &&
     op.expression.term.equals(termFalse);
 }
 
@@ -30,7 +30,7 @@ export function directExtensions(c: TransformContext, op: Algebra.Operation): Re
 
   const findAssignments = (op: Algebra.Operation): void => {
     if (op.type === 'extend') {
-      if (op.expression.expressionType === Algebra.ExpressionTypes.TERM && (
+      if (op.expression.subType === Algebra.ExpressionTypes.TERM && (
         op.expression.term.termType === 'Literal' || op.expression.term.termType === 'NamedNode')) {
         assignments[op.variable.value] = (op.expression).term;
       }

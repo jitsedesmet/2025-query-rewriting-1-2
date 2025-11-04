@@ -1,36 +1,76 @@
 import type * as RDF from '@rdfjs/types';
 
-type BasicTerm = Exclude<RDF.Term, RDF.Quad | RDF.DefaultGraph>;
+export class RangeSet extends Set<RDF.Term['termType']> {
+  public disjunct(other: RangeSet): RangeSet {
+    return new RangeSet([ ...other.values() ].filter(x => this.has(x)));
+  }
+}
+export type RangedVar = RDF.Variable & { range?: RangeSet };
+export type Term = Exclude<RDF.Term, RDF.Variable> | RangedVar;
+export type BasicTerm = Exclude<Term, RDF.Quad>;
 
-function isVar(term: RDF.Term): term is RDF.Variable {
+export function isVar(term: RDF.Term): term is RangedVar {
   return term.termType === 'Variable';
 }
+
+export const subjectRange = new RangeSet([ 'BlankNode', 'NamedNode', 'Literal' ]);
+export const predicateRange = new RangeSet([ 'NamedNode', 'BlankNode' ]);
+export const objectRange = new RangeSet([ 'Quad', 'NamedNode', 'BlankNode', 'Literal' ]);
 
 /**
  * Solver that can solve what variables are equal to each-other and potentially what terms they are equal to.
  * When two mapping head vars are equal to each-other,
  * query rewriting needs to happen on the mapping to ensure they are equal.
+ *
+ * Since the term a group is assigned to can be a triple term containing vars, we get a DAG.
+ * We are sure it is a DAG because a triple term cannot be targeted as a variable, while that variable is reused.
+ * (Since you can only target it as a variable within the other term
+ * (so the triple pattern can match a triple term in the mapping head and vice versa).
+ * The variable cannot be used in any other position of the triple pattern/ mapping head though,
+ * since that would cause an incompatible range.
+ * -> triple terms need to be bounded last
  */
 export class ClusterSolver {
-  private groupToVars: Record<number, RDF.Variable[]> = {};
-  private groupToTerm: Record<number, BasicTerm | undefined> = {};
-  private varToGroup: Record<string, number | undefined> = {};
-  private cleanNumber = 1;
+  private groupToVars: Record<number, RangedVar[]>;
+  private groupToRange: Record<number, RangeSet>;
+  private groupToTerm: Record<number, BasicTerm | undefined>;
+  private varToGroup: Record<string, number | undefined>;
+  private cleanNumber: number;
 
-  public constructor() {}
+  public constructor() {
+    this.clear();
+  }
 
   public clear(): void {
     this.groupToVars = {};
+    this.groupToRange = {};
     this.groupToTerm = {};
     this.varToGroup = {};
     this.cleanNumber = 1;
   }
 
   /**
-   * 'from' var is now linked to 'to' var. Meaning They share a group.
+   * Register the range of the variable to the group it is contained in, if any.
    */
-  public register(from: BasicTerm, to: BasicTerm): void {
-    // When to terms, check if equal, either throw or return
+  public handleVarRange(variable: RangedVar): void {
+    const range = variable.range;
+    const group = this.varToGroup[variable.value];
+    if (range !== undefined && group !== undefined) {
+      const groupRange = this.groupToRange[group].disjunct(range);
+      this.groupToRange[group] = groupRange;
+      const groupTerm = this.groupToTerm[group];
+      if (groupTerm && !groupRange.has(groupTerm.termType)) {
+        throw new Error(`The range of the current group no longer matches the term type ${groupTerm.termType} of term: ${JSON.stringify(groupTerm.termType)}`);
+      }
+    }
+  }
+
+  /**
+   * 'from' var is now linked to 'to' var. Meaning They share a group.
+   *  They cannot both be quads.
+   */
+  public register(from: Term, to: BasicTerm): void {
+    // When two terms, check if equal, either throw or return
     if (!isVar(from) && !isVar(to)) {
       if (from.equals(to)) {
         return;
@@ -39,37 +79,49 @@ export class ClusterSolver {
     }
     // At least one is a var.
     if (isVar(from) && isVar(to)) {
+      // Two vars
       this.mergeVars(from, to);
+      this.handleVarRange(from);
+      this.handleVarRange(to);
     } else {
       const [ variable, term ] = isVar(from) ? [ from, to ] : [ <RDF.Variable> to, from ];
+      // Get group or make one
       let varGroup = this.varToGroup[variable.value];
       if (!varGroup) {
         varGroup = this.varToNewGroup(variable);
       }
+      this.handleVarRange(variable);
       this.registerTermToGroup(varGroup, term);
     }
   }
 
-  public varToNewGroup(term: RDF.Variable): number {
+  public varToNewGroup(term: RangedVar): number {
     const group = this.cleanNumber;
     this.cleanNumber++;
     this.groupToVars[group] = [ term ];
     this.groupToTerm[group] = undefined;
+    this.groupToRange[group] = new RangeSet(term.range ?? objectRange);
     this.varToGroup[term.value] = group;
     return group;
   }
 
-  public registerVarToGroup(group: number, ...vars: RDF.Variable[]): void {
+  public registerVarToGroup(group: number, ...vars: RangedVar[]): void {
     this.groupToVars[group].push(...vars);
     for (const variable of vars) {
       this.varToGroup[variable.value] = group;
+      this.handleVarRange(variable);
     }
   }
 
   public registerTermToGroup(group: number, term: BasicTerm): void {
     const curTerm = this.groupToTerm[group];
+    // TODO: validate in the case of triple term by also registering that some variables present might be the same.
     if (curTerm && !curTerm.equals(term)) {
       throw new Error(`Cannot match Term ${JSON.stringify(term)} with term ${JSON.stringify(term)}`);
+    }
+    const groupRange = this.groupToRange[group];
+    if (!groupRange.has(term.termType)) {
+      throw new Error(`Cannot assign Term ${JSON.stringify(term)} to a group with range [${[ ...groupRange.values() ].join(', ')}]`);
     }
     this.groupToTerm[group] = curTerm ?? term;
   }
@@ -83,6 +135,7 @@ export class ClusterSolver {
       }
       // Merge groups into the lowest number
       const [ newGroup, oldGroup ] = fromGroup < toGroup ? [ fromGroup, toGroup ] : [ toGroup, fromGroup ];
+      this.groupToRange[newGroup] = this.groupToRange[newGroup].disjunct(this.groupToRange[oldGroup]);
       // Merge term
       const oldTerm = this.groupToTerm[oldGroup];
       if (oldTerm) {
@@ -93,7 +146,7 @@ export class ClusterSolver {
       delete this.groupToVars[oldGroup];
       this.registerVarToGroup(newGroup, ...oldVars);
     } else if (!fromGroup && !toGroup) {
-      // Create new group for both
+      // Create new group in which we register both
       const newGroup = this.varToNewGroup(from);
       this.registerVarToGroup(newGroup, to);
     } else if (fromGroup) {

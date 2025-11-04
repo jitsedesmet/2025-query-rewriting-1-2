@@ -404,4 +404,15 @@ describe('dummy', () => {
     [ `CONSTRUCT WHERE { <ex://a> ?p ?o }`, `CONSTRUCT WHERE { <ex://b> <ex://c> <ex://c> }`, `CONSTRUCT WHERE { <ex://b> <ex://d> <ex://d> }` ],
     [ operationTransform, transformFilterFalse, nullifyJoinOverIncompatibleBounds, transformFilterFalse ],
   ));
+
+  it('does not emit infinite recursion', ({ expect }) => test(
+    expect,
+    `SELECT * { ?s ?p ?s }`,
+    `SELECT ?uq_p ?uq_s WHERE {
+  {
+    FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )
+  }
+}`,
+    [ `CONSTRUCT { ?s ?p <<( ?s ?x ?y )>> } WHERE { ?s ?p ?x , ?y . }` ],
+  ));
 });

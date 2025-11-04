@@ -31,7 +31,9 @@ export function parseQueryAndPrefixVars(
     { term: { variable: {
       transform: ast => astFactory.termVariable(
             `${prefix}${ast.value}`,
-            astFactory.sourceLocationNodeReplaceUnsafe(ast.loc),
+            astFactory.isSourceLocationNoMaterialize(ast.loc) ?
+              ast.loc :
+              astFactory.sourceLocationNodeReplaceUnsafe(ast.loc),
       ),
     }}},
   );

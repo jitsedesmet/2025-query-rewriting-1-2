@@ -19,6 +19,11 @@ export function queryTransform(
   return c.generator.generate(transformedAst);
 }
 
+/**
+ * Simple transformation that transforms each triple pattern in a BGP into a union of subselects.
+ * @param c
+ * @param input
+ */
 export function operationTransform(c: TransformContext, input: Alg.Operation): Alg.Operation {
   const transformed = algebraUtils.mapOperation<'unsafe', typeof input>(
     input,

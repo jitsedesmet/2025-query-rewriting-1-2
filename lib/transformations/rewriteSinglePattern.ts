@@ -1,11 +1,20 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra as Alg } from '@traqula/algebra-transformations-1-2';
+import { isVar, objectRange, predicateRange, subjectRange } from '../ClusterSolver.js';
 import type { TransformContext } from '../transformContext.js';
 
 function patternSPO(pattern: Alg.Pattern | RDF.BaseQuad): RDF.Term[] {
   return [ pattern.subject, pattern.predicate, pattern.object ];
 }
 
+/**
+ * Register the cluster between the current mapping and the triple term
+ * @param c
+ * @param mHVars
+ * @param tPVars
+ * @param head
+ * @param pattern
+ */
 function iterateMappingHead(
   c: TransformContext,
   mHVars: Record<string, RDF.Variable>,
@@ -13,9 +22,11 @@ function iterateMappingHead(
   head: Alg.Pattern | RDF.BaseQuad,
   pattern: Alg.Pattern | RDF.BaseQuad,
 ): void {
+  const varRangesInPos = [ subjectRange, predicateRange, objectRange ];
   const spoPattern = patternSPO(pattern);
   for (const [ index, headTerm ] of patternSPO(head).entries()) {
     const patternTerm = spoPattern[index];
+    const variablePosRange = varRangesInPos[index];
     if (headTerm.termType === 'Quad' && patternTerm.termType === 'Quad') {
       // Recursion in triple term
       iterateMappingHead(c, mHVars, tPVars, headTerm, patternTerm);
@@ -25,11 +36,13 @@ function iterateMappingHead(
           `The user query contain quad ${JSON.stringify(patternTerm)} and cannot be matched to mapping head ${JSON.stringify(headTerm)}`,
       );
     } else {
-      if (headTerm.termType === 'Variable') {
+      if (isVar(headTerm)) {
         mHVars[headTerm.value] = headTerm;
+        headTerm.range = variablePosRange;
       }
-      if (patternTerm.termType === 'Variable') {
+      if (isVar(patternTerm)) {
         tPVars[patternTerm.value] = patternTerm;
+        patternTerm.range = variablePosRange;
       }
       if (headTerm.termType !== 'DefaultGraph' && patternTerm.termType !== 'DefaultGraph') {
         c.clusterSolver.register(headTerm, patternTerm);

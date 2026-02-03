@@ -1,12 +1,12 @@
 {
   "compileOnSave": true,
   "compilerOptions": {
-    "composite": true,
     "target": "es2022",
     "lib": [
       "es2022",
       "dom"
     ],
+    "outDir": "dist/esm",
     "module": "NodeNext",
     "moduleResolution": "nodenext",
     "types": ["vitest/globals"],
@@ -24,17 +24,12 @@
     "esModuleInterop": true,
     "skipLibCheck": true
   },
-  "references": [
-    { "path": "../traqula/engines/generator-sparql-1-2" },
-    { "path": "../traqula/packages/rules-sparql-1-1" },
-    { "path": "../traqula/packages/rules-sparql-1-2" },
-    { "path": "../traqula/packages/core" }
-  ],
   "include": [
     "lib/**/*.ts",
     "test/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "dist/**"
   ]
 }

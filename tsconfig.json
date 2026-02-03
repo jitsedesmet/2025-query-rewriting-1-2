@@ -6,7 +6,6 @@
       "es2022",
       "dom"
     ],
-    "outDir": "dist/esm",
     "module": "NodeNext",
     "moduleResolution": "nodenext",
     "types": ["vitest/globals"],
@@ -17,6 +16,7 @@
     "declaration": true,
     "downlevelIteration": true,
     "inlineSources": true,
+    "outDir": "dist/esm",
     "preserveConstEnums": true,
     "removeComments": false,
     "sourceMap": true,

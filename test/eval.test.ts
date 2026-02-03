@@ -1,6 +1,6 @@
 import { QueryEngine } from '@comunica/query-sparql-file';
 import type * as RDF from '@rdfjs/types';
-import arrayifyStream from 'arrayify-stream';
+import * as arrayifyStreamNS from 'arrayify-stream';
 import { Store } from 'n3';
 import { DataFactory } from 'rdf-data-factory';
 import { describe, it } from 'vitest';
@@ -11,14 +11,16 @@ import { createTransformContext } from '../lib/transformContext.js';
 import { nonTripleTermConstruct, tripleTermConstruct } from './queries.js';
 import './matchers/toBeRdfIsomorphic.js';
 
+// Crazy workaround to support both CJS and ESM
+const arrayifyStream =
+  (<any> arrayifyStreamNS).default ?? arrayifyStreamNS;
+
 describe('evaluation tests', () => {
   const engine = new QueryEngine();
   const DF = new DataFactory();
 
   it('an empty eval text', async({ expect }) => {
     const query = 'CONSTRUCT WHERE { ?s ?p ?o }';
-    // eslint-disable-next-line ts/ban-ts-comment
-    // @ts-expect-error 2349
     const queryRes = arrayifyStream(
       await engine.queryQuads(query, { sources: [ './test/statics/data01.ttl' ]}),
     );
@@ -33,8 +35,6 @@ describe('evaluation tests', () => {
     sources: NonNullable<Parameters<typeof engine.queryQuads>[1]>['sources'],
     query = 'CONSTRUCT WHERE { ?s ?p ?o }',
   ): Promise<Store> {
-    // eslint-disable-next-line ts/ban-ts-comment
-    // @ts-expect-error 2349
     const queryRes: RDF.Quad[] = await arrayifyStream(
       await engine.queryQuads(query, { sources }),
     );

@@ -13,11 +13,4 @@ tsconfig.tsbuildinfo
 !.husky
 !.github
 
-lib/**/*.cjs
-lib/**/*.js
-lib/**/*.js.map
-lib/**/*.d.ts
-test/**/*.cjs
-test/**/*.js
-test/**/*.js.map
-test/**/*.d.ts
+dist

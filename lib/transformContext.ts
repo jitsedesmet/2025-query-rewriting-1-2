@@ -19,6 +19,9 @@ export interface TransformContext {
   mappers: Alg.Construct[];
 }
 
+/**
+ * Parse the query and change each variable by prefixing it with prefix
+ */
 export function parseQueryAndPrefixVars(
   { astTransformer, astFactory, parser }: Pick<TransformContext, 'parser' | 'astTransformer' | 'astFactory'>,
   query: string,
@@ -31,9 +34,7 @@ export function parseQueryAndPrefixVars(
     { term: { variable: {
       transform: ast => astFactory.termVariable(
             `${prefix}${ast.value}`,
-            astFactory.isSourceLocationNoMaterialize(ast.loc) ?
-              ast.loc :
-              astFactory.sourceLocationNodeReplaceUnsafe(ast.loc),
+            astFactory.gen(),
       ),
     }}},
   );

@@ -405,6 +405,38 @@ describe('dummy', () => {
     [ operationTransform, transformFilterFalse, nullifyJoinOverIncompatibleBounds, transformFilterFalse ],
   ));
 
+  it('algebra transformation on paths', ({ expect }) => test(
+    expect,
+    `SELECT * {
+    ?s1 <ex://a> ?o1 .
+    ?s2 <ex://a>/<ex://b> ?o2.
+    ?s3 ^<ex://a> ?o3 .
+    ?s4 <ex://a> | <ex://b> ?o4 .
+    ?s5 !<ex://a> ?o5 .
+    ?s6 <ex://a>? ?o6 .
+    ?s7 <ex://a>* ?o7 .
+    ?s8 <ex://a>+ ?o8 .
+    ?s9 !(^<ex://a>|<ex://b>) ?o9 .
+    
+    ?s10 <ex://a> | ^<ex://b> ?o10 .
+}`,
+    `SELECT ?uq_o1 ?uq_o10 ?uq_o2 ?uq_o3 ?uq_o4 ?uq_o5 ?uq_o6 ?uq_o7 ?uq_o8 ?uq_o9 ?uq_s1 ?uq_s10 ?uq_s2 ?uq_s3 ?uq_s4 ?uq_s5 ?uq_s6 ?uq_s7 ?uq_s8 ?uq_s9 WHERE {
+  ?uq_s1 <ex://a> ?uq_o1 .
+  ?uq_s2 <ex://a> ?var0 .
+  ?var0 <ex://b> ?uq_o2 .
+  ?uq_o3 <ex://a> ?uq_s3 .
+  ?uq_s4 (<ex://a>|<ex://b>) ?uq_o4 .
+  ?uq_s5 (!(<ex://a>)) ?uq_o5 .
+  ?uq_s6 (<ex://a>?) ?uq_o6 .
+  ?uq_s7 (<ex://a>*) ?uq_o7 .
+  ?uq_s8 (<ex://a>+) ?uq_o8 .
+  ?uq_s9 (!(<ex://b>|^<ex://a>)) ?uq_o9 .
+  ?uq_s10 (<ex://a>|(^<ex://b>)) ?uq_o10 .
+}`,
+    [],
+    [],
+  ));
+
   it('does not emit infinite recursion', ({ expect }) => test(
     expect,
     `SELECT * { ?s ?p ?s }`,

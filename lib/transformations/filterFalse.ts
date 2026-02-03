@@ -8,24 +8,37 @@ import { createFilterFalse, isFilterFalse, termFalse } from '../utils.js';
  */
 
 export function transformFilterFalse(c: TransformContext, op: Algebra.Operation): Algebra.Operation {
+  const absorbSingle = (x: Algebra.Single): Algebra.Single => absorbingSingle(c, x);
+  const transformSingle = { transform: absorbSingle };
   return algebraUtils.mapOperation<'unsafe', typeof op>(
     op,
     {
-      join: { transform: join => absorbJoinOnEmptyBindings(c, join) },
-      union: { transform: union => pruneUnionOfEmptyBindings(c, union) },
-      extend: { transform: extend => extendsEmptyBindingsDoesNotGiveBindings(c, extend) },
+      [Algebra.Types.JOIN]: { transform: join => absorbJoinOnEmptyBindings(c, join) },
+      [Algebra.Types.UNION]: { transform: union => pruneUnionOfEmptyBindings(c, union) },
+
+      [Algebra.Types.EXTEND]: transformSingle,
+      [Algebra.Types.FROM]: transformSingle,
+      [Algebra.Types.DISTINCT]: transformSingle,
+      [Algebra.Types.FILTER]: transformSingle,
+      [Algebra.Types.SERVICE]: transformSingle,
+      [Algebra.Types.REDUCED]: transformSingle,
+      [Algebra.Types.SLICE]: transformSingle,
+      [Algebra.Types.GRAPH]: transformSingle,
+      [Algebra.Types.ORDER_BY]: transformSingle,
+      // TODO: the projection of an empty query s the empty query (if not outer project)
+      // TODO: expression, filter, minus, leftjoin, group? of empty is empty
     },
   );
 }
 
-export function extendsEmptyBindingsDoesNotGiveBindings(
+export function absorbingSingle(
   c: TransformContext,
-  extend: Algebra.Extend,
-): Algebra.Extend | Algebra.Filter {
-  if (isFilterFalse(c, extend.input)) {
+  single: Algebra.Single,
+): Algebra.Single {
+  if (isFilterFalse(c, single.input)) {
     return createFilterFalse(c);
   }
-  return extend;
+  return single;
 }
 
 /**

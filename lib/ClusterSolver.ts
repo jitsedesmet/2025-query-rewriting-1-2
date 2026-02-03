@@ -13,8 +13,8 @@ export function isVar(term: RDF.Term): term is RangedVar {
   return term.termType === 'Variable';
 }
 
-export const subjectRange = new RangeSet([ 'BlankNode', 'NamedNode', 'Literal' ]);
-export const predicateRange = new RangeSet([ 'NamedNode', 'BlankNode' ]);
+export const subjectRange = new RangeSet([ 'BlankNode', 'NamedNode' ]);
+export const predicateRange = new RangeSet([ 'NamedNode' ]);
 export const objectRange = new RangeSet([ 'Quad', 'NamedNode', 'BlankNode', 'Literal' ]);
 
 /**
@@ -81,36 +81,26 @@ export class ClusterSolver {
     if (isVar(from) && isVar(to)) {
       // Two vars
       this.mergeVars(from, to);
-      this.handleVarRange(from);
-      this.handleVarRange(to);
     } else {
       const [ variable, term ] = isVar(from) ? [ from, to ] : [ <RDF.Variable> to, from ];
-      // Get group or make one
-      let varGroup = this.varToGroup[variable.value];
-      if (!varGroup) {
-        varGroup = this.varToNewGroup(variable);
-      }
-      this.handleVarRange(variable);
+      const varGroup = this.getGroup(variable);
       this.registerTermToGroup(varGroup, term);
     }
   }
 
-  public varToNewGroup(term: RangedVar): number {
-    const group = this.cleanNumber;
-    this.cleanNumber++;
-    this.groupToVars[group] = [ term ];
-    this.groupToTerm[group] = undefined;
-    this.groupToRange[group] = new RangeSet(term.range ?? objectRange);
-    this.varToGroup[term.value] = group;
-    return group;
-  }
-
-  public registerVarToGroup(group: number, ...vars: RangedVar[]): void {
-    this.groupToVars[group].push(...vars);
-    for (const variable of vars) {
-      this.varToGroup[variable.value] = group;
+  public getGroup(variable: RangedVar): number {
+    let group = this.varToGroup[variable.value];
+    if (group !== undefined) {
       this.handleVarRange(variable);
+      return group;
     }
+    group = this.cleanNumber;
+    this.cleanNumber++;
+    this.groupToVars[group] = [ variable ];
+    this.groupToTerm[group] = undefined;
+    this.groupToRange[group] = new RangeSet(variable.range ?? objectRange);
+    this.varToGroup[variable.value] = group;
+    return group;
   }
 
   public registerTermToGroup(group: number, term: BasicTerm): void {
@@ -126,33 +116,26 @@ export class ClusterSolver {
     this.groupToTerm[group] = curTerm ?? term;
   }
 
-  public mergeVars(from: RDF.Variable, to: RDF.Variable): void {
-    const fromGroup = this.varToGroup[from.value];
-    const toGroup = this.varToGroup[to.value];
-    if (fromGroup && toGroup) {
-      if (fromGroup === toGroup) {
-        return;
-      }
-      // Merge groups into the lowest number
-      const [ newGroup, oldGroup ] = fromGroup < toGroup ? [ fromGroup, toGroup ] : [ toGroup, fromGroup ];
-      this.groupToRange[newGroup] = this.groupToRange[newGroup].disjunct(this.groupToRange[oldGroup]);
-      // Merge term
-      const oldTerm = this.groupToTerm[oldGroup];
-      if (oldTerm) {
-        this.registerTermToGroup(newGroup, oldTerm);
-      }
-      // Merge vars:
-      const oldVars = this.groupToVars[oldGroup];
-      delete this.groupToVars[oldGroup];
-      this.registerVarToGroup(newGroup, ...oldVars);
-    } else if (!fromGroup && !toGroup) {
-      // Create new group in which we register both
-      const newGroup = this.varToNewGroup(from);
-      this.registerVarToGroup(newGroup, to);
-    } else if (fromGroup) {
-      this.registerVarToGroup(fromGroup, to);
-    } else {
-      this.registerVarToGroup(toGroup!, from);
+  public mergeVars(from: RangedVar, to: RangedVar): void {
+    const fromGroup = this.getGroup(from);
+    const toGroup = this.getGroup(to);
+    if (fromGroup === toGroup) {
+      return;
+    }
+    // Merge groups into the lowest number
+    const [ newGroup, oldGroup ] = fromGroup < toGroup ? [ fromGroup, toGroup ] : [ toGroup, fromGroup ];
+    this.groupToRange[newGroup] = this.groupToRange[newGroup].disjunct(this.groupToRange[oldGroup]);
+    // Merge term
+    const oldTerm = this.groupToTerm[oldGroup];
+    if (oldTerm) {
+      this.registerTermToGroup(newGroup, oldTerm);
+    }
+    // Merge vars:
+    const oldVars = this.groupToVars[oldGroup];
+    delete this.groupToVars[oldGroup];
+    this.groupToVars[newGroup].push(...oldVars);
+    for (const variable of oldVars) {
+      this.varToGroup[variable.value] = newGroup;
     }
   }
 

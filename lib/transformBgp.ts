@@ -5,6 +5,9 @@ import type { TransformContext } from './transformContext.js';
 import { parseQueryAndPrefixVars } from './transformContext.js';
 import { termFalse } from './utils.js';
 
+/**
+ * Transform an input query by executing the given transformations in order
+ */
 export function queryTransform(
   c: TransformContext,
   input: string,
@@ -20,7 +23,8 @@ export function queryTransform(
 }
 
 /**
- * Simple transformation that transforms each triple pattern in a BGP into a union of subselects.
+ * Simple transformation that transforms a BGPs into a union of joins each containing subselects.
+ * A BGP of `n` triple patterns and a context of `m` mappers results in a join of `n` unions each having `m` patterns.
  * @param c
  * @param input
  */
@@ -34,10 +38,16 @@ export function operationTransform(c: TransformContext, input: Alg.Operation): A
   return transformed;
 }
 
+/**
+ * Transforms a Bgp into union of joins containing subselects.
+ */
 export function bgpTransform(c: TransformContext, input: Alg.Bgp): Alg.Join {
   return c.AF.createJoin(input.patterns.map(pattern => mapPattern(c, pattern)), true);
 }
 
+/**
+ * Transform a single Triple Pattern into a Union of subselect of filterFalse in cas no mappers match
+ */
 export function mapPattern(c: TransformContext, pattern: Alg.Pattern): Alg.Union | Alg.Group {
   const mappedPatterns = c.mappers.map((mapper) => {
     try {

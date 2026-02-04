@@ -8,25 +8,41 @@ import { createFilterFalse, isFilterFalse, termFalse } from '../utils.js';
  */
 
 export function transformFilterFalse(c: TransformContext, op: Algebra.Operation): Algebra.Operation {
-  const absorbSingle = (x: Algebra.Single): Algebra.Single => absorbingSingle(c, x);
-  const transformSingle = { transform: absorbSingle };
+  const absorbSingle = { transform: (x: Algebra.Single): Algebra.Single => absorbingSingle(c, x) };
   return algebraUtils.mapOperation<'unsafe', typeof op>(
     op,
     {
       [Algebra.Types.JOIN]: { transform: join => absorbJoinOnEmptyBindings(c, join) },
       [Algebra.Types.UNION]: { transform: union => pruneUnionOfEmptyBindings(c, union) },
 
-      [Algebra.Types.EXTEND]: transformSingle,
-      [Algebra.Types.FROM]: transformSingle,
-      [Algebra.Types.DISTINCT]: transformSingle,
-      [Algebra.Types.FILTER]: transformSingle,
-      [Algebra.Types.SERVICE]: transformSingle,
-      [Algebra.Types.REDUCED]: transformSingle,
-      [Algebra.Types.SLICE]: transformSingle,
-      [Algebra.Types.GRAPH]: transformSingle,
-      [Algebra.Types.ORDER_BY]: transformSingle,
+      [Algebra.Types.EXTEND]: absorbSingle,
+      [Algebra.Types.FROM]: absorbSingle,
+      [Algebra.Types.DISTINCT]: absorbSingle,
+      [Algebra.Types.FILTER]: absorbSingle,
+      [Algebra.Types.SERVICE]: absorbSingle,
+      [Algebra.Types.REDUCED]: absorbSingle,
+      [Algebra.Types.SLICE]: absorbSingle,
+      [Algebra.Types.GRAPH]: absorbSingle,
+      [Algebra.Types.ORDER_BY]: absorbSingle,
+      [Algebra.Types.MINUS]: { transform: (minus) => {
+        const [ left, right ] = minus.input;
+        // If left FF - than it FF, if right -than it is just left
+        if (isFilterFalse(c, left) || isFilterFalse(c, right)) {
+          return left;
+        }
+        return minus;
+      } },
+      [Algebra.Types.LEFT_JOIN]: { transform: (leftJoin) => {
+        // https://www.w3.org/TR/sparql12-query/#defn_algLeftJoin
+        const [ left, right ] = leftJoin.input;
+        // If left FF - than it FF, if right FF - than it is just left
+        if (isFilterFalse(c, left) || isFilterFalse(c, right)) {
+          return left;
+        }
+        return leftJoin;
+      } },
       // TODO: the projection of an empty query s the empty query (if not outer project)
-      // TODO: expression, filter, minus, leftjoin, group? of empty is empty
+      // TODO: expression, minus, leftjoin, group? of empty is empty
     },
   );
 }

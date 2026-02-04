@@ -6,7 +6,7 @@ import { deleteVarExtensionsInPlace, directExtensions } from '../utils.js';
 /**
  * If the same variable is bound to the same term for all union entries,
  * the 'extend' can be removed for each input and can instead be performed on around the union.
- * Example: { { ... } BIND(<A> as ?x) } UNION { { ... } BIND(<B> as ?x) . } -> { {... } UNION { ... } BIND(<A> as ?x) }
+ * Example: { { ... } BIND(<A> as ?x) } UNION { { ... } BIND(<A> as ?x) . } -> { {... } UNION { ... } BIND(<A> as ?x) }
  * Better yet: across a join you can do the same thing but stronger.
  * Where a Join of a union that gives A|B and C -> empty result
  * @param c

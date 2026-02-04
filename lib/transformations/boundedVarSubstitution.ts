@@ -2,6 +2,11 @@ import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformContext } from '../transformContext.js';
 
+/**
+ * After a subselect, you know some vars will not be referenced anymore.
+ * When you know unreferenced variables are sure to be of some value,
+ * you can replace all occurrences of that variable by that value.
+ */
 export function substituteVarsThatArePreBoundToTerms<T extends Algebra.Operation>(c: TransformContext, op: T): T {
   return algebraUtils.mapOperation<'unsafe', typeof op>(
     op,

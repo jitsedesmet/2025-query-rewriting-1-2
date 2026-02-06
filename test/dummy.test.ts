@@ -22,6 +22,15 @@ import {
 describe('dummy', () => {
   const parser = new Parser();
 
+  function transformQuery(
+    userQuery: string,
+    mappers: string[],
+    transformations: ((c: TransformContext, op: Algebra.Operation) => Algebra.Operation)[] = [ operationTransform ],
+  ): string {
+    const transformerContext = createTransformContext(mappers);
+    return queryTransform(transformerContext, userQuery, transformations);
+  }
+
   function test(
     expect: typeof Expect,
     userQuery: string,
@@ -29,8 +38,7 @@ describe('dummy', () => {
     mappers: string[],
     transformations: ((c: TransformContext, op: Algebra.Operation) => Algebra.Operation)[] = [ operationTransform ],
   ): void {
-    const transformerContext = createTransformContext(mappers);
-    expect(queryTransform(transformerContext, userQuery, transformations).trim())
+    expect(transformQuery(userQuery, mappers, transformations).trim())
       .toEqual(expectedQuery.trim());
 
     const _expectedAst = parser.parse(expectedQuery);
@@ -56,34 +64,80 @@ describe('dummy', () => {
     [ operationTransform, substituteVarsThatArePreBoundToTerms, transformFilterFalse ],
   ));
 
-  it('spo with blank in mapping head', ({ expect }) => test(
-    expect,
-`SELECT * { ?s ?p ?o }`,
-`SELECT ?uq_o ?uq_p ?uq_s WHERE {
-  {
-    {
-      SELECT ?m0_s ?m0_p WHERE {
-        ?m0_s ?m0_p ?m0_o .
-      }
-    }
-    BIND( ?m0_s AS ?uq_s )
-    BIND( ?m0_p AS ?uq_p )
-    BIND( BNODE( "e_blank"^^<http://www.w3.org/2001/XMLSchema#string> ) AS ?uq_o )
-  }
-}`,
-[ `CONSTRUCT { ?s ?p _:blank } WHERE { ?s ?p ?o }` ],
-  ));
+  it('spo with blank in mapping head', ({ expect }) => {
+    // Cannot perform the following test:
+    // test(
+    //     expect,
+    //     // Say you have data: <s> <a> <o> . <s> <b> <o> .
+    //     // It would be mapped to: <s> <a> _:b1 . <s> <b> _:b2 .
+    //     // user query returns: ?s ?a ?b ?b2:
+    //     // <s> _:b1 _:b2 / . <s> / / _:b2
+    //     // While rewritten, making own bnodes returns ?s ?a ?b ?b2:
+    //     // <s> _:bx _:by / . <s> / / _:bz
+    // `SELECT * { { ?s <http://ex.org/a> ?a ; <http://ex.org/b> ?b } UNION { ?s <http://ex.org/b> ?b2 } }`,
+    // `SELECT ?uq_a ?uq_b ?uq_b2 ?uq_s WHERE {
+    //   {
+    //     {
+    //       {
+    //         SELECT ?m0_s WHERE {
+    //           {
+    //             BIND( <http://ex.org/a> AS ?m0_p )
+    //           }
+    //           ?m0_s ?m0_p ?m0_o .
+    //         }
+    //       }
+    //       BIND( ?m0_s AS ?uq_s )
+    //       BIND( BNODE( "e_blank"^^<http://www.w3.org/2001/XMLSchema#string> ) AS ?uq_a )
+    //     }
+    //     {
+    //       {
+    //         SELECT ?m0_s WHERE {
+    //           {
+    //             BIND( <http://ex.org/b> AS ?m0_p )
+    //           }
+    //           ?m0_s ?m0_p ?m0_o .
+    //         }
+    //       }
+    //       BIND( ?m0_s AS ?uq_s )
+    //       BIND( BNODE( "e_blank"^^<http://www.w3.org/2001/XMLSchema#string> ) AS ?uq_b )
+    //     }
+    //   }
+    //   UNION {
+    //     {
+    //       {
+    //         SELECT ?m0_s WHERE {
+    //           {
+    //             BIND( <http://ex.org/b> AS ?m0_p )
+    //           }
+    //           ?m0_s ?m0_p ?m0_o .
+    //         }
+    //       }
+    //       BIND( ?m0_s AS ?uq_s )
+    //       BIND( BNODE( "e_blank"^^<http://www.w3.org/2001/XMLSchema#string> ) AS ?uq_b2 )
+    //     }
+    //   }
+    // }`,
+    // [ `CONSTRUCT { ?s ?p _:blank } WHERE { ?s ?p ?o }` ],
+    //   )
+    expect(() => transformQuery(
+      'SELECT * { { ?s <http://ex.org/a> ?a ; <http://ex.org/b> ?b } UNION { ?s <http://ex.org/b> ?b2 } }',
+      [ `CONSTRUCT { ?s ?p _:blank } WHERE { ?s ?p ?o }` ],
+    )).toThrow();
+  });
 
-  it('sps with blank in mapping head', ({ expect }) => test(
-    expect,
-`SELECT * { ?s ?p ?s }`,
-`SELECT ?uq_p ?uq_s WHERE {
-  {
-    FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )
-  }
-}`,
-[ `CONSTRUCT { ?s ?p _:blank } WHERE { ?s ?p ?o }` ],
-  ));
+  it('sps with blank in mapping head', ({ expect }) => {
+    expect(() => transformQuery(
+      `SELECT * { ?s ?p ?s }`,
+      [ `CONSTRUCT { ?s ?p _:blank } WHERE { ?s ?p ?o }` ],
+    )).toThrow();
+  });
+
+  it('sps with bnode creation in mapping body', ({ expect }) => {
+    expect(() => transformQuery(
+      `SELECT * { ?s ?p ?s }`,
+      [ `CONSTRUCT { ?s ?p ?b } WHERE { ?s ?p ?o. EXTEND(bnode() as ?b) }` ],
+    )).toThrow();
+  });
 
   it('handle no matching query', ({ expect }) => test(
     expect,

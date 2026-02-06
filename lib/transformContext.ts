@@ -1,7 +1,6 @@
 import type * as RDF from '@rdfjs/types';
 import { toAlgebra } from '@traqula/algebra-sparql-1-2';
-import type { Algebra as Alg } from '@traqula/algebra-transformations-1-1';
-import { AlgebraFactory } from '@traqula/algebra-transformations-1-2';
+import { AlgebraFactory, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { Generator } from '@traqula/generator-sparql-1-2';
 import { Parser } from '@traqula/parser-sparql-1-2';
@@ -56,7 +55,7 @@ export function parseQueryAndPrefixVars(
       ),
     }}},
   );
-  return <Alg.Construct> toAlgebra(renamedAst, { quads: true, blankToVariable: true });
+  return <Algebra.Construct> toAlgebra(renamedAst, { quads: true, blankToVariable: true });
 }
 
 export function createTransformContext(mappers: readonly string[]): TransformContext {
@@ -74,7 +73,7 @@ export function createTransformContext(mappers: readonly string[]): TransformCon
   const algebraMappers = [ ...mappers.entries() ].map(([ index, mapper ]) => {
     const construct = <Algebra.Construct> parseQueryAndPrefixVars(partialContext, mapper, `m${index}_`);
     if (construct.template.length !== 1) {
-      throw new Error(`Mappers should have only a single mapping head, found:
+      throw new Error(`Mappers should have only a single mapping head, found ${construct.template.length}:
 ${JSON.stringify(construct.template, null, 2)}`);
     }
     const head = construct.template[0];
@@ -84,9 +83,27 @@ ${JSON.stringify(construct.template, null, 2)}`);
         usedVars[term.value] = term;
       }
     }
+    const body = AF.createProject(construct.input, Object.values(usedVars));
+    // Body should not call bnode function (you should not create blank nodes in mapping body)
+    algebraUtils.visitOperationSub(body, {}, {
+      expression: { operator: {
+        visitor: (operatorExpression) => {
+          if (operatorExpression.operator === 'bnode') {
+            throw new Error('BNODE function cannot be used in mapping body');
+          }
+        },
+      }},
+      // Mapping body may contain any path
+    });
+    // Fail if mapping head contains a BlankNode (only blank node templates are allowed!)
+    astTransformer.visitObject(head, (object) => {
+      if ('termType' in object && (<RDF.Term> object).termType === 'BlankNode') {
+        throw new Error('Mapping head may not contain blank nodes');
+      }
+    });
     return {
       head,
-      body: AF.createProject(construct.input, Object.values(usedVars)),
+      body,
     } satisfies Mapping;
   });
   return {

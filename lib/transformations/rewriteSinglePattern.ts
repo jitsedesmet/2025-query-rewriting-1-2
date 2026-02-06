@@ -1,7 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra as Alg } from '@traqula/algebra-transformations-1-2';
 import { isVar, objectRange, predicateRange, subjectRange } from '../ClusterSolver.js';
-import type { TransformContext } from '../transformContext.js';
+import type { Mapping, TransformContext } from '../transformContext.js';
 
 function patternSPO(pattern: Alg.Pattern | RDF.BaseQuad): RDF.Term[] {
   return [ pattern.subject, pattern.predicate, pattern.object ];
@@ -61,13 +61,13 @@ function iterateMappingHead(
 export function rewriteSinglePattern(
   c: TransformContext,
   pattern: Alg.Pattern,
-  mapper: Alg.Construct,
+  mapping: Mapping,
 ): Alg.Project | Alg.Extend {
   const { astTransformer, clusterSolver, AF, DF } = c;
   clusterSolver.clear();
   const mappingHeadVars: Record<string, RDF.Variable> = {};
   const triplePatternVars: Record<string, RDF.Variable> = {};
-  iterateMappingHead(c, mappingHeadVars, triplePatternVars, mapper.template[0], pattern);
+  iterateMappingHead(c, mappingHeadVars, triplePatternVars, mapping.head, pattern);
 
   // If triple pattern term is bound, and mapping head is var, put here.
   const mappingHeadBinds: Record<string, RDF.Term> = {};
@@ -125,7 +125,7 @@ export function rewriteSinglePattern(
   }
 
   // Now, after we know the binds, we can bind them. We bind triplePatternBinds after the subselect:
-  let inProject: Alg.Operation = mapper.input;
+  let inProject: Alg.Operation = mapping.body.input;
   // Translate vars in Project
   if (Object.keys(headVarsRemap).length > 0) {
     inProject = <Alg.Operation> astTransformer.transformObject(inProject, (something) => {

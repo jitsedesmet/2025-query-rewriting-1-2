@@ -1,7 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { Algebra as Alg } from '@traqula/algebra-transformations-1-2';
-import { objectRange, predicateRange, subjectRange } from '../ClusterSolver.js';
+import { objectRange, predicateRange, subjectRange } from '../RangeSet.js';
 import type { Mapping, MappingHead, TransformContext } from '../transformContext.js';
 import { isMappingHead, isRdfDefaultGraph, isRdfQuad, isRdfVar } from '../utils.js';
 

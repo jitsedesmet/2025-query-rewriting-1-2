@@ -1,18 +1,10 @@
 import type * as RDF from '@rdfjs/types';
+import type { RangedVar } from './RangeSet.js';
+import { objectRange, RangeSet } from './RangeSet.js';
 import { isRdfVar } from './utils.js';
 
-export class RangeSet extends Set<RDF.Term['termType']> {
-  public disjunct(other: RangeSet): RangeSet {
-    return new RangeSet([ ...other.values() ].filter(x => this.has(x)));
-  }
-}
-export type RangedVar = RDF.Variable & { range?: RangeSet };
 export type Term = Exclude<RDF.Term, RDF.Variable> | RangedVar;
 export type BasicTerm = Exclude<Term, RDF.Quad>;
-
-export const subjectRange = new RangeSet([ 'BlankNode', 'NamedNode' ]);
-export const predicateRange = new RangeSet([ 'NamedNode' ]);
-export const objectRange = new RangeSet([ 'Quad', 'NamedNode', 'BlankNode', 'Literal' ]);
 
 /**
  * Solver that can solve what variables are equal to each-other and potentially what terms they are equal to.

@@ -1,9 +1,15 @@
 import type * as RDF from '@rdfjs/types';
+import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { Algebra as Alg } from '@traqula/algebra-transformations-1-2';
-import { isVar, objectRange, predicateRange, subjectRange } from '../ClusterSolver.js';
-import type { Mapping, TransformContext } from '../transformContext.js';
+import { objectRange, predicateRange, subjectRange } from '../ClusterSolver.js';
+import type { Mapping, MappingHead, TransformContext } from '../transformContext.js';
+import { isMappingHead, isRdfDefaultGraph, isRdfQuad, isRdfVar } from '../utils.js';
 
-function patternSPO(pattern: Alg.Pattern | RDF.BaseQuad): RDF.Term[] {
+function headSPO(head: MappingHead | RDF.BaseQuad): (RDF.Term | MappingHead)[] {
+  return [ head.subject, head.predicate, head.object ];
+}
+
+function patternSPO(pattern: Algebra.Pattern | RDF.BaseQuad): RDF.Term[] {
   return [ pattern.subject, pattern.predicate, pattern.object ];
 }
 
@@ -19,33 +25,33 @@ function iterateMappingHead(
   c: TransformContext,
   mHVars: Record<string, RDF.Variable>,
   tPVars: Record<string, RDF.Variable>,
-  head: Alg.Pattern | RDF.BaseQuad,
+  head: MappingHead | Algebra.Pattern | RDF.BaseQuad,
   pattern: Alg.Pattern | RDF.BaseQuad,
 ): void {
   const varRangesInPos = [ subjectRange, predicateRange, objectRange ];
   const spoPattern = patternSPO(pattern);
-  for (const [ index, headTerm ] of patternSPO(head).entries()) {
+  for (const [ index, headTerm ] of headSPO(head).entries()) {
     const patternTerm = spoPattern[index];
     const variablePosRange = varRangesInPos[index];
-    if (headTerm.termType === 'Quad' && patternTerm.termType === 'Quad') {
+    if ((isRdfQuad(headTerm) || isMappingHead(headTerm)) && isRdfQuad(patternTerm)) {
       // Recursion in triple term
       iterateMappingHead(c, mHVars, tPVars, headTerm, patternTerm);
-    } else if (patternTerm.termType === 'Quad') {
+    } else if (isRdfQuad(patternTerm)) {
       // Shortcutting, pattern term is quad but head is not. - will not match IF mapping where is SPARQL 1.1.
       throw new Error(
           `The user query contain quad ${JSON.stringify(patternTerm)} and cannot be matched to mapping head ${JSON.stringify(headTerm)}`,
       );
     } else {
-      if (isVar(headTerm)) {
+      if (isRdfVar(headTerm)) {
         mHVars[headTerm.value] = headTerm;
         headTerm.range = variablePosRange;
       }
-      if (isVar(patternTerm)) {
+      if (isRdfVar(patternTerm)) {
         tPVars[patternTerm.value] = patternTerm;
         patternTerm.range = variablePosRange;
       }
-      if (headTerm.termType !== 'DefaultGraph' && patternTerm.termType !== 'DefaultGraph') {
-        c.clusterSolver.register(headTerm, patternTerm);
+      if (!isRdfDefaultGraph(headTerm) && !isRdfDefaultGraph(patternTerm)) {
+        c.clusterSolver.register(<RDF.Term> headTerm, patternTerm);
       }
     }
   }

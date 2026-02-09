@@ -1,4 +1,5 @@
 import type * as RDF from '@rdfjs/types';
+import { isRdfVar } from './utils.js';
 
 export class RangeSet extends Set<RDF.Term['termType']> {
   public disjunct(other: RangeSet): RangeSet {
@@ -8,10 +9,6 @@ export class RangeSet extends Set<RDF.Term['termType']> {
 export type RangedVar = RDF.Variable & { range?: RangeSet };
 export type Term = Exclude<RDF.Term, RDF.Variable> | RangedVar;
 export type BasicTerm = Exclude<Term, RDF.Quad>;
-
-export function isVar(term: RDF.Term): term is RangedVar {
-  return term.termType === 'Variable';
-}
 
 export const subjectRange = new RangeSet([ 'BlankNode', 'NamedNode' ]);
 export const predicateRange = new RangeSet([ 'NamedNode' ]);
@@ -71,18 +68,18 @@ export class ClusterSolver {
    */
   public register(from: Term, to: BasicTerm): void {
     // When two terms, check if equal, either throw or return
-    if (!isVar(from) && !isVar(to)) {
+    if (!isRdfVar(from) && !isRdfVar(to)) {
       if (from.equals(to)) {
         return;
       }
       throw new Error(`Cannot match Term ${JSON.stringify(from)} with term ${JSON.stringify(to)}`);
     }
     // At least one is a var.
-    if (isVar(from) && isVar(to)) {
+    if (isRdfVar(from) && isRdfVar(to)) {
       // Two vars
       this.mergeVars(from, to);
     } else {
-      const [ variable, term ] = isVar(from) ? [ from, to ] : [ <RDF.Variable> to, from ];
+      const [ variable, term ] = isRdfVar(from) ? [ from, to ] : [ <RDF.Variable> to, from ];
       const varGroup = this.getGroup(variable);
       this.registerTermToGroup(varGroup, term);
     }

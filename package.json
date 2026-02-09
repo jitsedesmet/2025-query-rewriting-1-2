@@ -49,6 +49,7 @@
   "dependencies": {
     "@traqula/algebra-sparql-1-2": "^1.0.2",
     "@traqula/algebra-transformations-1-2": "^1.0.2",
+    "@traqula/core": "^1.0.2",
     "@traqula/generator-sparql-1-2": "^1.0.2",
     "@traqula/parser-sparql-1-2": "^1.0.2",
     "@traqula/rules-sparql-1-2": "^1.0.2",

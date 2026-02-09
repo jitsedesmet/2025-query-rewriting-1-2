@@ -57,10 +57,10 @@ SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) (
     BIND( ?m0_o AS ?uq_name )
   }
   UNION {
-    FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )
+    FILTER ( FALSE )
   }
   {
-    FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )
+    FILTER ( FALSE )
   }
   UNION {
     SELECT ( "dummy"^^<http://www.w3.org/2001/XMLSchema#string> AS ?dummy ) WHERE {
@@ -152,10 +152,10 @@ SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) (
     BIND( ?m0_o AS ?uq_name )
   }
   UNION {
-    FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )
+    FILTER ( FALSE )
   }
   {
-    FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )
+    FILTER ( FALSE )
   }
   UNION {
     SELECT ( "dummy"^^<http://www.w3.org/2001/XMLSchema#string> AS ?dummy ) WHERE {

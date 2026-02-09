@@ -1,12 +1,15 @@
 import type * as RDF from '@rdfjs/types';
 import { toAlgebra } from '@traqula/algebra-sparql-1-2';
-import { AlgebraFactory, algebraUtils } from '@traqula/algebra-transformations-1-2';
+import { algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
-import { Generator } from '@traqula/generator-sparql-1-2';
+import type { Typed } from '@traqula/core';
+import type { Generator } from '@traqula/generator-sparql-1-2';
 import { Parser } from '@traqula/parser-sparql-1-2';
 import { AstFactory, AstTransformer } from '@traqula/rules-sparql-1-2';
 import { DataFactory } from 'rdf-data-factory';
+import { AlgebraTemplateFactory } from './AlgebraTemplateFactory.js';
 import { ClusterSolver } from './ClusterSolver.js';
+import { MyGenerator } from './generator/generator.js';
 import { isRdfTerm } from './utils.js';
 
 export type TemplateIri = RDF.NamedNode;
@@ -14,11 +17,12 @@ export type TemplateLiteral = RDF.Literal;
 export type TemplateBlank = RDF.BlankNode;
 export type Templates = TemplateIri | TemplateBlank | TemplateLiteral;
 
-export type MappingHead = Omit<Algebra.Pattern, 'subject' | 'predicate' | 'object' | 'graph'> & {
+export type MappingHead = Typed & {
+  type: 'mappingHead';
   subject: Algebra.Pattern['subject'] | Templates;
   predicate: Algebra.Pattern['predicate'] | Templates;
-  object: Algebra.Pattern['object'] | Templates;
-  graph: Algebra.Pattern['graph'] | Templates;
+  object: Algebra.Pattern['object'] | Templates | MappingHead;
+  graph?: Algebra.Pattern['graph'] | Templates;
 };
 
 export interface Mapping {
@@ -30,7 +34,7 @@ export interface TransformContext {
   parser: Parser;
   generator: Generator;
   astFactory: AstFactory;
-  AF: AlgebraFactory;
+  AF: AlgebraTemplateFactory;
   DF: DataFactory;
   astTransformer: AstTransformer;
   clusterSolver: ClusterSolver;
@@ -81,10 +85,14 @@ export function constructToMapper(
     throw new Error(`Mappers should have only a single mapping head, found ${construct.template.length}:
 ${JSON.stringify(construct.template, null, 2)}`);
   }
-  const head = construct.template[0];
+  const head: MappingHead = {
+    ...construct.template[0],
+    type: 'mappingHead',
+  };
+  // Get used vars to create the propper projection
   const usedVars: Record<string, RDF.Variable> = {};
   for (const term of [ head.subject, head.object, head.predicate, head.graph ]) {
-    if (term.termType === 'Variable') {
+    if (term && isRdfTerm(term) && term.termType === 'Variable') {
       usedVars[term.value] = term;
     }
   }
@@ -115,9 +123,9 @@ ${JSON.stringify(construct.template, null, 2)}`);
 export function createPartialContext(): Omit<TransformContext, 'mappers'> {
   return {
     parser: new Parser(),
-    generator: new Generator(),
+    generator: new MyGenerator(),
     astFactory: new AstFactory(),
-    AF: new AlgebraFactory(),
+    AF: new AlgebraTemplateFactory(),
     DF: new DataFactory(),
     astTransformer: new AstTransformer(),
     clusterSolver: new ClusterSolver(),

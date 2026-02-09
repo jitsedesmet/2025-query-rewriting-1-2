@@ -166,10 +166,10 @@ describe('dummy', () => {
     `SELECT * { ?s <ex://a> ?o }`,
     `SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) WHERE {
   {
-    FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )
+    FILTER ( FALSE )
   }
   UNION {
-    FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )
+    FILTER ( FALSE )
   }
 }`,
     [ `CONSTRUCT WHERE { ?s <ex://b> ?o }`, `CONSTRUCT WHERE { ?s <ex://c> ?o }` ],
@@ -179,7 +179,7 @@ describe('dummy', () => {
     expect,
     `SELECT * { ?s <ex://a> ?o }`,
     `SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) WHERE {
-  FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )
+  FILTER ( FALSE )
 }`,
     [ `CONSTRUCT WHERE { ?s <ex://b> ?o }`, `CONSTRUCT WHERE { ?s <ex://c> ?o }` ],
     [ operationTransform, substituteVarsThatArePreBoundToTerms, transformFilterFalse ],
@@ -518,7 +518,7 @@ describe('dummy', () => {
     `SELECT * { ?s ?p ?s }`,
     `SELECT ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) WHERE {
   {
-    FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )
+    FILTER ( FALSE )
   }
 }`,
     [ `CONSTRUCT { ?s ?p <<( ?s ?x ?y )>> } WHERE { ?s ?p ?x , ?y . }` ],
@@ -529,19 +529,50 @@ describe('dummy', () => {
     `SELECT * { ?s <ex://a> ?o }`,
     `SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) WHERE {
   {
-    FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )
+    FILTER ( FALSE )
   }
   UNION {
-    FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )
+    FILTER ( FALSE )
   }
 }`,
     // [ `CONSTRUCT WHERE { ?s <ex://b> ?o }`, `CONSTRUCT WHERE { ?s <ex://c> ?o }` ],
     [{
-      head: c.AF.createPattern(c.DF.variable('s'), c.DF.namedNode('ex://b'), c.DF.variable('o')),
+      head: c.AF.createMappingHead(c.DF.variable('s'), c.DF.namedNode('ex://b'), c.DF.variable('o')),
       body: <Algebra.Project> parseQuery(c, 'SELECT * { ?s  <ex://b> ?o }'),
     }, {
-      head: c.AF.createPattern(c.DF.variable('s'), c.DF.namedNode('ex://c'), c.DF.variable('o')),
+      head: c.AF.createMappingHead(c.DF.variable('s'), c.DF.namedNode('ex://c'), c.DF.variable('o')),
       body: <Algebra.Project> parseQuery(c, 'SELECT * { ?s  <ex://c> ?o }'),
+    }],
+  ));
+
+  it('templateIris', ({ expect }) => testMappers(
+    expect,
+    `SELECT * { ?s ?p <ex://a> }`,
+    `SELECT ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) WHERE {
+  {
+    FILTER ( FALSE )
+  }
+  UNION {
+    FILTER ( FALSE )
+  }
+  UNION {
+    FILTER ( FALSE )
+  }
+}`,
+    // [ `CONSTRUCT WHERE { ?s <ex://b> ?o }`, `CONSTRUCT WHERE { ?s <ex://c> ?o }` ],
+    [{
+      head: c.AF.createMappingHead(c.DF.variable('s'), c.DF.variable('p'), c.DF.namedNode('ex://b')),
+      body: <Algebra.Project> parseQuery(c, 'SELECT * { ?s  ?p <ex://b> }'),
+    }, {
+      head: c.AF.createMappingHead(c.DF.variable('s'), c.DF.variable('p'), c.DF.namedNode('ex://c')),
+      body: <Algebra.Project> parseQuery(c, 'SELECT * { ?s  ?p <ex://c> }'),
+    }, {
+      head: c.AF.createMappingHead(c.DF.variable('s'), c.DF.variable('p'), c.AF.createMappingHead(
+        c.DF.variable('s'),
+        c.DF.variable('p'),
+        c.DF.namedNode('ex://d'),
+      )),
+      body: <Algebra.Project> parseQuery(c, 'SELECT * { ?s  ?p <ex://c> }'),
     }],
   ));
 });

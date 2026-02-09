@@ -1,7 +1,9 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
+import type { Typed } from '@traqula/core';
 import { DataFactory } from 'rdf-data-factory';
-import type { TransformContext } from './transformContext.js';
+import type { RangedVar } from './ClusterSolver.js';
+import type { MappingHead, TransformContext } from './transformContext.js';
 
 export const DF = new DataFactory();
 
@@ -20,6 +22,28 @@ export function createFilterFalse(c: TransformContext, op?: Algebra.Operation): 
 
 export function isRdfTerm(obj: object): obj is RDF.Term {
   return 'termType' in obj && typeof obj.termType === 'string';
+}
+
+export function isRdfQuad(obj: object): obj is RDF.Quad {
+  return isRdfTerm(obj) && obj.termType === 'Quad';
+}
+
+export function isRdfVar(obj: object): obj is RangedVar {
+  return isRdfTerm(obj) && obj.termType === 'Variable';
+}
+
+export function isRdfDefaultGraph(obj: object): obj is RDF.DefaultGraph {
+  return isRdfTerm(obj) && obj.termType === 'DefaultGraph';
+}
+
+export function isTyped(obj: object): obj is Typed {
+  return 'type' in obj && typeof obj.type === 'string' && (
+    !('subType' in obj) || typeof obj.subType === 'string'
+  );
+}
+
+export function isMappingHead(obj: object): obj is MappingHead {
+  return isTyped(obj) && obj.type === 'mappingHead';
 }
 
 export function termIsStaticTerm(term: RDF.Term): boolean {

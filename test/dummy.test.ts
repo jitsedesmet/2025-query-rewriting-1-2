@@ -559,13 +559,24 @@ describe('dummy', () => {
   UNION {
     FILTER ( FALSE )
   }
+  UNION {
+    FILTER ( FALSE )
+  }
 }`,
-    // [ `CONSTRUCT WHERE { ?s <ex://b> ?o }`, `CONSTRUCT WHERE { ?s <ex://c> ?o }` ],
     [{
-      head: c.AF.createMappingHead(c.DF.variable('s'), c.DF.variable('p'), c.DF.namedNode('ex://b')),
+      head: c.AF.createMappingHead(c.DF.variable('s'), c.DF.variable('p'), c.AF.createTemplateIri(
+        [ 'ex://', c.DF.variable('s') ],
+      )),
       body: <Algebra.Project> parseQuery(c, 'SELECT * { ?s  ?p <ex://b> }'),
     }, {
-      head: c.AF.createMappingHead(c.DF.variable('s'), c.DF.variable('p'), c.DF.namedNode('ex://c')),
+      head: c.AF.createMappingHead(c.DF.variable('s'), c.DF.variable('p'), c.AF.createTemplateIri(
+        [ 'example://', c.DF.variable('s') ],
+      )),
+      body: <Algebra.Project> parseQuery(c, 'SELECT * { ?s  ?p <ex://c> }'),
+    }, {
+      head: c.AF.createMappingHead(c.DF.variable('s'), c.DF.variable('p'), c.AF.createTemplateIri(
+        [ c.DF.variable('s') ],
+      )),
       body: <Algebra.Project> parseQuery(c, 'SELECT * { ?s  ?p <ex://c> }'),
     }, {
       head: c.AF.createMappingHead(c.DF.variable('s'), c.DF.variable('p'), c.AF.createMappingHead(

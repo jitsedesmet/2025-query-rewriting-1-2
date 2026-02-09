@@ -1,9 +1,9 @@
 import { toAst } from '@traqula/algebra-sparql-1-2';
-import { Algebra as Alg, algebraUtils } from '@traqula/algebra-transformations-1-2';
-import { rewriteSinglePattern } from './transformations/rewriteSinglePattern.js';
+import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
+import { rewriteSinglePattern } from './transformations/index.js';
 import type { TransformContext } from './transformContext.js';
 import { prefixVarsInOperation, parseQuery } from './transformContext.js';
-import { termFalse } from './utils.js';
+import { createFilterFalse } from './utils.js';
 
 /**
  * Transform an input query by executing the given transformations in order
@@ -11,7 +11,7 @@ import { termFalse } from './utils.js';
 export function queryTransform(
   c: TransformContext,
   input: string,
-  transformations: ((c: TransformContext, op: Alg.Operation) => Alg.Operation)[],
+  transformations: ((c: TransformContext, op: Algebra.Operation) => Algebra.Operation)[],
 ): string {
   const algebra = parseQuery(c, input);
   let transformedAlgebra = algebra;
@@ -45,10 +45,10 @@ export function queryTransform(
  * @param c
  * @param input
  */
-export function operationTransform(c: TransformContext, input: Alg.Operation): Alg.Operation {
+export function operationTransform(c: TransformContext, input: Algebra.Operation): Algebra.Operation {
   const transformed = algebraUtils.mapOperation<'unsafe', typeof input>(
     input,
-    { [Alg.Types.BGP]: {
+    { [Algebra.Types.BGP]: {
       transform: input => bgpTransform(c, input),
     }},
   );
@@ -58,23 +58,20 @@ export function operationTransform(c: TransformContext, input: Alg.Operation): A
 /**
  * Transforms a Bgp into union of joins containing subselects.
  */
-export function bgpTransform(c: TransformContext, input: Alg.Bgp): Alg.Join {
+export function bgpTransform(c: TransformContext, input: Algebra.Bgp): Algebra.Join {
   return c.AF.createJoin(input.patterns.map(pattern => mapPattern(c, pattern)), true);
 }
 
 /**
  * Transform a single Triple Pattern into a Union of subselect of filterFalse in cas no mappers match
  */
-export function mapPattern(c: TransformContext, pattern: Alg.Pattern): Alg.Union | Alg.Group {
+export function mapPattern(c: TransformContext, pattern: Algebra.Pattern): Algebra.Union | Algebra.Group {
   const mappedPatterns = c.mappers.map((mapper) => {
     try {
       return rewriteSinglePattern(c, pattern, mapper);
     } catch {
       // Console.error(e);
-      return c.AF.createFilter(
-        c.AF.createBgp([]),
-        c.AF.createTermExpression(termFalse),
-      );
+      return createFilterFalse(c);
     }
   });
   return c.AF.createUnion(mappedPatterns, true);

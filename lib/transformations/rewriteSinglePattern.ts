@@ -3,10 +3,10 @@ import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { Algebra as Alg } from '@traqula/algebra-transformations-1-2';
 import { objectRange, predicateRange, subjectRange } from '../RangeSet.js';
 import type { TransformContext } from '../transformContext.js';
-import type { Mapping, MappingHead } from '../types.js';
+import type { Mapping, MappingHead, Template } from '../types.js';
 import { isMappingHead, isRdfDefaultGraph, isRdfQuad, isRdfVar } from '../utils.js';
 
-function headSPO(head: MappingHead | RDF.BaseQuad): (RDF.Term | MappingHead)[] {
+function headSPO(head: MappingHead | RDF.BaseQuad): (RDF.Term | MappingHead | Template)[] {
   return [ head.subject, head.predicate, head.object ];
 }
 
@@ -15,12 +15,13 @@ function patternSPO(pattern: Algebra.Pattern | RDF.BaseQuad): RDF.Term[] {
 }
 
 /**
- * Register the cluster between the current mapping and the triple term
- * @param c
- * @param mHVars
- * @param tPVars
- * @param head
- * @param pattern
+ * Register the cluster between the current mapping and the triple pattern.
+ * Function allows us to recuse over Triple Terms or nested Mapping Heads.
+ * @param c transformation context
+ * @param mHVars set of variables in the mapping head
+ * @param tPVars set of variables in the triple pattern
+ * @param head the mapping head to iterate
+ * @param pattern the triple pattern to iterate
  */
 function iterateMappingHead(
   c: TransformContext,
@@ -29,7 +30,8 @@ function iterateMappingHead(
   head: MappingHead | Algebra.Pattern | RDF.BaseQuad,
   pattern: Alg.Pattern | RDF.BaseQuad,
 ): void {
-  const varRangesInPos = [ subjectRange, predicateRange, objectRange ];
+  // Static array that allows us to access the range using the position index.
+  const varRangesInPos = <const> [ subjectRange, predicateRange, objectRange ];
   const spoPattern = patternSPO(pattern);
   for (const [ index, headTerm ] of headSPO(head).entries()) {
     const patternTerm = spoPattern[index];
@@ -38,11 +40,13 @@ function iterateMappingHead(
       // Recursion in triple term
       iterateMappingHead(c, mHVars, tPVars, headTerm, patternTerm);
     } else if (isRdfQuad(patternTerm)) {
-      // Shortcutting, pattern term is quad but head is not. - will not match IF mapping where is SPARQL 1.1.
+      // UQ looks for tripleTerm but MappingHead does not provide:
+      // TODO: Shortcutting, pattern term is quad but head is not. - will not match IF mapping where is SPARQL 1.1.
       throw new Error(
           `The user query contain quad ${JSON.stringify(patternTerm)} and cannot be matched to mapping head ${JSON.stringify(headTerm)}`,
       );
     } else {
+      // Register var and range it according to position (metadata for cluster algo). Done for triple pattern and head
       if (isRdfVar(headTerm)) {
         mHVars[headTerm.value] = headTerm;
         headTerm.range = variablePosRange;
@@ -51,7 +55,9 @@ function iterateMappingHead(
         tPVars[patternTerm.value] = patternTerm;
         patternTerm.range = variablePosRange;
       }
+      // Register the static terms to the solver.
       if (!isRdfDefaultGraph(headTerm) && !isRdfDefaultGraph(patternTerm)) {
+        // Todo: where prefixes can be verified:
         c.clusterSolver.register(<RDF.Term> headTerm, patternTerm);
       }
     }
@@ -72,32 +78,38 @@ export function rewriteSinglePattern(
 ): Alg.Project | Alg.Extend {
   const { astTransformer, clusterSolver, AF, DF } = c;
   clusterSolver.clear();
+  // Set of variables in the mapping head
   const mappingHeadVars: Record<string, RDF.Variable> = {};
+  // Set of variables in the triple pattern
   const triplePatternVars: Record<string, RDF.Variable> = {};
   iterateMappingHead(c, mappingHeadVars, triplePatternVars, mapping.head, pattern);
 
-  // If triple pattern term is bound, and mapping head is var, put here.
+  // If UQ triple pattern term is bound, and mapping head is var, put here - (starting Binds of subselect)
   const mappingHeadBinds: Record<string, RDF.Term> = {};
+  // In case multiple headvars are equal to each-other, map them to their unifying replacement var.
   const headVarsRemap: Record<string, RDF.Variable> = {};
-  // If the triple pattern term is a var, and mapping head is not, or is - put in here.
+  // A map between what each uqVar now equals. Adds bind after the subselect
   const triplePatternBinds: Record<string, RDF.Term> = {};
   clusterSolver.sortClusters();
-  for (const variable of Object.values(mappingHeadVars)) {
-    if (headVarsRemap[variable.value]) {
+  for (const headVar of Object.values(mappingHeadVars)) {
+    // If we know this headVar is equal to something else, it means it has been handled. - it's equal to some other var.
+    if (headVarsRemap[headVar.value]) {
       continue;
     }
-    const cluster = clusterSolver.getCluster(variable);
+    // The cluster for this mapping head.
+    const cluster = clusterSolver.getCluster(headVar);
     if (cluster.term) {
       if (cluster.term.termType === 'BlankNode') {
+        // TODO: when does this happen?
         throw new Error('mapping variable being bound to a blank node will result in empty result');
       }
-      mappingHeadBinds[variable.value] = cluster.term;
+      mappingHeadBinds[headVar.value] = cluster.term;
     } else {
       // If your cluster is not bound to a term, and boundlist contains other mappingHead Variables,
       //  you need to create a new variable for the matching mappingHead vars since they are the same.
       //  Since any group links to each-other, the first such match is enough to find all equal vars.
       //  All future vars in the group can be ignored.
-      //  Furthermore it is essential to capture the new variable in the triplePatternBinds
+      //  Furthermore, it is essential to capture the new variable in the triplePatternBinds
       // Note that Head does not bind to var,
       // if a var in the head is equal to a var in the pattern, we handle it on the pattern
       const otherMappingVars = cluster.vars.filter(x => x.value.startsWith('m'));
@@ -108,32 +120,33 @@ export function rewriteSinglePattern(
           'r',
           varNamespacePrefix,
           '_',
-          [ variable, ...otherMappingVars ].map(x => x.value.slice(varNamespacePrefix.length + 1)).join('_AND_'),
+          [ headVar, ...otherMappingVars ].map(x => x.value.slice(varNamespacePrefix.length + 1)).join('_AND_'),
         ].join('');
         const newVar = DF.variable(newVarName);
-        headVarsRemap[variable.value] = newVar;
+        headVarsRemap[headVar.value] = newVar;
         for (const variable of otherMappingVars) {
           headVarsRemap[variable.value] = newVar;
         }
       }
     }
   }
-  for (const variable of Object.values(triplePatternVars)) {
-    const cluster = clusterSolver.getCluster(variable);
+  for (const tpVariable of Object.values(triplePatternVars)) {
+    const cluster = clusterSolver.getCluster(tpVariable);
     if (cluster.term) {
-      triplePatternBinds[variable.value] = cluster.term;
+      triplePatternBinds[tpVariable.value] = cluster.term;
     } else {
       let boundTo = cluster.vars[0];
       if (headVarsRemap[boundTo.value]) {
         boundTo = headVarsRemap[boundTo.value];
       }
-      triplePatternBinds[variable.value] = boundTo;
+      triplePatternBinds[tpVariable.value] = boundTo;
     }
   }
 
-  // Now, after we know the binds, we can bind them. We bind triplePatternBinds after the subselect:
+  // Construct the contents of our subselect
   let inProject: Alg.Operation = mapping.body.input;
-  // Translate vars in Project
+
+  // Replace the vars in the body that are now equal to each-other
   if (Object.keys(headVarsRemap).length > 0) {
     inProject = <Alg.Operation> astTransformer.transformObject(inProject, (something) => {
       if ('termType' in something && 'value' in something && something.termType === 'Variable' &&
@@ -143,6 +156,9 @@ export function rewriteSinglePattern(
       return something;
     });
   }
+
+  // For all statically bound mappingHead vars, register the terms they are equal too.
+  // (add extend at start of subselect)
   let mappingHeadExtensions: Alg.Extend | Alg.Bgp = AF.createBgp([]);
   for (const [ variable, expr ] of Object.entries(mappingHeadBinds)) {
     mappingHeadExtensions = AF.createExtend(
@@ -152,20 +168,22 @@ export function rewriteSinglePattern(
     );
   }
   if (mappingHeadExtensions.type === Alg.Types.EXTEND) {
+    // Change the projection only when needed.
     inProject = AF.createJoin([ mappingHeadExtensions, inProject ]);
   }
 
+  // All variables required from subselect
   const variablesToSelect: RDF.Variable[] = [];
   function registerVars(cur: RDF.Term): void {
-    if (cur.termType === 'Variable') {
+    if (isRdfVar(cur)) {
       variablesToSelect.push(cur);
-    }
-    if (cur.termType === 'Quad') {
+    } else if (isRdfQuad(cur)) {
       registerVars(cur.subject);
       registerVars(cur.predicate);
       registerVars(cur.object);
     }
   }
+  // We require all vars required for the binds after the subselect.
   for (const var_ of Object.values(triplePatternBinds)) {
     registerVars(var_);
   }
@@ -184,6 +202,7 @@ export function rewriteSinglePattern(
   const subQuery = AF.createProject(inProject, variablesToSelect);
 
   let result: Alg.Project | Alg.Extend = subQuery;
+  // Finally add the binds after the subselect
   for (const [ variable, expr ] of Object.entries(triplePatternBinds)) {
     const termExpression: Alg.TermExpression | Alg.OperatorExpression = expr.termType === 'BlankNode' ?
       AF.createOperatorExpression('BNODE', [ AF.createTermExpression(DF.literal(expr.value)) ]) :

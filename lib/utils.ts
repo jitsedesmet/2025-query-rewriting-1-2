@@ -91,3 +91,20 @@ export function deleteVarExtensionsInPlace(
   };
   return pruneExtensions(op);
 }
+
+/**
+ * Concat string following each other in the array
+ * @param arr
+ */
+export function optimizeTemplateArray<T>(arr: T[]): (T | string)[] {
+  const optimizedTemplate: (T | string)[] = [];
+  for (const val of arr) {
+    if (typeof val === 'string' && typeof optimizedTemplate.at(-1) === 'string') {
+      const prev = <string> optimizedTemplate.pop();
+      optimizedTemplate.push(prev + val);
+    } else {
+      optimizedTemplate.push(val);
+    }
+  }
+  return optimizedTemplate;
+}

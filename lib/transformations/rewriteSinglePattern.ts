@@ -2,7 +2,8 @@ import type * as RDF from '@rdfjs/types';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { Algebra as Alg } from '@traqula/algebra-transformations-1-2';
 import { objectRange, predicateRange, subjectRange } from '../RangeSet.js';
-import type { Mapping, MappingHead, TransformContext } from '../transformContext.js';
+import type { TransformContext } from '../transformContext.js';
+import type { Mapping, MappingHead } from '../types.js';
 import { isMappingHead, isRdfDefaultGraph, isRdfQuad, isRdfVar } from '../utils.js';
 
 function headSPO(head: MappingHead | RDF.BaseQuad): (RDF.Term | MappingHead)[] {

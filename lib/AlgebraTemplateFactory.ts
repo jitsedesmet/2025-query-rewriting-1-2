@@ -1,5 +1,6 @@
 import { AlgebraFactory } from '@traqula/algebra-transformations-1-2';
-import type { MappingHead } from './transformContext.js';
+
+import type { MappingHead } from './types.js';
 
 export class AlgebraTemplateFactory extends AlgebraFactory {
   public createMappingHead(

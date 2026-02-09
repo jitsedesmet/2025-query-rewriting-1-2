@@ -6,8 +6,9 @@ import { transformFilterFalse } from '../lib/transformations/filterFalse.js';
 import { nullifyJoinOverIncompatibleBounds } from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
 import { pushUpBoundedFromUnion } from '../lib/transformations/pushUpBoundedFromUnion.js';
 import { operationTransform, queryTransform } from '../lib/transformBgp.js';
-import type { Mapping, TransformContext } from '../lib/transformContext.js';
+import type { TransformContext } from '../lib/transformContext.js';
 import { parseQuery, createPartialContext, transformContextFromConstructs } from '../lib/transformContext.js';
+import type { Mapping } from '../lib/types.js';
 import {
   expectedQuery,
   expectedQueryOptimizedBounds,

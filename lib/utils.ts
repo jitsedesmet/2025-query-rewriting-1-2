@@ -3,7 +3,8 @@ import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { Typed } from '@traqula/core';
 import { DataFactory } from 'rdf-data-factory';
 import type { RangedVar } from './RangeSet.js';
-import type { MappingHead, TransformContext } from './transformContext.js';
+import type { TransformContext } from './transformContext.js';
+import type { MappingHead } from './types.js';
 
 export const DF = new DataFactory();
 

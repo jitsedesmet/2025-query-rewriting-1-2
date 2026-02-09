@@ -1,8 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import { toAlgebra } from '@traqula/algebra-sparql-1-2';
-import { algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
-import type { Typed } from '@traqula/core';
+import { algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { Generator } from '@traqula/generator-sparql-1-2';
 import { Parser } from '@traqula/parser-sparql-1-2';
 import { AstFactory, AstTransformer } from '@traqula/rules-sparql-1-2';
@@ -10,25 +9,8 @@ import { DataFactory } from 'rdf-data-factory';
 import { AlgebraTemplateFactory } from './AlgebraTemplateFactory.js';
 import { ClusterSolver } from './ClusterSolver.js';
 import { MyGenerator } from './generator/generator.js';
+import type { Mapping, MappingHead } from './types.js';
 import { isRdfTerm } from './utils.js';
-
-export type TemplateIri = RDF.NamedNode;
-export type TemplateLiteral = RDF.Literal;
-export type TemplateBlank = RDF.BlankNode;
-export type Templates = TemplateIri | TemplateBlank | TemplateLiteral;
-
-export type MappingHead = Typed & {
-  type: 'mappingHead';
-  subject: Algebra.Pattern['subject'] | Templates;
-  predicate: Algebra.Pattern['predicate'] | Templates;
-  object: Algebra.Pattern['object'] | Templates | MappingHead;
-  graph?: Algebra.Pattern['graph'] | Templates;
-};
-
-export interface Mapping {
-  head: MappingHead;
-  body: Algebra.Project;
-}
 
 export interface TransformContext {
   parser: Parser;

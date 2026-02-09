@@ -164,7 +164,7 @@ describe('dummy', () => {
   it('handle no matching query', ({ expect }) => testConstructMappers(
     expect,
     `SELECT * { ?s <ex://a> ?o }`,
-    `SELECT ?uq_o ?uq_s WHERE {
+    `SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) WHERE {
   {
     FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )
   }
@@ -178,7 +178,7 @@ describe('dummy', () => {
   it('handle no matching query & optimizeBinds & optimizeEmptyResultSets', ({ expect }) => testConstructMappers(
     expect,
     `SELECT * { ?s <ex://a> ?o }`,
-    `SELECT ?uq_o ?uq_s WHERE {
+    `SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) WHERE {
   FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )
 }`,
     [ `CONSTRUCT WHERE { ?s <ex://b> ?o }`, `CONSTRUCT WHERE { ?s <ex://c> ?o }` ],
@@ -188,7 +188,7 @@ describe('dummy', () => {
   it('pushUpBinds', ({ expect }) => testConstructMappers(
     expect,
     `SELECT * { ?s ?p ?o }`,
-    `SELECT ?uq_o ?uq_p ?uq_s WHERE {
+    `SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) WHERE {
   {
     {
       SELECT ?m0_s ?m0_o WHERE {
@@ -216,7 +216,7 @@ describe('dummy', () => {
   it('no join optimization', ({ expect }) => testConstructMappers(
     expect,
     `SELECT * { ?s ?p ?o . <ex://a> ?p ?o }`,
-    `SELECT ?uq_o ?uq_p ?uq_s WHERE {
+    `SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) WHERE {
   {
     {
       SELECT ?m0_o WHERE {
@@ -254,7 +254,7 @@ describe('dummy', () => {
   it('join optimization', ({ expect }) => testConstructMappers(
     expect,
     `SELECT * { ?s ?p ?o . <ex://a> ?p ?o }`,
-    `SELECT ?uq_o ?uq_p ?uq_s WHERE {
+    `SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) WHERE {
   {
     {
       SELECT ?m0_o WHERE {
@@ -282,7 +282,7 @@ describe('dummy', () => {
   it('join optimization 1', ({ expect }) => testConstructMappers(
     expect,
     `SELECT * { ?s ?p ?o . <ex://a> ?p ?o }`,
-    `SELECT ?uq_o ?uq_p ?uq_s WHERE {
+    `SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) WHERE {
   {
     {
       SELECT ?m0_o WHERE {
@@ -329,7 +329,7 @@ describe('dummy', () => {
   it('nullifyJoinOverIncompatibleBounds - adding simple filter', ({ expect }) => testConstructMappers(
     expect,
     `SELECT * { <ex://a> ?p ?o . <ex://b> ?p ?o . }`,
-    `SELECT ?uq_o ?uq_p WHERE {
+    `SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) WHERE {
   {
     {
       SELECT ?m0_p ?m0_o WHERE {
@@ -364,7 +364,7 @@ describe('dummy', () => {
   it('nullifyJoinOverIncompatibleBounds - adding simple filter and optimizing', ({ expect }) => testConstructMappers(
     expect,
     `SELECT * { <ex://a> ?p ?o . <ex://b> ?p ?o . }`,
-    `SELECT ?uq_o ?uq_p WHERE {
+    `SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) WHERE {
   {
     {
       SELECT ?m0_p ?m0_o WHERE {
@@ -400,7 +400,7 @@ describe('dummy', () => {
   it('nullifyJoinOverIncompatibleBounds - adding || filter', ({ expect }) => testConstructMappers(
     expect,
     `SELECT * { <ex://a> ?p ?o . <ex://b> ?p ?o . }`,
-    `SELECT ?uq_o ?uq_p WHERE {
+    `SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) WHERE {
   {
     {
       SELECT ?m0_p ?m0_o WHERE {
@@ -440,7 +440,7 @@ describe('dummy', () => {
   it('nullifyJoinOverIncompatibleBounds - adding || filter on 2 vars', ({ expect }) => testConstructMappers(
     expect,
     `SELECT * { <ex://a> ?p ?o . <ex://b> ?p ?o . }`,
-    `SELECT ?uq_o ?uq_p WHERE {
+    `SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) WHERE {
   {
     {
       SELECT ?m0_p ?m0_o WHERE {
@@ -496,7 +496,7 @@ describe('dummy', () => {
     
     ?s10 <ex://a> | ^<ex://b> ?o10 .
 }`,
-    `SELECT ?uq_o1 ?uq_o10 ?uq_o2 ?uq_o3 ?uq_o4 ?uq_o5 ?uq_o6 ?uq_o7 ?uq_o8 ?uq_o9 ?uq_s1 ?uq_s10 ?uq_s2 ?uq_s3 ?uq_s4 ?uq_s5 ?uq_s6 ?uq_s7 ?uq_s8 ?uq_s9 WHERE {
+    `SELECT ( ?uq_o1 AS ?o1 ) ( ?uq_o10 AS ?o10 ) ( ?uq_o2 AS ?o2 ) ( ?uq_o3 AS ?o3 ) ( ?uq_o4 AS ?o4 ) ( ?uq_o5 AS ?o5 ) ( ?uq_o6 AS ?o6 ) ( ?uq_o7 AS ?o7 ) ( ?uq_o8 AS ?o8 ) ( ?uq_o9 AS ?o9 ) ( ?uq_s1 AS ?s1 ) ( ?uq_s10 AS ?s10 ) ( ?uq_s2 AS ?s2 ) ( ?uq_s3 AS ?s3 ) ( ?uq_s4 AS ?s4 ) ( ?uq_s5 AS ?s5 ) ( ?uq_s6 AS ?s6 ) ( ?uq_s7 AS ?s7 ) ( ?uq_s8 AS ?s8 ) ( ?uq_s9 AS ?s9 ) WHERE {
   ?uq_s1 <ex://a> ?uq_o1 .
   ?uq_s2 <ex://a> ?uq_var0 .
   ?uq_var0 <ex://b> ?uq_o2 .
@@ -516,7 +516,7 @@ describe('dummy', () => {
   it('does not emit infinite recursion', ({ expect }) => testConstructMappers(
     expect,
     `SELECT * { ?s ?p ?s }`,
-    `SELECT ?uq_p ?uq_s WHERE {
+    `SELECT ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) WHERE {
   {
     FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )
   }
@@ -527,7 +527,7 @@ describe('dummy', () => {
   it('works on simple transforms using mappers', ({ expect }) => testMappers(
     expect,
     `SELECT * { ?s <ex://a> ?o }`,
-    `SELECT ?uq_o ?uq_s WHERE {
+    `SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) WHERE {
   {
     FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )
   }

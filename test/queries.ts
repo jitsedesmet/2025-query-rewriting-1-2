@@ -38,7 +38,7 @@ SELECT * WHERE {
 }`;
 
 export const expectedQuery = `
-SELECT ?uq_name ?uq_o ?uq_o1 ?uq_p ?uq_s ?uq_s1 WHERE {
+SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) ( ?uq_s1 AS ?s1 ) WHERE {
   {
     {
       SELECT ?m0_o WHERE {
@@ -138,7 +138,7 @@ SELECT ?uq_name ?uq_o ?uq_o1 ?uq_p ?uq_s ?uq_s1 WHERE {
 }`;
 
 export const expectedQueryOptimizedBounds = `
-SELECT ?uq_name ?uq_o ?uq_o1 ?uq_p ?uq_s ?uq_s1 WHERE {
+SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) ( ?uq_s1 AS ?s1 ) WHERE {
   {
     {
       SELECT ?m0_o WHERE {
@@ -225,7 +225,7 @@ SELECT ?uq_name ?uq_o ?uq_o1 ?uq_p ?uq_s ?uq_s1 WHERE {
 }`;
 
 export const expectedQueryOptimizedBoundsAndEmptyRes = `
-SELECT ?uq_name ?uq_o ?uq_o1 ?uq_p ?uq_s ?uq_s1 WHERE {
+SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) ( ?uq_s1 AS ?s1 ) WHERE {
   {
     {
       SELECT ?m0_o WHERE {

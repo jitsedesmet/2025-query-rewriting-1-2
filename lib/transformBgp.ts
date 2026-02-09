@@ -13,11 +13,28 @@ export function queryTransform(
   input: string,
   transformations: ((c: TransformContext, op: Alg.Operation) => Alg.Operation)[],
 ): string {
-  const inputAlgebra = prefixVarsInOperation(c, parseQuery(c, input), 'uq_');
-  let transformedAlgebra = inputAlgebra;
+  const algebra = parseQuery(c, input);
+  let transformedAlgebra = algebra;
+  if (algebra.type === 'project') {
+    transformedAlgebra = algebra.input;
+  }
+  transformedAlgebra = prefixVarsInOperation(c, transformedAlgebra, 'uq_');
   for (const transformation of transformations) {
     transformedAlgebra = transformation(c, transformedAlgebra);
   }
+
+  if (algebra.type === 'project') {
+    // Wrap the transformedAlgebra in extends to the originalVar names and project those
+    for (const variable of algebra.variables) {
+      transformedAlgebra = c.AF.createExtend(
+        transformedAlgebra,
+        variable,
+        c.AF.createTermExpression(c.DF.variable(`uq_${variable.value}`)),
+      );
+    }
+    transformedAlgebra = c.AF.createProject(transformedAlgebra, algebra.variables);
+  }
+
   const transformedAst = toAst(transformedAlgebra);
   return c.generator.generate(transformedAst);
 }

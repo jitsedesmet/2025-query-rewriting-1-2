@@ -476,8 +476,8 @@ describe('dummy', () => {
 }`,
     `SELECT ?uq_o1 ?uq_o10 ?uq_o2 ?uq_o3 ?uq_o4 ?uq_o5 ?uq_o6 ?uq_o7 ?uq_o8 ?uq_o9 ?uq_s1 ?uq_s10 ?uq_s2 ?uq_s3 ?uq_s4 ?uq_s5 ?uq_s6 ?uq_s7 ?uq_s8 ?uq_s9 WHERE {
   ?uq_s1 <ex://a> ?uq_o1 .
-  ?uq_s2 <ex://a> ?var0 .
-  ?var0 <ex://b> ?uq_o2 .
+  ?uq_s2 <ex://a> ?uq_var0 .
+  ?uq_var0 <ex://b> ?uq_o2 .
   ?uq_o3 <ex://a> ?uq_s3 .
   ?uq_s4 (<ex://a>|<ex://b>) ?uq_o4 .
   ?uq_s5 (!(<ex://a>)) ?uq_o5 .

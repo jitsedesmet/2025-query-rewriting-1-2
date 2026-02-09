@@ -12,5 +12,6 @@ tsconfig.tsbuildinfo
 !.gitignore
 !.husky
 !.github
-
 dist
+*.ttl
+*.nt

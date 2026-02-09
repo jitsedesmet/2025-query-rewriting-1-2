@@ -18,6 +18,10 @@ export function createFilterFalse(c: TransformContext, op?: Algebra.Operation): 
   return c.AF.createFilter(op ?? c.AF.createBgp([]), c.AF.createTermExpression(termFalse));
 }
 
+export function isRdfTerm(obj: object): obj is RDF.Term {
+  return 'termType' in obj && typeof obj.termType === 'string';
+}
+
 export function termIsStaticTerm(term: RDF.Term): boolean {
   if (term.termType === 'Quad') {
     return termIsStaticTerm(term.subject) && termIsStaticTerm(term.predicate) && termIsStaticTerm(term.object);

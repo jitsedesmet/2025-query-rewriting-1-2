@@ -2,7 +2,7 @@ import { toAst } from '@traqula/algebra-sparql-1-2';
 import { Algebra as Alg, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { rewriteSinglePattern } from './transformations/rewriteSinglePattern.js';
 import type { TransformContext } from './transformContext.js';
-import { parseQueryAndPrefixVars } from './transformContext.js';
+import { prefixVarsInOperation, parseQuery } from './transformContext.js';
 import { termFalse } from './utils.js';
 
 /**
@@ -13,7 +13,7 @@ export function queryTransform(
   input: string,
   transformations: ((c: TransformContext, op: Alg.Operation) => Alg.Operation)[],
 ): string {
-  const inputAlgebra = parseQueryAndPrefixVars(c, input, 'uq_');
+  const inputAlgebra = prefixVarsInOperation(c, parseQuery(c, input), 'uq_');
   let transformedAlgebra = inputAlgebra;
   for (const transformation of transformations) {
     transformedAlgebra = transformation(c, transformedAlgebra);

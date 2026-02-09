@@ -47,11 +47,11 @@ SELECT ?uq_name ?uq_o ?uq_o1 ?uq_p ?uq_s ?uq_s1 WHERE {
           BIND( <https://example.com/me> AS ?m0_s )
           BIND( <https://example.com/name> AS ?m0_p )
         }
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> ?m0_s .
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> ?m0_p .
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
-        ?m0_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?g_0 .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> ?m0_s .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> ?m0_p .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
+        ?m0_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m0_g_0 .
       }
     }
     BIND( ?m0_o AS ?uq_name )
@@ -81,11 +81,11 @@ SELECT ?uq_name ?uq_o ?uq_o1 ?uq_p ?uq_s ?uq_s1 WHERE {
   {
     {
       SELECT ?m0_t ?m0_s ?m0_p ?m0_o WHERE {
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> ?m0_s .
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> ?m0_p .
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
-        ?m0_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?g_0 .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> ?m0_s .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> ?m0_p .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
+        ?m0_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m0_g_0 .
       }
     }
     BIND( ?m0_t AS ?uq_s )
@@ -112,11 +112,11 @@ SELECT ?uq_name ?uq_o ?uq_o1 ?uq_p ?uq_s ?uq_s1 WHERE {
         {
           BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?m0_t )
         }
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> ?m0_s .
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> ?m0_p .
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
-        ?m0_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?g_0 .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> ?m0_s .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> ?m0_p .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
+        ?m0_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m0_g_0 .
       }
     }
     BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?uq_s1 )
@@ -142,11 +142,11 @@ SELECT ?uq_name ?uq_o ?uq_o1 ?uq_p ?uq_s ?uq_s1 WHERE {
   {
     {
       SELECT ?m0_o WHERE {
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> <https://example.com/me> .
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> <https://example.com/name> .
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
-        <https://example.com/t> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?g_0 .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> <https://example.com/me> .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> <https://example.com/name> .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
+        <https://example.com/t> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m0_g_0 .
       }
     }
     BIND( ?m0_o AS ?uq_name )
@@ -171,11 +171,11 @@ SELECT ?uq_name ?uq_o ?uq_o1 ?uq_p ?uq_s ?uq_s1 WHERE {
   {
     {
       SELECT ?m0_t ?m0_s ?m0_p ?m0_o WHERE {
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> ?m0_s .
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> ?m0_p .
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
-        ?m0_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?g_0 .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> ?m0_s .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> ?m0_p .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
+        ?m0_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m0_g_0 .
       }
     }
     BIND( ?m0_t AS ?uq_s )
@@ -199,11 +199,11 @@ SELECT ?uq_name ?uq_o ?uq_o1 ?uq_p ?uq_s ?uq_s1 WHERE {
   {
     {
       SELECT ?m0_s ?m0_p ?m0_o WHERE {
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> ?m0_s .
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> ?m0_p .
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
-        <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?g_0 .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> ?m0_s .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> ?m0_p .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
+        <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m0_g_0 .
       }
     }
     BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?uq_s1 )
@@ -229,11 +229,11 @@ SELECT ?uq_name ?uq_o ?uq_o1 ?uq_p ?uq_s ?uq_s1 WHERE {
   {
     {
       SELECT ?m0_o WHERE {
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> <https://example.com/me> .
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> <https://example.com/name> .
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
-        <https://example.com/t> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?g_0 .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> <https://example.com/me> .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> <https://example.com/name> .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
+        <https://example.com/t> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m0_g_0 .
       }
     }
     BIND( ?m0_o AS ?uq_name )
@@ -252,11 +252,11 @@ SELECT ?uq_name ?uq_o ?uq_o1 ?uq_p ?uq_s ?uq_s1 WHERE {
   {
     {
       SELECT ?m0_t ?m0_s ?m0_p ?m0_o WHERE {
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> ?m0_s .
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> ?m0_p .
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
-        ?m0_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?g_0 .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> ?m0_s .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> ?m0_p .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
+        ?m0_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m0_g_0 .
       }
     }
     BIND( ?m0_t AS ?uq_s )
@@ -280,11 +280,11 @@ SELECT ?uq_name ?uq_o ?uq_o1 ?uq_p ?uq_s ?uq_s1 WHERE {
   {
     {
       SELECT ?m0_s ?m0_p ?m0_o WHERE {
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> ?m0_s .
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> ?m0_p .
-        ?g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
-        <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?g_0 .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> ?m0_s .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> ?m0_p .
+        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
+        <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m0_g_0 .
       }
     }
     BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?uq_s1 )

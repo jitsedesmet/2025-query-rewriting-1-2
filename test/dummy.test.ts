@@ -1,6 +1,4 @@
-import { toAlgebra } from '@traqula/algebra-sparql-1-2';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
-import { Parser } from '@traqula/parser-sparql-1-2';
 import { describe, it } from 'vitest';
 import type { expect as Expect } from 'vitest';
 import { substituteVarsThatArePreBoundToTerms } from '../lib/transformations/boundedVarSubstitution.js';
@@ -8,8 +6,8 @@ import { transformFilterFalse } from '../lib/transformations/filterFalse.js';
 import { nullifyJoinOverIncompatibleBounds } from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
 import { pushUpBoundedFromUnion } from '../lib/transformations/pushUpBoundedFromUnion.js';
 import { operationTransform, queryTransform } from '../lib/transformBgp.js';
-import type { TransformContext } from '../lib/transformContext.js';
-import { createTransformContext } from '../lib/transformContext.js';
+import type { Mapping, TransformContext } from '../lib/transformContext.js';
+import { parseQuery, createPartialContext, transformContextFromConstructs } from '../lib/transformContext.js';
 import {
   expectedQuery,
   expectedQueryOptimizedBounds,
@@ -20,35 +18,59 @@ import {
 } from './queries.js';
 
 describe('dummy', () => {
-  const parser = new Parser();
+  const c = createPartialContext();
 
-  function transformQuery(
+  function transformQueryUsingConstructs(
     userQuery: string,
     mappers: string[],
     transformations: ((c: TransformContext, op: Algebra.Operation) => Algebra.Operation)[] = [ operationTransform ],
   ): string {
-    const transformerContext = createTransformContext(mappers);
+    const transformerContext = transformContextFromConstructs(mappers);
     return queryTransform(transformerContext, userQuery, transformations);
   }
 
-  function test(
+  function transformQuery(
+    userQuery: string,
+    mappers: Mapping[],
+    transformations: ((c: TransformContext, op: Algebra.Operation) => Algebra.Operation)[] = [ operationTransform ],
+  ): string {
+    const transformerContext = {
+      ...c,
+      mappers,
+    };
+    return queryTransform(transformerContext, userQuery, transformations);
+  }
+
+  function testConstructMappers(
     expect: typeof Expect,
     userQuery: string,
     expectedQuery: string,
     mappers: string[],
     transformations: ((c: TransformContext, op: Algebra.Operation) => Algebra.Operation)[] = [ operationTransform ],
   ): void {
-    expect(transformQuery(userQuery, mappers, transformations).trim())
+    expect(transformQueryUsingConstructs(userQuery, mappers, transformations).trim())
       .toEqual(expectedQuery.trim());
 
-    const _expectedAst = parser.parse(expectedQuery);
-    const _expectedAlgebra = toAlgebra(_expectedAst, { quads: true });
-    const _me = 2;
+    // Const _expectedAst = parser.parse(expectedQuery);
+    // const _expectedAlgebra = toAlgebra(_expectedAst, { quads: true });
+    // const _me = 2;
   }
 
-  it('simple', ({ expect }) => test(expect, testQuery, expectedQuery, [ tripleTermConstruct, nonTripleTermConstruct ]));
+  function testMappers(
+    expect: typeof Expect,
+    userQuery: string,
+    expectedQuery: string,
+    mappers: Mapping[],
+    transformations: ((c: TransformContext, op: Algebra.Operation) => Algebra.Operation)[] = [ operationTransform ],
+  ): void {
+    expect(transformQuery(userQuery, mappers, transformations).trim())
+      .toEqual(expectedQuery.trim());
+  }
 
-  it('simple & optimizeBinds', ({ expect }) => test(
+  it('simple', ({ expect }) =>
+    testConstructMappers(expect, testQuery, expectedQuery, [ tripleTermConstruct, nonTripleTermConstruct ]));
+
+  it('simple & optimizeBinds', ({ expect }) => testConstructMappers(
     expect,
     testQuery,
     expectedQueryOptimizedBounds,
@@ -56,7 +78,7 @@ describe('dummy', () => {
     [ operationTransform, substituteVarsThatArePreBoundToTerms ],
   ));
 
-  it('simple & optimizeBinds & optimizeEmptyResultSets', ({ expect }) => test(
+  it('simple & optimizeBinds & optimizeEmptyResultSets', ({ expect }) => testConstructMappers(
     expect,
     testQuery,
     expectedQueryOptimizedBoundsAndEmptyRes,
@@ -119,27 +141,27 @@ describe('dummy', () => {
     // }`,
     // [ `CONSTRUCT { ?s ?p _:blank } WHERE { ?s ?p ?o }` ],
     //   )
-    expect(() => transformQuery(
+    expect(() => transformQueryUsingConstructs(
       'SELECT * { { ?s <http://ex.org/a> ?a ; <http://ex.org/b> ?b } UNION { ?s <http://ex.org/b> ?b2 } }',
       [ `CONSTRUCT { ?s ?p _:blank } WHERE { ?s ?p ?o }` ],
     )).toThrow();
   });
 
   it('sps with blank in mapping head', ({ expect }) => {
-    expect(() => transformQuery(
+    expect(() => transformQueryUsingConstructs(
       `SELECT * { ?s ?p ?s }`,
       [ `CONSTRUCT { ?s ?p _:blank } WHERE { ?s ?p ?o }` ],
     )).toThrow();
   });
 
   it('sps with bnode creation in mapping body', ({ expect }) => {
-    expect(() => transformQuery(
+    expect(() => transformQueryUsingConstructs(
       `SELECT * { ?s ?p ?s }`,
       [ `CONSTRUCT { ?s ?p ?b } WHERE { ?s ?p ?o. EXTEND(bnode() as ?b) }` ],
     )).toThrow();
   });
 
-  it('handle no matching query', ({ expect }) => test(
+  it('handle no matching query', ({ expect }) => testConstructMappers(
     expect,
     `SELECT * { ?s <ex://a> ?o }`,
     `SELECT ?uq_o ?uq_s WHERE {
@@ -153,7 +175,7 @@ describe('dummy', () => {
     [ `CONSTRUCT WHERE { ?s <ex://b> ?o }`, `CONSTRUCT WHERE { ?s <ex://c> ?o }` ],
   ));
 
-  it('handle no matching query & optimizeBinds & optimizeEmptyResultSets', ({ expect }) => test(
+  it('handle no matching query & optimizeBinds & optimizeEmptyResultSets', ({ expect }) => testConstructMappers(
     expect,
     `SELECT * { ?s <ex://a> ?o }`,
     `SELECT ?uq_o ?uq_s WHERE {
@@ -163,7 +185,7 @@ describe('dummy', () => {
     [ operationTransform, substituteVarsThatArePreBoundToTerms, transformFilterFalse ],
   ));
 
-  it('pushUpBinds', ({ expect }) => test(
+  it('pushUpBinds', ({ expect }) => testConstructMappers(
     expect,
     `SELECT * { ?s ?p ?o }`,
     `SELECT ?uq_o ?uq_p ?uq_s WHERE {
@@ -191,7 +213,7 @@ describe('dummy', () => {
     [ operationTransform, substituteVarsThatArePreBoundToTerms, transformFilterFalse, pushUpBoundedFromUnion ],
   ));
 
-  it('no join optimization', ({ expect }) => test(
+  it('no join optimization', ({ expect }) => testConstructMappers(
     expect,
     `SELECT * { ?s ?p ?o . <ex://a> ?p ?o }`,
     `SELECT ?uq_o ?uq_p ?uq_s WHERE {
@@ -229,7 +251,7 @@ describe('dummy', () => {
     [ operationTransform, transformFilterFalse ],
   ));
 
-  it('join optimization', ({ expect }) => test(
+  it('join optimization', ({ expect }) => testConstructMappers(
     expect,
     `SELECT * { ?s ?p ?o . <ex://a> ?p ?o }`,
     `SELECT ?uq_o ?uq_p ?uq_s WHERE {
@@ -257,7 +279,7 @@ describe('dummy', () => {
     [ operationTransform, transformFilterFalse, nullifyJoinOverIncompatibleBounds, transformFilterFalse ],
   ));
 
-  it('join optimization 1', ({ expect }) => test(
+  it('join optimization 1', ({ expect }) => testConstructMappers(
     expect,
     `SELECT * { ?s ?p ?o . <ex://a> ?p ?o }`,
     `SELECT ?uq_o ?uq_p ?uq_s WHERE {
@@ -304,7 +326,7 @@ describe('dummy', () => {
     [ operationTransform, transformFilterFalse, nullifyJoinOverIncompatibleBounds, transformFilterFalse ],
   ));
 
-  it('nullifyJoinOverIncompatibleBounds - adding simple filter', ({ expect }) => test(
+  it('nullifyJoinOverIncompatibleBounds - adding simple filter', ({ expect }) => testConstructMappers(
     expect,
     `SELECT * { <ex://a> ?p ?o . <ex://b> ?p ?o . }`,
     `SELECT ?uq_o ?uq_p WHERE {
@@ -339,7 +361,7 @@ describe('dummy', () => {
     ],
   ));
 
-  it('nullifyJoinOverIncompatibleBounds - adding simple filter and optimizing', ({ expect }) => test(
+  it('nullifyJoinOverIncompatibleBounds - adding simple filter and optimizing', ({ expect }) => testConstructMappers(
     expect,
     `SELECT * { <ex://a> ?p ?o . <ex://b> ?p ?o . }`,
     `SELECT ?uq_o ?uq_p WHERE {
@@ -375,7 +397,7 @@ describe('dummy', () => {
     ],
   ));
 
-  it('nullifyJoinOverIncompatibleBounds - adding || filter', ({ expect }) => test(
+  it('nullifyJoinOverIncompatibleBounds - adding || filter', ({ expect }) => testConstructMappers(
     expect,
     `SELECT * { <ex://a> ?p ?o . <ex://b> ?p ?o . }`,
     `SELECT ?uq_o ?uq_p WHERE {
@@ -415,7 +437,7 @@ describe('dummy', () => {
     [ operationTransform, transformFilterFalse, nullifyJoinOverIncompatibleBounds, transformFilterFalse ],
   ));
 
-  it('nullifyJoinOverIncompatibleBounds - adding || filter on 2 vars', ({ expect }) => test(
+  it('nullifyJoinOverIncompatibleBounds - adding || filter on 2 vars', ({ expect }) => testConstructMappers(
     expect,
     `SELECT * { <ex://a> ?p ?o . <ex://b> ?p ?o . }`,
     `SELECT ?uq_o ?uq_p WHERE {
@@ -459,7 +481,7 @@ describe('dummy', () => {
     [ operationTransform, transformFilterFalse, nullifyJoinOverIncompatibleBounds, transformFilterFalse ],
   ));
 
-  it('algebra transformation on paths', ({ expect }) => test(
+  it('algebra transformation on paths', ({ expect }) => testConstructMappers(
     expect,
     `SELECT * {
     ?s1 <ex://a> ?o1 .
@@ -491,7 +513,7 @@ describe('dummy', () => {
     [],
   ));
 
-  it('does not emit infinite recursion', ({ expect }) => test(
+  it('does not emit infinite recursion', ({ expect }) => testConstructMappers(
     expect,
     `SELECT * { ?s ?p ?s }`,
     `SELECT ?uq_p ?uq_s WHERE {
@@ -500,5 +522,26 @@ describe('dummy', () => {
   }
 }`,
     [ `CONSTRUCT { ?s ?p <<( ?s ?x ?y )>> } WHERE { ?s ?p ?x , ?y . }` ],
+  ));
+
+  it('works on simple transforms using mappers', ({ expect }) => testMappers(
+    expect,
+    `SELECT * { ?s <ex://a> ?o }`,
+    `SELECT ?uq_o ?uq_s WHERE {
+  {
+    FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )
+  }
+  UNION {
+    FILTER ( "false"^^<http://www.w3.org/2001/XMLSchema#boolean> )
+  }
+}`,
+    // [ `CONSTRUCT WHERE { ?s <ex://b> ?o }`, `CONSTRUCT WHERE { ?s <ex://c> ?o }` ],
+    [{
+      head: c.AF.createPattern(c.DF.variable('s'), c.DF.namedNode('ex://b'), c.DF.variable('o')),
+      body: <Algebra.Project> parseQuery(c, 'SELECT * { ?s  <ex://b> ?o }'),
+    }, {
+      head: c.AF.createPattern(c.DF.variable('s'), c.DF.namedNode('ex://c'), c.DF.variable('o')),
+      body: <Algebra.Project> parseQuery(c, 'SELECT * { ?s  <ex://c> ?o }'),
+    }],
   ));
 });

@@ -112,18 +112,20 @@ ${JSON.stringify(construct.template, null, 2)}`);
   } satisfies Mapping;
 }
 
-export function createTransformContext(mappers: readonly string[]): TransformContext {
-  const AF = new AlgebraFactory();
-  const astTransformer = new AstTransformer();
-  const partialContext: Omit<TransformContext, 'mappers'> = {
+export function createPartialContext(): Omit<TransformContext, 'mappers'> {
+  return {
     parser: new Parser(),
     generator: new Generator(),
     astFactory: new AstFactory(),
-    AF,
+    AF: new AlgebraFactory(),
     DF: new DataFactory(),
-    astTransformer,
+    astTransformer: new AstTransformer(),
     clusterSolver: new ClusterSolver(),
   };
+}
+
+export function transformContextFromConstructs(mappers: readonly string[]): TransformContext {
+  const partialContext = createPartialContext();
   const algebraMappers = mappers
     .map(constructQuery => constructToMapper(partialContext, constructQuery))
     .map((mapping, index) => prefixMappingVars(partialContext, mapping, `m${index}_`));

@@ -7,7 +7,7 @@ import { describe, it } from 'vitest';
 import { transformFilterFalse } from '../lib/transformations/filterFalse.js';
 import { nullifyJoinOverIncompatibleBounds } from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
 import { operationTransform, queryTransform } from '../lib/transformBgp.js';
-import { createTransformContext } from '../lib/transformContext.js';
+import { transformContextFromConstructs } from '../lib/transformContext.js';
 import { nonTripleTermConstruct, tripleTermConstruct } from './queries.js';
 import './matchers/toBeRdfIsomorphic.js';
 
@@ -71,7 +71,7 @@ describe('evaluation tests', () => {
       // Querying a normal query over store 1.2 should give same result as altered query over store 1.1
       const userQuery = 'CONSTRUCT WHERE { ?s ?p ?o }';
       const resOnMappedData = await sourceToStore([ store12 ], userQuery);
-      const transformerContext = createTransformContext([ tripleTermConstruct, nonTripleTermConstruct ]);
+      const transformerContext = transformContextFromConstructs([ tripleTermConstruct, nonTripleTermConstruct ]);
       const resUsingMapper = await sourceToStore([ store11 ], queryTransform(transformerContext, userQuery, [
         operationTransform,
         transformFilterFalse,

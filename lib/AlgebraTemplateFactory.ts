@@ -9,7 +9,7 @@ export class AlgebraTemplateFactory extends AlgebraFactory {
   ): TemplateIri {
     return {
       type: 'template',
-      subType: 'iri',
+      subType: 'NamedNode',
       value: optimizeTemplateArray(template),
     };
   }
@@ -21,7 +21,8 @@ export class AlgebraTemplateFactory extends AlgebraFactory {
     graph?: MappingHead['graph'],
   ): MappingHead {
     return {
-      type: 'mappingHead',
+      type: 'template',
+      subType: 'Quad',
       subject,
       predicate,
       object,

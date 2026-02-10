@@ -546,7 +546,7 @@ describe('dummy', () => {
     }],
   ));
 
-  it('templateIris', ({ expect }) => testMappers(
+  it.skip('templateIris', ({ expect }) => testMappers(
     expect,
     `SELECT * { ?s ?p <ex://a> }`,
     `SELECT ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) WHERE {

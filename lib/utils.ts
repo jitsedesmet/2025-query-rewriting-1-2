@@ -2,9 +2,10 @@ import type * as RDF from '@rdfjs/types';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { Typed } from '@traqula/core';
 import { DataFactory } from 'rdf-data-factory';
+import { termToString } from 'rdf-string';
 import type { RangedVar } from './RangeSet.js';
 import type { TransformContext } from './transformContext.js';
-import type { MappingHead } from './types.js';
+import type { MappingHead, Template, TemplateBlank, TemplateIri, TemplateLiteral, TemplateQuad } from './types.js';
 
 export const DF = new DataFactory();
 
@@ -107,4 +108,50 @@ export function optimizeTemplateArray<T>(arr: T[]): (T | string)[] {
     }
   }
   return optimizedTemplate;
+}
+
+export function templateIriToStr(template: TemplateIri): string {
+  const strArgs = template.value.map((arg) => {
+    if (typeof arg === 'string') {
+      return arg;
+    }
+    return `STR ( ?${arg.value} )`;
+  });
+  return `IRI ( CONCAT ( ${strArgs.join(' , ')} ) )`;
+}
+
+export function templateLiteralToStr(template: TemplateLiteral): string {
+  const strArgs = template.value.map((arg) => {
+    if (typeof arg === 'string') {
+      return arg;
+    }
+    return `STR ( ?${arg.value} )`;
+  });
+  return `STDT( CONCAT ( ${strArgs.join(' , ')} ) , ${template.datatype.value} )`;
+}
+
+export function templateBlankToStr(template: TemplateBlank): string {
+  return `<internal://blank>( ${template.value.map(arg => `?${arg.value}`).join(' , ')}) )`;
+}
+
+export function templateQuadToStr(template: TemplateQuad): string {
+  const args = [ template.subject, template.predicate, template.object ]
+    .map(templateToStr).join(' , ');
+  return `TRIPLE( ${args} )`;
+}
+
+export function templateToStr(template: Template | RDF.Term): string {
+  if (isRdfTerm(template)) {
+    return termToString(template);
+  }
+  switch (template.subType) {
+    case 'NamedNode':
+      return templateIriToStr(template);
+    case 'Literal':
+      return templateLiteralToStr(template);
+    case 'BlankNode':
+      return templateBlankToStr(template);
+    case 'Quad':
+      return templateQuadToStr(template);
+  }
 }

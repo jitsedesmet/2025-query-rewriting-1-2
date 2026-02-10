@@ -69,7 +69,8 @@ ${JSON.stringify(construct.template, null, 2)}`);
   }
   const head: MappingHead = {
     ...construct.template[0],
-    type: 'mappingHead',
+    type: 'template',
+    subType: 'Quad',
   };
   // Get used vars to create the propper projection
   const usedVars: Record<string, RDF.Variable> = {};

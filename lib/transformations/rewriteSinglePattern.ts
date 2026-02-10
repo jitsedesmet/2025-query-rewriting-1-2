@@ -46,6 +46,7 @@ function iterateMappingHead(
           `The user query contain quad ${JSON.stringify(patternTerm)} and cannot be matched to mapping head ${JSON.stringify(headTerm)}`,
       );
     } else {
+      // Head can still be a Quad or MappingHead type
       // Register var and range it according to position (metadata for cluster algo). Done for triple pattern and head
       if (isRdfVar(headTerm)) {
         mHVars[headTerm.value] = headTerm;
@@ -57,8 +58,7 @@ function iterateMappingHead(
       }
       // Register the static terms to the solver.
       if (!isRdfDefaultGraph(headTerm) && !isRdfDefaultGraph(patternTerm)) {
-        // Todo: where prefixes can be verified:
-        c.clusterSolver.register(<RDF.Term> headTerm, patternTerm);
+        c.clusterSolver.register(headTerm, patternTerm);
       }
     }
   }

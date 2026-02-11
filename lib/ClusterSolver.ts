@@ -198,12 +198,13 @@ ${JSON.stringify(to)}`);
    * Then the vars, if you match a var, you should align yourself to that var.
    * @param from
    */
-  public getCluster(from: RDF.Variable): { term: RawBasicTerm | undefined ; vars: RDF.Variable[] } {
+  public getCluster(from: RDF.Variable): { term: RawBasicTerm | undefined ; vars: RDF.Variable[]; group: number } {
     const varGroup = this.varToGroup[from.value];
     return {
       term: this.groupToTerm[varGroup!],
       vars: this.groupToVars[varGroup!]
         .filter(x => !x.equals(from)),
+      group: varGroup!,
     };
   }
 

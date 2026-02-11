@@ -660,4 +660,164 @@ describe('dummy', () => {
       body: <Algebra.Project> parseQuery(c, 'SELECT * { ?s  ?p <ex://b> }'),
     }],
   ));
+
+  it('two templates equal all', ({ expect }) => testMappers(
+    expect,
+    'SELECT * { ?x ?x ?x }',
+    `SELECT ( ?uq_x AS ?x ) WHERE {
+  {
+    {
+      SELECT ?m0_p WHERE {
+        {
+          ?m0_s ?m0_p ?m0_o .
+          FILTER ( ( ?m0_p = IRI( CONCAT( STR( ?m0_s ) , STR( ?m0_p ) ) ) ) )
+        }
+        FILTER ( ( ?m0_p = IRI( CONCAT( STR( ?m0_o ) , STR( ?m0_p ) ) ) ) )
+      }
+    }
+    BIND( ?m0_p AS ?uq_x )
+  }
+}`,
+    [{
+      head: c.AF.createMappingHead(
+        c.AF.createTemplateIri([ c.DF.variable('s'), c.DF.variable('p') ]),
+        c.DF.variable('p'),
+        c.AF.createTemplateIri([ c.DF.variable('o'), c.DF.variable('p') ]),
+      ),
+      body: <Algebra.Project> parseQuery(c, 'SELECT * { ?s ?p ?o }'),
+    }],
+  ));
+
+  it('template with containing var being bound', ({ expect }) => testMappers(
+    expect,
+    'SELECT * { ?x <ex://a> ?y }',
+    `SELECT ( ?uq_x AS ?x ) ( ?uq_y AS ?y ) WHERE {
+  {
+    {
+      SELECT ?m0_o ?m0_p ?m0_s WHERE {
+        {
+          BIND( <ex://a> AS ?m0_p )
+        }
+        ?m0_s ?m0_p ?m0_o .
+      }
+    }
+    BIND( IRI( CONCAT( STR( ?m0_s ) , STR( ?m0_p ) ) ) AS ?uq_x )
+    BIND( ?m0_o AS ?uq_y )
+  }
+}`,
+    [{
+      head: c.AF.createMappingHead(
+        c.AF.createTemplateIri([ c.DF.variable('s'), c.DF.variable('p') ]),
+        c.DF.variable('p'),
+        c.DF.variable('o'),
+      ),
+      body: <Algebra.Project> parseQuery(c, 'SELECT * { ?s ?p ?o }'),
+    }],
+  ));
+
+  it('two templates but not equal to each other', ({ expect }) => testMappers(
+    expect,
+    'SELECT * { ?x ?y ?y }',
+    `SELECT ( ?uq_x AS ?x ) ( ?uq_y AS ?y ) WHERE {
+  {
+    {
+      SELECT ?m0_p ?m0_s WHERE {
+        ?m0_s ?m0_p ?m0_o .
+        FILTER ( ( ?m0_p = IRI( CONCAT( STR( ?m0_o ) ) ) ) )
+      }
+    }
+    BIND( IRI( CONCAT( STR( ?m0_s ) , STR( ?m0_p ) ) ) AS ?uq_x )
+    BIND( ?m0_p AS ?uq_y )
+  }
+}`,
+    [{
+      head: c.AF.createMappingHead(
+        c.AF.createTemplateIri([ c.DF.variable('s'), c.DF.variable('p') ]),
+        c.DF.variable('p'),
+        c.AF.createTemplateIri([ c.DF.variable('o') ]),
+      ),
+      body: <Algebra.Project> parseQuery(c, 'SELECT * { ?s ?p ?o }'),
+    }],
+  ));
+
+  it('quad in mapping head', ({ expect }) => testMappers(
+    expect,
+    'SELECT * { ?x ?y ?z }',
+    `SELECT ( ?uq_x AS ?x ) ( ?uq_y AS ?y ) ( ?uq_z AS ?z ) WHERE {
+  {
+    {
+      SELECT ?m0_p ?m0_s WHERE {
+        ?m0_s ?m0_p <ex://a> .
+      }
+    }
+    BIND( ?m0_s AS ?uq_x )
+    BIND( ?m0_p AS ?uq_y )
+    BIND( TRIPLE( <ex://a> , <ex://b> , IRI( CONCAT( STR( ?m0_s ) ) ) ) AS ?uq_z )
+  }
+}`,
+    [{
+      head: c.AF.createMappingHead(
+        c.DF.variable('s'),
+        c.DF.variable('p'),
+        c.AF.createMappingHead(
+          c.DF.namedNode('ex://a'),
+          c.DF.namedNode('ex://b'),
+          c.AF.createTemplateIri([ c.DF.variable('s') ]),
+        ),
+      ),
+      body: <Algebra.Project> parseQuery(c, 'SELECT * { ?s ?p <ex://a> }'),
+    }],
+  ));
+
+  it('template equals term through connecting TP var', ({ expect }) => testMappers(
+    expect,
+    'SELECT * { ?x ?p ?x }',
+    `SELECT ( ?uq_p AS ?p ) ( ?uq_x AS ?x ) WHERE {
+  {
+    {
+      SELECT ?m0_p WHERE {
+        ?m0_s ?m0_p <ex://a> .
+        FILTER ( ( <ex://apple> = IRI( CONCAT( STR( ?m0_s ) ) ) ) )
+      }
+    }
+    BIND( ?m0_p AS ?uq_p )
+    BIND( <ex://apple> AS ?uq_x )
+  }
+}`,
+    [{
+      head: c.AF.createMappingHead(
+        c.AF.createTemplateIri([ c.DF.variable('s') ]),
+        c.DF.variable('p'),
+        c.DF.namedNode('ex://apple'),
+      ),
+      body: <Algebra.Project> parseQuery(c, 'SELECT * { ?s ?p <ex://a> }'),
+    }],
+  ));
+
+  it('does not generate conditions twice on group through connecting var', ({ expect }) => testMappers(
+    expect,
+    'SELECT * { ?x ?x ?x }',
+    `SELECT ( ?uq_x AS ?x ) WHERE {
+  {
+    {
+      SELECT ( "dummy" AS ?dummy ) WHERE {
+        {
+          BIND( <ex://apple> AS ?m0_p )
+        }
+        ?m0_s ?m0_p <ex://a> .
+        FILTER ( ( <ex://apple> = IRI( CONCAT( STR( ?m0_s ) ) ) ) )
+      }
+    }
+    BIND( <ex://apple> AS ?uq_x )
+  }
+}`,
+    [{
+      head: c.AF.createMappingHead(
+        c.AF.createTemplateIri([ c.DF.variable('s') ]),
+        c.DF.variable('p'),
+        c.DF.namedNode('ex://apple'),
+      ),
+      body: <Algebra.Project> parseQuery(c, 'SELECT * { ?s ?p <ex://a> }'),
+    }],
+  ));
 });

@@ -69,16 +69,27 @@ function collectTriplePatternBinds({
   clusterSolver,
   triplePatternVars,
   headVarsRemap,
+  templateFilters,
 }: {
   clusterSolver: ClusterSolver;
   triplePatternVars: Record<string, RDF.Variable>;
   headVarsRemap: Record<string, RDF.Variable>;
+  templateFilters: { term: RDF.Term; template: Template }[];
 }): Record<string, RDF.Term | Template> {
   const triplePatternBinds: Record<string, RDF.Term | Template> = {};
   for (const tpVariable of Object.values(triplePatternVars)) {
     const cluster = clusterSolver.getCluster(tpVariable);
-    if (cluster.term) {
-      triplePatternBinds[tpVariable.value] = cluster.term;
+    const templates = clusterSolver.getTemplates(tpVariable);
+    const term = cluster.term;
+    if (term) {
+      triplePatternBinds[tpVariable.value] = term;
+      // In case the TP variable equals a term AND a template, the term-template equality needs to be checked!
+      // Only needed when no mapping vars would have done so.
+      if (cluster.vars.findIndex(value => value.value.startsWith('m')) === -1) {
+        templateFilters.push(
+          ...templates.map(template => ({ term, template })),
+        );
+      }
     } else {
       // If not bound to a term, check whether bound to a mapping var:
       const boundTo = cluster.vars.at(0);
@@ -86,7 +97,7 @@ function collectTriplePatternBinds({
         triplePatternBinds[tpVariable.value] = headVarsRemap[boundTo.value] ?? boundTo;
       } else {
         // You bind to one of the mapping heads.
-        triplePatternBinds[tpVariable.value] = clusterSolver.getTemplates(tpVariable)[0];
+        triplePatternBinds[tpVariable.value] = templates[0];
       }
     }
   }
@@ -304,6 +315,7 @@ export function rewriteSinglePattern(
     clusterSolver,
     triplePatternVars,
     headVarsRemap,
+    templateFilters,
   });
 
   // Construct the contents of our subselect

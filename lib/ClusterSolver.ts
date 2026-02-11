@@ -26,7 +26,7 @@ export class ClusterSolver {
   private groupToRange: Record<number, RangeSet>;
   // A single group can have many template equalities. This means all mHeadVars being equal are rewritten into one.
   // And afterward you get a filter for each template equality.
-  private groupToTemplate: Record<number, Template[]>;
+  private groupToTemplates: Record<number, Template[]>;
   private groupToTerm: Record<number, RawBasicTerm | undefined>;
   private varToGroup: Record<string, number | undefined>;
   // In case a mapping head templates need to equal a static term,
@@ -41,7 +41,7 @@ export class ClusterSolver {
 
   public clear(): void {
     this.groupToVars = {};
-    this.groupToTemplate = {};
+    this.groupToTemplates = {};
     this.groupToRange = {};
     this.groupToTerm = {};
     this.varToGroup = {};
@@ -52,7 +52,7 @@ export class ClusterSolver {
   /**
    * Register the range of the variable to the group it is contained in, if any.
    */
-  public handleVarRange(variable: RangedVar): void {
+  private handleVarRange(variable: RangedVar): void {
     const range = variable.range;
     const group = this.varToGroup[variable.value];
     if (range !== undefined && group !== undefined) {
@@ -106,7 +106,7 @@ export class ClusterSolver {
    * Get an existing group for a var, or make a new one
    * @param variable
    */
-  public getGroup(variable: RangedVar): number {
+  private getGroup(variable: RangedVar): number {
     let group = this.varToGroup[variable.value];
     if (group !== undefined) {
       this.handleVarRange(variable);
@@ -115,14 +115,14 @@ export class ClusterSolver {
     group = this.cleanNumber;
     this.cleanNumber++;
     this.groupToVars[group] = [ variable ];
-    this.groupToTemplate[group] = [];
+    this.groupToTemplates[group] = [];
     this.groupToTerm[group] = undefined;
     this.groupToRange[group] = new RangeSet(variable.range ?? objectRange);
     this.varToGroup[variable.value] = group;
     return group;
   }
 
-  public registerTemplateToGroup(group: number, template: Template): void {
+  private registerTemplateToGroup(group: number, template: Template): void {
     const curTerm = this.groupToTerm[group];
     if (curTerm && curTerm.termType !== template.subType) {
       throw new Error(`Cannot match Template ${templateToStr(template)} with term ${JSON.stringify(curTerm)}`);
@@ -135,10 +135,10 @@ export class ClusterSolver {
     // Narrow the groupRange
     this.groupToRange[group] = newRange;
 
-    this.groupToTemplate[group].push(template);
+    this.groupToTemplates[group].push(template);
   }
 
-  public registerTermToGroup(group: number, term: RawBasicTerm): void {
+  private registerTermToGroup(group: number, term: RawBasicTerm): void {
     const curTerm = this.groupToTerm[group];
     // TODO: validate in the case of triple term by also registering that some variables present might be the same.
     if (curTerm && !curTerm.equals(term)) {
@@ -197,5 +197,14 @@ export class ClusterSolver {
       vars: this.groupToVars[varGroup!]
         .filter(x => !x.equals(from)),
     };
+  }
+
+  public getTemplates(from: RDF.Variable): Template[] {
+    const varGroup = this.varToGroup[from.value];
+    return this.groupToTemplates[varGroup!];
+  }
+
+  public getStaticTemplateValidation(): typeof this.staticTemplateValidation {
+    return this.staticTemplateValidation;
   }
 }

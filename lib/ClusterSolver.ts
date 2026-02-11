@@ -2,7 +2,7 @@ import type * as RDF from '@rdfjs/types';
 import type { RangedVar } from './RangeSet.js';
 import { objectRange, RangeSet } from './RangeSet.js';
 import type { Template } from './types.js';
-import { isRdfTerm, isRdfVar, templateToStr } from './utils.js';
+import { isRdfTerm, isRdfVar } from './utils.js';
 
 export type RawTerm = Exclude<RDF.Term, RDF.Variable> | RangedVar;
 export type RawBasicTerm = Exclude<RawTerm, RDF.Quad>;
@@ -125,12 +125,12 @@ export class ClusterSolver {
   private registerTemplateToGroup(group: number, template: Template): void {
     const curTerm = this.groupToTerm[group];
     if (curTerm && curTerm.termType !== template.subType) {
-      throw new Error(`Cannot match Template ${templateToStr(template)} with term ${JSON.stringify(curTerm)}`);
+      throw new Error(`Cannot match Template ${JSON.stringify(template)} with term ${JSON.stringify(curTerm)}`);
     }
     const groupRange = this.groupToRange[group];
     const newRange = groupRange.disjunct(new RangeSet([ template.subType ]));
     if (newRange.size === 0) {
-      throw new Error(`Cannot assign template ${templateToStr(template)} to a group with range [${[ ...groupRange.values() ].join(', ')}]`);
+      throw new Error(`Cannot assign template ${JSON.stringify(template)} to a group with range [${[ ...groupRange.values() ].join(', ')}]`);
     }
     // Narrow the groupRange
     this.groupToRange[group] = newRange;

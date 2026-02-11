@@ -192,7 +192,7 @@ describe('dummy', () => {
     `SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) WHERE {
   {
     {
-      SELECT ?m0_s ?m0_o WHERE {
+      SELECT ?m0_o ?m0_s WHERE {
         ?m0_s <ex://b> ?m0_o .
       }
     }
@@ -201,7 +201,7 @@ describe('dummy', () => {
   }
   UNION {
     {
-      SELECT ?m1_s ?m1_o WHERE {
+      SELECT ?m1_o ?m1_s WHERE {
         ?m1_s <ex://b> ?m1_o .
       }
     }
@@ -333,7 +333,7 @@ describe('dummy', () => {
     `SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) WHERE {
   {
     {
-      SELECT ?m0_p ?m0_o WHERE {
+      SELECT ?m0_o ?m0_p WHERE {
         VALUES ?m0_p {
           <ex://c>
         }
@@ -368,7 +368,7 @@ describe('dummy', () => {
     `SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) WHERE {
   {
     {
-      SELECT ?m0_p ?m0_o WHERE {
+      SELECT ?m0_o ?m0_p WHERE {
         VALUES ?m0_p {
           <ex://c>
         }
@@ -404,7 +404,7 @@ describe('dummy', () => {
     `SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) WHERE {
   {
     {
-      SELECT ?m0_p ?m0_o WHERE {
+      SELECT ?m0_o ?m0_p WHERE {
         VALUES ?m0_p {
           <ex://c>
           <ex://d>
@@ -444,7 +444,7 @@ describe('dummy', () => {
     `SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) WHERE {
   {
     {
-      SELECT ?m0_p ?m0_o WHERE {
+      SELECT ?m0_o ?m0_p WHERE {
         VALUES ?m0_p {
           <ex://c>
           <ex://d>
@@ -546,7 +546,7 @@ describe('dummy', () => {
     }],
   ));
 
-  it.skip('templateIris', ({ expect }) => testMappers(
+  it('templateIris', ({ expect }) => testMappers(
     expect,
     `SELECT * { ?s ?p <ex://a> }`,
     `SELECT ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) WHERE {

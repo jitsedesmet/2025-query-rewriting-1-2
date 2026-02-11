@@ -5,7 +5,7 @@ import type { ClusterSolver } from '../ClusterSolver.js';
 import { objectRange, predicateRange, subjectRange } from '../RangeSet.js';
 import type { TransformContext } from '../transformContext.js';
 import type { Mapping, MappingHead, Template } from '../types.js';
-import { isMappingHead, isRdfDefaultGraph, isRdfQuad, isRdfVar } from '../utils.js';
+import { isMappingHead, isRdfDefaultGraph, isRdfQuad, isRdfVar, templateToExpr } from '../utils.js';
 
 function headSPO(head: MappingHead | RDF.BaseQuad): (RDF.Term | MappingHead | Template)[] {
   return [ head.subject, head.predicate, head.object ];
@@ -90,7 +90,7 @@ function collectTriplePatternBinds({
       }
     }
   }
-  return triplePatternVars;
+  return triplePatternBinds;
 }
 
 function collectMappingHeadBindsAndFilters({ clusterSolver, mappingHeadVars, DF }: {
@@ -204,6 +204,23 @@ function rewriteToPreBindVars({ AF, DF, mappingHeadBinds, operation }: {
   return operation;
 }
 
+function wrapInTemplateFilters({ operation, templateFilters, AF, DF }: {
+  operation: Algebra.Operation;
+  templateFilters: { term: RDF.Term; template: Template }[];
+} & Pick<TransformContext, 'AF' | 'DF'>): Algebra.Operation {
+  let buildOperation = operation;
+  for (const { term, template } of templateFilters) {
+    buildOperation = AF.createFilter(
+      buildOperation,
+      AF.createOperatorExpression('=', [
+        AF.createTermExpression(term),
+        templateToExpr(AF, DF, template),
+      ]),
+    );
+  }
+  return buildOperation;
+}
+
 function wrapOperationInProject({
   triplePatternBinds,
   operation,
@@ -217,7 +234,7 @@ function wrapOperationInProject({
   let buildOperation = operation;
   // All variables required from subselect
   const variablesToSelect: RDF.Variable[] = [];
-  astTransformer.visitObject(triplePatternBinds, (something) => {
+  astTransformer.visitObject(Object.values(triplePatternBinds), (something) => {
     if (isRdfVar(something)) {
       variablesToSelect.push(something);
     }
@@ -233,6 +250,8 @@ function wrapOperationInProject({
     );
     variablesToSelect.push(DF.variable('dummy'));
   }
+  // SOrt allows for stable tests but does not practically change anything.
+  variablesToSelect.sort((a, b) => a.value.localeCompare(b.value));
   return AF.createProject(buildOperation, variablesToSelect);
 }
 
@@ -242,15 +261,12 @@ function bindPatternTerms({ subQuery, AF, DF, triplePatternBinds }: {
 } & Pick<TransformContext, 'DF' | 'AF'>): Alg.Project | Alg.Extend {
   let buildOperation: Alg.Project | Alg.Extend = subQuery;
   // Finally add the binds after the subselect
-  for (const [ variable, somEcpr ] of Object.entries(triplePatternBinds)) {
-    const expr = <RDF.Term> somEcpr;
-    const termExpression: Alg.TermExpression | Alg.OperatorExpression = expr.termType === 'BlankNode' ?
-      AF.createOperatorExpression('BNODE', [ AF.createTermExpression(DF.literal(expr.value)) ]) :
-      AF.createTermExpression(expr);
+  for (const [ variable, template ] of Object.entries(triplePatternBinds)) {
+    const expression = templateToExpr(AF, DF, template);
     buildOperation = AF.createExtend(
       buildOperation,
       DF.variable(variable),
-      termExpression,
+      expression,
     );
   }
   return buildOperation;
@@ -292,6 +308,12 @@ export function rewriteSinglePattern(
   let inProject: Alg.Operation = mapping.body.input;
   inProject = rewriteUnifiedVariables({ astTransformer, operation: inProject, headVarsRemap });
   inProject = rewriteToPreBindVars({ AF, DF, mappingHeadBinds, operation: inProject });
+  inProject = wrapInTemplateFilters({
+    AF,
+    DF,
+    templateFilters: [ ...templateFilters, ...clusterSolver.getStaticTemplateValidation() ],
+    operation: inProject,
+  });
 
   const subQuery = wrapOperationInProject({ triplePatternBinds, AF, DF, astTransformer, operation: inProject });
   return bindPatternTerms({ subQuery, triplePatternBinds, DF, AF });

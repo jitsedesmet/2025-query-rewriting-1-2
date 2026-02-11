@@ -1,8 +1,8 @@
 import type * as RDF from '@rdfjs/types';
+import type { AlgebraFactory } from '@traqula/algebra-transformations-1-2';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { Typed } from '@traqula/core';
 import { DataFactory } from 'rdf-data-factory';
-import { termToString } from 'rdf-string';
 import type { RangedVar } from './RangeSet.js';
 import type { TransformContext } from './transformContext.js';
 import type { MappingHead, Template, TemplateBlank, TemplateIri, TemplateLiteral, TemplateQuad } from './types.js';
@@ -110,48 +110,61 @@ export function optimizeTemplateArray<T>(arr: T[]): (T | string)[] {
   return optimizedTemplate;
 }
 
-export function templateIriToStr(template: TemplateIri): string {
-  const strArgs = template.value.map((arg) => {
-    if (typeof arg === 'string') {
-      return arg;
-    }
-    return `STR ( ?${arg.value} )`;
-  });
-  return `IRI ( CONCAT ( ${strArgs.join(' , ')} ) )`;
+export function templateIriToExpr(AF: AlgebraFactory, DF: DataFactory, template: TemplateIri): Algebra.Expression {
+  return AF.createOperatorExpression('iri', [
+    AF.createOperatorExpression(
+      'concat',
+      template.value.map((val) => {
+        if (typeof val === 'string') {
+          return AF.createTermExpression(DF.literal(val));
+        }
+        return AF.createOperatorExpression('str', [ AF.createTermExpression(val) ]);
+      }),
+    ),
+  ]);
 }
 
-export function templateLiteralToStr(template: TemplateLiteral): string {
-  const strArgs = template.value.map((arg) => {
-    if (typeof arg === 'string') {
-      return arg;
-    }
-    return `STR ( ?${arg.value} )`;
-  });
-  return `STDT( CONCAT ( ${strArgs.join(' , ')} ) , ${template.datatype.value} )`;
+export function templateLiteralToExpr(AF: AlgebraFactory, DF: DataFactory, template: TemplateLiteral):
+Algebra.Expression {
+  return AF.createOperatorExpression('stdt', [
+    AF.createOperatorExpression(
+      'concat',
+      template.value.map((val) => {
+        if (typeof val === 'string') {
+          return AF.createTermExpression(DF.literal(val));
+        }
+        return AF.createOperatorExpression('str', [ AF.createTermExpression(val) ]);
+      }),
+    ),
+  ]);
 }
 
-export function templateBlankToStr(template: TemplateBlank): string {
-  return `<internal://blank>( ${template.value.map(arg => `?${arg.value}`).join(' , ')}) )`;
+export function templateBlankToExpr(AF: AlgebraFactory, DF: DataFactory, template: TemplateBlank): Algebra.Expression {
+  return AF.createNamedExpression(DF.namedNode('internal://blank'), [
+    AF.createOperatorExpression(
+      'concat',
+      template.value.map(val => AF.createOperatorExpression('str', [ AF.createTermExpression(val) ])),
+    ),
+  ]);
 }
 
-export function templateQuadToStr(template: TemplateQuad): string {
-  const args = [ template.subject, template.predicate, template.object ]
-    .map(templateToStr).join(' , ');
-  return `TRIPLE( ${args} )`;
+export function templateQuadToExpr(AF: AlgebraFactory, DF: DataFactory, template: TemplateQuad): Algebra.Expression {
+  return AF.createOperatorExpression('triple', [ template.subject, template.predicate, template.object ]
+    .map(x => templateToExpr(AF, DF, x)));
 }
 
-export function templateToStr(template: Template | RDF.Term): string {
+export function templateToExpr(AF: AlgebraFactory, DF: DataFactory, template: Template | RDF.Term): Algebra.Expression {
   if (isRdfTerm(template)) {
-    return termToString(template);
+    return AF.createTermExpression(template);
   }
   switch (template.subType) {
     case 'NamedNode':
-      return templateIriToStr(template);
+      return templateIriToExpr(AF, DF, template);
     case 'Literal':
-      return templateLiteralToStr(template);
+      return templateLiteralToExpr(AF, DF, template);
     case 'BlankNode':
-      return templateBlankToStr(template);
+      return templateBlankToExpr(AF, DF, template);
     case 'Quad':
-      return templateQuadToStr(template);
+      return templateQuadToExpr(AF, DF, template);
   }
 }

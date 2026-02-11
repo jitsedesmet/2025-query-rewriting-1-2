@@ -190,7 +190,8 @@ function rewriteToPreBindVars({ AF, DF, mappingHeadBinds, operation }: {
   // For all statically bound mappingHead vars, register the terms they are equal too.
   // (add extend at start of subselect)
   let mappingHeadExtensions: Alg.Extend | Alg.Bgp = AF.createBgp([]);
-  for (const [ variable, expr ] of Object.entries(mappingHeadBinds)) {
+  for (const [ variable, expr ] of Object.entries(mappingHeadBinds).sort((a, b) =>
+    a[0].localeCompare(b[0]))) {
     mappingHeadExtensions = AF.createExtend(
       mappingHeadExtensions,
       DF.variable(variable),

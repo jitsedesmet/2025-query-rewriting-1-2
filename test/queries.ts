@@ -43,9 +43,9 @@ SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) (
     {
       SELECT ?m0_o WHERE {
         {
-          BIND( <https://example.com/t> AS ?m0_t )
-          BIND( <https://example.com/me> AS ?m0_s )
           BIND( <https://example.com/name> AS ?m0_p )
+          BIND( <https://example.com/me> AS ?m0_s )
+          BIND( <https://example.com/t> AS ?m0_t )
         }
         ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
         ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> ?m0_s .
@@ -65,9 +65,9 @@ SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) (
   UNION {
     SELECT ( "dummy"^^<http://www.w3.org/2001/XMLSchema#string> AS ?dummy ) WHERE {
       {
-        BIND( <https://example.com/t> AS ?m1_s )
-        BIND( <https://example.com/statedBy> AS ?m1_p )
         BIND( <https://example.com/govBE> AS ?m1_o )
+        BIND( <https://example.com/statedBy> AS ?m1_p )
+        BIND( <https://example.com/t> AS ?m1_s )
       }
       {
         ?m1_s ?m1_p ?m1_o .

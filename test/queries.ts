@@ -63,7 +63,7 @@ SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) (
     FILTER ( FALSE )
   }
   UNION {
-    SELECT ( "dummy"^^<http://www.w3.org/2001/XMLSchema#string> AS ?dummy ) WHERE {
+    SELECT ( "dummy" AS ?dummy ) WHERE {
       {
         BIND( <https://example.com/govBE> AS ?m1_o )
         BIND( <https://example.com/statedBy> AS ?m1_p )
@@ -71,7 +71,7 @@ SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) (
       }
       {
         ?m1_s ?m1_p ?m1_o .
-        FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?m1_p != "rdf:reifies"^^<http://www.w3.org/2001/XMLSchema#string> ) && NOT EXISTS {
+        FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?m1_p != "rdf:reifies" ) && NOT EXISTS {
           ?m1_sRoot <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m1_s .
         }
         ) ) )
@@ -96,7 +96,7 @@ SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) (
     {
       SELECT ?m1_o ?m1_p ?m1_s WHERE {
         ?m1_s ?m1_p ?m1_o .
-        FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?m1_p != "rdf:reifies"^^<http://www.w3.org/2001/XMLSchema#string> ) && NOT EXISTS {
+        FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?m1_p != "rdf:reifies" ) && NOT EXISTS {
           ?m1_sRoot <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m1_s .
         }
         ) ) )
@@ -126,7 +126,7 @@ SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) (
     {
       SELECT ?m1_o ?rm1_s_AND_p WHERE {
         ?rm1_s_AND_p ?rm1_s_AND_p ?m1_o .
-        FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?rm1_s_AND_p != "rdf:reifies"^^<http://www.w3.org/2001/XMLSchema#string> ) && NOT EXISTS {
+        FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?rm1_s_AND_p != "rdf:reifies" ) && NOT EXISTS {
           ?m1_sRoot <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?rm1_s_AND_p .
         }
         ) ) )
@@ -158,10 +158,10 @@ SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) (
     FILTER ( FALSE )
   }
   UNION {
-    SELECT ( "dummy"^^<http://www.w3.org/2001/XMLSchema#string> AS ?dummy ) WHERE {
+    SELECT ( "dummy" AS ?dummy ) WHERE {
       {
         <https://example.com/t> <https://example.com/statedBy> <https://example.com/govBE> .
-        FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?m1_p != "rdf:reifies"^^<http://www.w3.org/2001/XMLSchema#string> ) && NOT EXISTS {
+        FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?m1_p != "rdf:reifies" ) && NOT EXISTS {
           ?m1_sRoot <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <https://example.com/t> .
         }
         ) ) )
@@ -186,7 +186,7 @@ SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) (
     {
       SELECT ?m1_o ?m1_p ?m1_s WHERE {
         ?m1_s ?m1_p ?m1_o .
-        FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?m1_p != "rdf:reifies"^^<http://www.w3.org/2001/XMLSchema#string> ) && NOT EXISTS {
+        FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?m1_p != "rdf:reifies" ) && NOT EXISTS {
           ?m1_sRoot <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m1_s .
         }
         ) ) )
@@ -213,7 +213,7 @@ SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) (
     {
       SELECT ?m1_o ?rm1_s_AND_p WHERE {
         ?rm1_s_AND_p ?rm1_s_AND_p ?m1_o .
-        FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?rm1_s_AND_p != "rdf:reifies"^^<http://www.w3.org/2001/XMLSchema#string> ) && NOT EXISTS {
+        FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?rm1_s_AND_p != "rdf:reifies" ) && NOT EXISTS {
           ?m1_sRoot <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?rm1_s_AND_p .
         }
         ) ) )
@@ -239,10 +239,10 @@ SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) (
     BIND( ?m0_o AS ?uq_name )
   }
   {
-    SELECT ( "dummy"^^<http://www.w3.org/2001/XMLSchema#string> AS ?dummy ) WHERE {
+    SELECT ( "dummy" AS ?dummy ) WHERE {
       {
         <https://example.com/t> <https://example.com/statedBy> <https://example.com/govBE> .
-        FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?m1_p != "rdf:reifies"^^<http://www.w3.org/2001/XMLSchema#string> ) && NOT EXISTS {
+        FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?m1_p != "rdf:reifies" ) && NOT EXISTS {
           ?m1_sRoot <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <https://example.com/t> .
         }
         ) ) )
@@ -267,7 +267,7 @@ SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) (
     {
       SELECT ?m1_o ?m1_p ?m1_s WHERE {
         ?m1_s ?m1_p ?m1_o .
-        FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?m1_p != "rdf:reifies"^^<http://www.w3.org/2001/XMLSchema#string> ) && NOT EXISTS {
+        FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?m1_p != "rdf:reifies" ) && NOT EXISTS {
           ?m1_sRoot <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m1_s .
         }
         ) ) )
@@ -294,7 +294,7 @@ SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) (
     {
       SELECT ?m1_o ?rm1_s_AND_p WHERE {
         ?rm1_s_AND_p ?rm1_s_AND_p ?m1_o .
-        FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?rm1_s_AND_p != "rdf:reifies"^^<http://www.w3.org/2001/XMLSchema#string> ) && NOT EXISTS {
+        FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?rm1_s_AND_p != "rdf:reifies" ) && NOT EXISTS {
           ?m1_sRoot <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?rm1_s_AND_p .
         }
         ) ) )

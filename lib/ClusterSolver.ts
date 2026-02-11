@@ -95,8 +95,16 @@ export class ClusterSolver {
       }
     } else {
       // Neither `from` nor `to` is a var. First condition would have checked this in case `from` is a term.
+      // Check term types match:
+      const template = <Exclude<typeof from, RDF.Term>> from;
+      if (template.subType !== to.termType) {
+        throw new Error(`Cannot match template of type ${template.subType} with term of type ${to.termType}. Matching
+${JSON.stringify(template)}
+with
+${JSON.stringify(to)}`);
+      }
       this.staticTemplateValidation.push({
-        template: <Exclude<typeof from, RDF.Term>> from,
+        template,
         term: to,
       });
     }

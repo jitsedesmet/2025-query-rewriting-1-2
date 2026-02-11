@@ -7,7 +7,12 @@ import { nullifyJoinOverIncompatibleBounds } from '../lib/transformations/nullif
 import { pushUpBoundedFromUnion } from '../lib/transformations/pushUpBoundedFromUnion.js';
 import { operationTransform, queryTransform } from '../lib/transformBgp.js';
 import type { TransformContext } from '../lib/transformContext.js';
-import { parseQuery, createPartialContext, transformContextFromConstructs } from '../lib/transformContext.js';
+import {
+  prefixMappingVars,
+  parseQuery,
+  createPartialContext,
+  transformContextFromConstructs,
+} from '../lib/transformContext.js';
 import type { Mapping } from '../lib/types.js';
 import {
   expectedQuery,
@@ -37,7 +42,8 @@ describe('dummy', () => {
   ): string {
     const transformerContext = {
       ...c,
-      mappers,
+      mappers: mappers
+        .map((mapping, index) => prefixMappingVars(c, mapping, `m${index}_`)),
     };
     return queryTransform(transformerContext, userQuery, transformations);
   }
@@ -110,7 +116,7 @@ describe('dummy', () => {
     //         }
     //       }
     //       BIND( ?m0_s AS ?uq_s )
-    //       BIND( BNODE( "e_blank"^^<http://www.w3.org/2001/XMLSchema#string> ) AS ?uq_a )
+    //       BIND( BNODE( "e_blank" ) AS ?uq_a )
     //     }
     //     {
     //       {
@@ -122,7 +128,7 @@ describe('dummy', () => {
     //         }
     //       }
     //       BIND( ?m0_s AS ?uq_s )
-    //       BIND( BNODE( "e_blank"^^<http://www.w3.org/2001/XMLSchema#string> ) AS ?uq_b )
+    //       BIND( BNODE( "e_blank" ) AS ?uq_b )
     //     }
     //   }
     //   UNION {
@@ -136,7 +142,7 @@ describe('dummy', () => {
     //         }
     //       }
     //       BIND( ?m0_s AS ?uq_s )
-    //       BIND( BNODE( "e_blank"^^<http://www.w3.org/2001/XMLSchema#string> ) AS ?uq_b2 )
+    //       BIND( BNODE( "e_blank" ) AS ?uq_b2 )
     //     }
     //   }
     // }`,
@@ -461,7 +467,7 @@ describe('dummy', () => {
   }
   {
     {
-      SELECT ( "dummy"^^<http://www.w3.org/2001/XMLSchema#string> AS ?dummy ) WHERE {
+      SELECT ( "dummy" AS ?dummy ) WHERE {
         <ex://b> <ex://c> <ex://c> .
       }
     }
@@ -470,7 +476,7 @@ describe('dummy', () => {
   }
   UNION {
     {
-      SELECT ( "dummy"^^<http://www.w3.org/2001/XMLSchema#string> AS ?dummy ) WHERE {
+      SELECT ( "dummy" AS ?dummy ) WHERE {
         <ex://b> <ex://d> <ex://d> .
       }
     }
@@ -551,13 +557,34 @@ describe('dummy', () => {
     `SELECT * { ?s ?p <ex://a> }`,
     `SELECT ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) WHERE {
   {
-    FILTER ( FALSE )
+    {
+      SELECT ?m0_p ?m0_s WHERE {
+        ?m0_s ?m0_p <ex://b> .
+        FILTER ( ( <ex://a> = IRI( CONCAT( "ex://" , STR( ?m0_s ) ) ) ) )
+      }
+    }
+    BIND( ?m0_p AS ?uq_p )
+    BIND( ?m0_s AS ?uq_s )
   }
   UNION {
-    FILTER ( FALSE )
+    {
+      SELECT ?m1_p ?m1_s WHERE {
+        ?m1_s ?m1_p <ex://c> .
+        FILTER ( ( <ex://a> = IRI( CONCAT( "example://" , STR( ?m1_s ) ) ) ) )
+      }
+    }
+    BIND( ?m1_p AS ?uq_p )
+    BIND( ?m1_s AS ?uq_s )
   }
   UNION {
-    FILTER ( FALSE )
+    {
+      SELECT ?m2_p ?m2_s WHERE {
+        ?m2_s ?m2_p <ex://c> .
+        FILTER ( ( <ex://a> = IRI( CONCAT( STR( ?m2_s ) ) ) ) )
+      }
+    }
+    BIND( ?m2_p AS ?uq_p )
+    BIND( ?m2_s AS ?uq_s )
   }
   UNION {
     FILTER ( FALSE )

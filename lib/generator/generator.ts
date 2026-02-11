@@ -1,7 +1,7 @@
 import { GeneratorBuilder } from '@traqula/core';
 import { Generator, sparql12GeneratorBuilder } from '@traqula/generator-sparql-1-2';
 import type { Query, SparqlGeneratorContext, Update } from '@traqula/rules-sparql-1-2';
-import { datatypeBoolean } from '../utils.js';
+import { datatypeBoolean, datatypeString } from '../utils.js';
 
 /**
  * Since we generate a lot of `false` literals, let's make sure we print it as small as possible.
@@ -18,6 +18,8 @@ const alternativeLiteralGenerator: typeof literalRule = {
       value === 'TRUE' || value === 'FALSE'
     )) {
       c.astFactory.printFilter(ast, () => $.PRINT_WORD(value));
+    } else if (typeof type === 'object' && type.value === datatypeString.value) {
+      c.astFactory.printFilter(ast, () => $.PRINT_WORD('"', ast.value, '"'));
     } else {
       literalRule.gImpl($)(ast, c);
     }

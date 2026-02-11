@@ -260,8 +260,8 @@ function bindPatternTerms({ subQuery, AF, DF, triplePatternBinds }: {
   triplePatternBinds: Record<string, RDF.Term | Template>;
 } & Pick<TransformContext, 'DF' | 'AF'>): Alg.Project | Alg.Extend {
   let buildOperation: Alg.Project | Alg.Extend = subQuery;
-  // Finally add the binds after the subselect
-  for (const [ variable, template ] of Object.entries(triplePatternBinds)) {
+  // Finally add the binds after the subselect - Sort to create stable tests
+  for (const [ variable, template ] of Object.entries(triplePatternBinds).sort((a, b) => a[0].localeCompare(b[0]))) {
     const expression = templateToExpr(AF, DF, template);
     buildOperation = AF.createExtend(
       buildOperation,

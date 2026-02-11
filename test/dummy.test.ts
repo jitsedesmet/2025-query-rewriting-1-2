@@ -196,8 +196,8 @@ describe('dummy', () => {
         ?m0_s <ex://b> ?m0_o .
       }
     }
-    BIND( ?m0_s AS ?uq_s )
     BIND( ?m0_o AS ?uq_o )
+    BIND( ?m0_s AS ?uq_s )
   }
   UNION {
     {
@@ -205,8 +205,8 @@ describe('dummy', () => {
         ?m1_s <ex://b> ?m1_o .
       }
     }
-    BIND( ?m1_s AS ?uq_s )
     BIND( ?m1_o AS ?uq_o )
+    BIND( ?m1_s AS ?uq_s )
   }
   BIND( <ex://b> AS ?uq_p )
 }`,
@@ -224,9 +224,9 @@ describe('dummy', () => {
         <ex://a> <ex://a> ?m0_o .
       }
     }
-    BIND( <ex://a> AS ?uq_s )
-    BIND( <ex://a> AS ?uq_p )
     BIND( ?m0_o AS ?uq_o )
+    BIND( <ex://a> AS ?uq_p )
+    BIND( <ex://a> AS ?uq_s )
   }
   UNION {
     {
@@ -234,9 +234,9 @@ describe('dummy', () => {
         <ex://b> <ex://b> ?m1_o .
       }
     }
-    BIND( <ex://b> AS ?uq_s )
-    BIND( <ex://b> AS ?uq_p )
     BIND( ?m1_o AS ?uq_o )
+    BIND( <ex://b> AS ?uq_p )
+    BIND( <ex://b> AS ?uq_s )
   }
   {
     {
@@ -244,8 +244,8 @@ describe('dummy', () => {
         <ex://a> <ex://a> ?m0_o .
       }
     }
-    BIND( <ex://a> AS ?uq_p )
     BIND( ?m0_o AS ?uq_o )
+    BIND( <ex://a> AS ?uq_p )
   }
 }`,
     [ `CONSTRUCT WHERE { <ex://a> <ex://a> ?o }`, `CONSTRUCT WHERE { <ex://b> <ex://b> ?o }` ],
@@ -262,9 +262,9 @@ describe('dummy', () => {
         <ex://a> <ex://a> ?m0_o .
       }
     }
-    BIND( <ex://a> AS ?uq_s )
-    BIND( <ex://a> AS ?uq_p )
     BIND( ?m0_o AS ?uq_o )
+    BIND( <ex://a> AS ?uq_p )
+    BIND( <ex://a> AS ?uq_s )
   }
   {
     {
@@ -272,8 +272,8 @@ describe('dummy', () => {
         <ex://a> <ex://a> ?m0_o .
       }
     }
-    BIND( <ex://a> AS ?uq_p )
     BIND( ?m0_o AS ?uq_o )
+    BIND( <ex://a> AS ?uq_p )
   }
 }`,
     [ `CONSTRUCT WHERE { <ex://a> <ex://a> ?o }`, `CONSTRUCT WHERE { <ex://b> <ex://b> ?o }` ],
@@ -290,9 +290,9 @@ describe('dummy', () => {
         <ex://a> <ex://a> ?m0_o .
       }
     }
-    BIND( <ex://a> AS ?uq_s )
-    BIND( <ex://a> AS ?uq_p )
     BIND( ?m0_o AS ?uq_o )
+    BIND( <ex://a> AS ?uq_p )
+    BIND( <ex://a> AS ?uq_s )
   }
   UNION {
     {
@@ -300,9 +300,9 @@ describe('dummy', () => {
         <ex://a> <ex://b> ?m1_o .
       }
     }
-    BIND( <ex://a> AS ?uq_s )
-    BIND( <ex://b> AS ?uq_p )
     BIND( ?m1_o AS ?uq_o )
+    BIND( <ex://b> AS ?uq_p )
+    BIND( <ex://a> AS ?uq_s )
   }
   {
     {
@@ -310,8 +310,8 @@ describe('dummy', () => {
         <ex://a> <ex://a> ?m0_o .
       }
     }
-    BIND( <ex://a> AS ?uq_p )
     BIND( ?m0_o AS ?uq_o )
+    BIND( <ex://a> AS ?uq_p )
   }
   UNION {
     {
@@ -319,8 +319,8 @@ describe('dummy', () => {
         <ex://a> <ex://b> ?m1_o .
       }
     }
-    BIND( <ex://b> AS ?uq_p )
     BIND( ?m1_o AS ?uq_o )
+    BIND( <ex://b> AS ?uq_p )
   }
 }`,
     [ `CONSTRUCT WHERE { <ex://a> <ex://a> ?o }`, `CONSTRUCT WHERE { <ex://a> <ex://b> ?o }`, `CONSTRUCT WHERE { <ex://b> <ex://c> ?o }` ],
@@ -340,8 +340,8 @@ describe('dummy', () => {
         <ex://a> ?m0_p ?m0_o .
       }
     }
-    BIND( <ex://c> AS ?uq_p )
     BIND( ?m0_o AS ?uq_o )
+    BIND( <ex://c> AS ?uq_p )
   }
   {
     {
@@ -349,8 +349,8 @@ describe('dummy', () => {
         <ex://b> <ex://c> ?m1_o .
       }
     }
-    BIND( <ex://c> AS ?uq_p )
     BIND( ?m1_o AS ?uq_o )
+    BIND( <ex://c> AS ?uq_p )
   }
 }`,
     [ `CONSTRUCT WHERE { <ex://a> ?p ?o }`, `CONSTRUCT WHERE { <ex://b> <ex://c> ?o }` ],
@@ -375,8 +375,8 @@ describe('dummy', () => {
         <ex://a> ?m0_p ?m0_o .
       }
     }
-    BIND( <ex://c> AS ?uq_p )
     BIND( ?m0_o AS ?uq_o )
+    BIND( <ex://c> AS ?uq_p )
   }
   {
     {
@@ -384,8 +384,8 @@ describe('dummy', () => {
         <ex://b> <ex://c> ?m1_o .
       }
     }
-    BIND( <ex://c> AS ?uq_p )
     BIND( ?m1_o AS ?uq_o )
+    BIND( <ex://c> AS ?uq_p )
   }
 }`,
     [ `CONSTRUCT WHERE { <ex://a> ?p ?o }`, `CONSTRUCT WHERE { <ex://b> <ex://c> ?o }` ],
@@ -412,8 +412,8 @@ describe('dummy', () => {
         <ex://a> ?m0_p ?m0_o .
       }
     }
-    BIND( ?m0_p AS ?uq_p )
     BIND( ?m0_o AS ?uq_o )
+    BIND( ?m0_p AS ?uq_p )
   }
   {
     {
@@ -421,8 +421,8 @@ describe('dummy', () => {
         <ex://b> <ex://c> ?m1_o .
       }
     }
-    BIND( <ex://c> AS ?uq_p )
     BIND( ?m1_o AS ?uq_o )
+    BIND( <ex://c> AS ?uq_p )
   }
   UNION {
     {
@@ -430,8 +430,8 @@ describe('dummy', () => {
         <ex://b> <ex://d> ?m2_o .
       }
     }
-    BIND( <ex://d> AS ?uq_p )
     BIND( ?m2_o AS ?uq_o )
+    BIND( <ex://d> AS ?uq_p )
   }
 }`,
     [ `CONSTRUCT WHERE { <ex://a> ?p ?o }`, `CONSTRUCT WHERE { <ex://b> <ex://c> ?o }`, `CONSTRUCT WHERE { <ex://b> <ex://d> ?o }` ],
@@ -445,19 +445,19 @@ describe('dummy', () => {
   {
     {
       SELECT ?m0_o ?m0_p WHERE {
-        VALUES ?m0_p {
+        VALUES ?m0_o {
           <ex://c>
           <ex://d>
         }
-        VALUES ?m0_o {
+        VALUES ?m0_p {
           <ex://c>
           <ex://d>
         }
         <ex://a> ?m0_p ?m0_o .
       }
     }
-    BIND( ?m0_p AS ?uq_p )
     BIND( ?m0_o AS ?uq_o )
+    BIND( ?m0_p AS ?uq_p )
   }
   {
     {
@@ -465,8 +465,8 @@ describe('dummy', () => {
         <ex://b> <ex://c> <ex://c> .
       }
     }
-    BIND( <ex://c> AS ?uq_p )
     BIND( <ex://c> AS ?uq_o )
+    BIND( <ex://c> AS ?uq_p )
   }
   UNION {
     {
@@ -474,8 +474,8 @@ describe('dummy', () => {
         <ex://b> <ex://d> <ex://d> .
       }
     }
-    BIND( <ex://d> AS ?uq_p )
     BIND( <ex://d> AS ?uq_o )
+    BIND( <ex://d> AS ?uq_p )
   }
 }`,
     [ `CONSTRUCT WHERE { <ex://a> ?p ?o }`, `CONSTRUCT WHERE { <ex://b> <ex://c> <ex://c> }`, `CONSTRUCT WHERE { <ex://b> <ex://d> <ex://d> }` ],

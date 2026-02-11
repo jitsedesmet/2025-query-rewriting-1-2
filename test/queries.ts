@@ -88,9 +88,9 @@ SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) (
         ?m0_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m0_g_0 .
       }
     }
-    BIND( ?m0_t AS ?uq_s )
-    BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?uq_p )
     BIND( <<( ?m0_s ?m0_p ?m0_o )>> AS ?uq_o )
+    BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?uq_p )
+    BIND( ?m0_t AS ?uq_s )
   }
   UNION {
     {
@@ -102,9 +102,9 @@ SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) (
         ) ) )
       }
     }
-    BIND( ?m1_s AS ?uq_s )
-    BIND( ?m1_p AS ?uq_p )
     BIND( ?m1_o AS ?uq_o )
+    BIND( ?m1_p AS ?uq_p )
+    BIND( ?m1_s AS ?uq_s )
   }
   {
     {
@@ -119,8 +119,8 @@ SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) (
         ?m0_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m0_g_0 .
       }
     }
-    BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?uq_s1 )
     BIND( <<( ?m0_s ?m0_p ?m0_o )>> AS ?uq_o1 )
+    BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?uq_s1 )
   }
   UNION {
     {
@@ -132,8 +132,8 @@ SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) (
         ) ) )
       }
     }
-    BIND( ?rm1_s_AND_p AS ?uq_s1 )
     BIND( ?m1_o AS ?uq_o1 )
+    BIND( ?rm1_s_AND_p AS ?uq_s1 )
   }
 }`;
 
@@ -178,9 +178,9 @@ SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) (
         ?m0_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m0_g_0 .
       }
     }
-    BIND( ?m0_t AS ?uq_s )
-    BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?uq_p )
     BIND( <<( ?m0_s ?m0_p ?m0_o )>> AS ?uq_o )
+    BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?uq_p )
+    BIND( ?m0_t AS ?uq_s )
   }
   UNION {
     {
@@ -192,9 +192,9 @@ SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) (
         ) ) )
       }
     }
-    BIND( ?m1_s AS ?uq_s )
-    BIND( ?m1_p AS ?uq_p )
     BIND( ?m1_o AS ?uq_o )
+    BIND( ?m1_p AS ?uq_p )
+    BIND( ?m1_s AS ?uq_s )
   }
   {
     {
@@ -206,8 +206,8 @@ SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) (
         <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m0_g_0 .
       }
     }
-    BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?uq_s1 )
     BIND( <<( ?m0_s ?m0_p ?m0_o )>> AS ?uq_o1 )
+    BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?uq_s1 )
   }
   UNION {
     {
@@ -219,8 +219,8 @@ SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) (
         ) ) )
       }
     }
-    BIND( ?rm1_s_AND_p AS ?uq_s1 )
     BIND( ?m1_o AS ?uq_o1 )
+    BIND( ?rm1_s_AND_p AS ?uq_s1 )
   }
 }`;
 
@@ -259,9 +259,9 @@ SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) (
         ?m0_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m0_g_0 .
       }
     }
-    BIND( ?m0_t AS ?uq_s )
-    BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?uq_p )
     BIND( <<( ?m0_s ?m0_p ?m0_o )>> AS ?uq_o )
+    BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?uq_p )
+    BIND( ?m0_t AS ?uq_s )
   }
   UNION {
     {
@@ -273,9 +273,9 @@ SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) (
         ) ) )
       }
     }
-    BIND( ?m1_s AS ?uq_s )
-    BIND( ?m1_p AS ?uq_p )
     BIND( ?m1_o AS ?uq_o )
+    BIND( ?m1_p AS ?uq_p )
+    BIND( ?m1_s AS ?uq_s )
   }
   {
     {
@@ -287,8 +287,8 @@ SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) (
         <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m0_g_0 .
       }
     }
-    BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?uq_s1 )
     BIND( <<( ?m0_s ?m0_p ?m0_o )>> AS ?uq_o1 )
+    BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?uq_s1 )
   }
   UNION {
     {
@@ -300,7 +300,7 @@ SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) (
         ) ) )
       }
     }
-    BIND( ?rm1_s_AND_p AS ?uq_s1 )
     BIND( ?m1_o AS ?uq_o1 )
+    BIND( ?rm1_s_AND_p AS ?uq_s1 )
   }
 }`;

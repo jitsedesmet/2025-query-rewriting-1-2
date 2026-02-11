@@ -234,13 +234,14 @@ function wrapOperationInProject({
 } & Pick<TransformContext, 'astTransformer' | 'DF' | 'AF'>): Algebra.Project {
   let buildOperation = operation;
   // All variables required from subselect
-  const variablesToSelect: RDF.Variable[] = [];
+  const variablesToSelect: Record<string, RDF.Variable> = {};
   astTransformer.visitObject(Object.values(triplePatternBinds), (something) => {
     if (isRdfVar(something)) {
-      variablesToSelect.push(something);
+      variablesToSelect[something.value] = something;
     }
   });
-  if (variablesToSelect.length === 0) {
+  const vars = Object.values(variablesToSelect);
+  if (vars.length === 0) {
     // You cannot select nothing, but actually we just want this subquery to validate if data exists.
     // You cannot have a subAsk, but you can do a select over a dummy var: SELECT (1 as ?dummy)
     // [proof this works](https://query.comunica.dev/#transientDatasources=%2F%2Ffragments.dbpedia.org%2F2016-04%2Fen&query=SELECT%20*%0AWHERE%20%7B%0A%20%20%3Fs%20%3Fp%20%3Fo%20.%0A%20%20%7B%20SELECT%20%281%20as%20%3Fdummy%29%20WHERE%20%7B%0A%20%20%20%20%20%20%3Chttp%3A%2F%2F0-access.newspaperarchive.com.lib.utep.edu%2Fus%2Fmississippi%2Fbiloxi%2Fbiloxi-daily-herald%2F1899%2F05-06%2Fpage-6%3Ftag%3Dtierce%2Bwine%26rtserp%3Dtags%2Ftierce-wine%3Fpage%3D2%3E%0A%20%20%20%20%20%20%3Chttp%3A%2F%2Fdbpedia.org%2Fproperty%2Fdate%3E%0A%20%20%20%20%20%20%221899-05-05%22%5E%5E%3Chttp%3A%2F%2Fwww.w3.org%2F2001%2FXMLSchema%23date%3E%0A%20%20%20%20%20%20%23%20%221899-05-06%22%5E%5E%3Chttp%3A%2F%2Fwww.w3.org%2F2001%2FXMLSchema%23date%3E%0A%20%20%20%7D%20%7D%0A%7D)
@@ -249,11 +250,11 @@ function wrapOperationInProject({
       DF.variable('dummy'),
       AF.createTermExpression(DF.literal('dummy')),
     );
-    variablesToSelect.push(DF.variable('dummy'));
+    vars.push(DF.variable('dummy'));
   }
   // SOrt allows for stable tests but does not practically change anything.
-  variablesToSelect.sort((a, b) => a.value.localeCompare(b.value));
-  return AF.createProject(buildOperation, variablesToSelect);
+  vars.sort((a, b) => a.value.localeCompare(b.value));
+  return AF.createProject(buildOperation, vars);
 }
 
 function bindPatternTerms({ subQuery, AF, DF, triplePatternBinds }: {

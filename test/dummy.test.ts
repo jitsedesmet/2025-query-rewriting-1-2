@@ -614,4 +614,50 @@ describe('dummy', () => {
       body: <Algebra.Project> parseQuery(c, 'SELECT * { ?s  ?p <ex://c> }'),
     }],
   ));
+
+  it('template mapping simple', ({ expect }) => testMappers(
+    expect,
+    'SELECT * { ?s ?p ?o }',
+    `SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) WHERE {
+  {
+    {
+      SELECT ?m0_p ?m0_s WHERE {
+        ?m0_s ?m0_p <ex://b> .
+      }
+    }
+    BIND( IRI( CONCAT( "ex://" , STR( ?m0_s ) ) ) AS ?uq_o )
+    BIND( ?m0_p AS ?uq_p )
+    BIND( ?m0_s AS ?uq_s )
+  }
+}`,
+    [{
+      head: c.AF.createMappingHead(c.DF.variable('s'), c.DF.variable('p'), c.AF.createTemplateIri(
+        [ 'ex://', c.DF.variable('s') ],
+      )),
+      body: <Algebra.Project> parseQuery(c, 'SELECT * { ?s  ?p <ex://b> }'),
+    }],
+  ));
+
+  it('template sps', ({ expect }) => testMappers(
+    expect,
+    'SELECT * { ?s  ?p ?s }',
+    `SELECT ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) WHERE {
+  {
+    {
+      SELECT ?m0_p ?m0_s WHERE {
+        ?m0_s ?m0_p <ex://b> .
+        FILTER ( ( ?m0_s = IRI( CONCAT( "ex://" , STR( ?m0_s ) ) ) ) )
+      }
+    }
+    BIND( ?m0_p AS ?uq_p )
+    BIND( ?m0_s AS ?uq_s )
+  }
+}`,
+    [{
+      head: c.AF.createMappingHead(c.DF.variable('s'), c.DF.variable('p'), c.AF.createTemplateIri(
+        [ 'ex://', c.DF.variable('s') ],
+      )),
+      body: <Algebra.Project> parseQuery(c, 'SELECT * { ?s  ?p <ex://b> }'),
+    }],
+  ));
 });

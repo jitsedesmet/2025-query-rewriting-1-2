@@ -882,4 +882,30 @@ describe('dummy', () => {
       body: <Algebra.Project> parseQuery(c, 'SELECT * { ?s ?p ?o }'),
     }],
   ));
+
+  it('blankNode template followed by bnode filter', ({ expect }) => testMappers(
+    expect,
+    'SELECT * { ?s ?p1 ?o1 ; FILTER(isBlank(?s)) }',
+    `SELECT ( ?uq_o1 AS ?o1 ) ( ?uq_p1 AS ?p1 ) ( ?uq_s AS ?s ) WHERE {
+  {
+    {
+      SELECT ?m0_o ?m0_p ?m0_s WHERE {
+        ?m0_s ?m0_p ?m0_o .
+      }
+    }
+    BIND( ?m0_o AS ?uq_o1 )
+    BIND( ?m0_p AS ?uq_p1 )
+    BIND( <internal://blank> ( ?m0_s , ?m0_p ) AS ?uq_s )
+  }
+  FILTER ( ISBLANK( ?uq_s ) )
+}`,
+    [{
+      head: c.AF.createMappingHead(
+        c.AF.createTemplateBlank([ c.DF.variable('s'), c.DF.variable('p') ]),
+        c.DF.variable('p'),
+        c.DF.variable('o'),
+      ),
+      body: <Algebra.Project> parseQuery(c, 'SELECT * { ?s ?p ?o }'),
+    }],
+  ));
 });

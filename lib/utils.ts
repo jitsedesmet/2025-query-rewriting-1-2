@@ -141,12 +141,10 @@ Algebra.Expression {
 }
 
 export function templateBlankToExpr(AF: AlgebraFactory, DF: DataFactory, template: TemplateBlank): Algebra.Expression {
-  return AF.createNamedExpression(DF.namedNode('internal://blank'), [
-    AF.createOperatorExpression(
-      'concat',
-      template.value.map(val => AF.createOperatorExpression('str', [ AF.createTermExpression(val) ])),
-    ),
-  ]);
+  return AF.createNamedExpression(
+    DF.namedNode('internal://blank'),
+    template.value.map(val => AF.createTermExpression(val)),
+  );
 }
 
 export function templateQuadToExpr(AF: AlgebraFactory, DF: DataFactory, template: TemplateQuad): Algebra.Expression {

@@ -820,4 +820,66 @@ describe('dummy', () => {
       body: <Algebra.Project> parseQuery(c, 'SELECT * { ?s ?p <ex://a> }'),
     }],
   ));
+
+  it('blankNode template generation', ({ expect }) => testMappers(
+    expect,
+    'SELECT * { ?s ?p1 ?o1 ; ?p2 ?o2 }',
+    `SELECT ( ?uq_o1 AS ?o1 ) ( ?uq_o2 AS ?o2 ) ( ?uq_p1 AS ?p1 ) ( ?uq_p2 AS ?p2 ) ( ?uq_s AS ?s ) WHERE {
+  {
+    {
+      SELECT ?m0_o ?m0_p ?m0_s WHERE {
+        ?m0_s ?m0_p ?m0_o .
+      }
+    }
+    BIND( ?m0_o AS ?uq_o1 )
+    BIND( ?m0_p AS ?uq_p1 )
+    BIND( <internal://blank> ( ?m0_s , ?m0_p ) AS ?uq_s )
+  }
+  UNION {
+    {
+      SELECT ?m1_o ?m1_p ?m1_s WHERE {
+        ?m1_s ?m1_p ?m1_o .
+      }
+    }
+    BIND( ?m1_o AS ?uq_o1 )
+    BIND( ?m1_p AS ?uq_p1 )
+    BIND( ?m1_s AS ?uq_s )
+  }
+  {
+    {
+      SELECT ?m0_o ?m0_p ?m0_s WHERE {
+        ?m0_s ?m0_p ?m0_o .
+      }
+    }
+    BIND( ?m0_o AS ?uq_o2 )
+    BIND( ?m0_p AS ?uq_p2 )
+    BIND( <internal://blank> ( ?m0_s , ?m0_p ) AS ?uq_s )
+  }
+  UNION {
+    {
+      SELECT ?m1_o ?m1_p ?m1_s WHERE {
+        ?m1_s ?m1_p ?m1_o .
+      }
+    }
+    BIND( ?m1_o AS ?uq_o2 )
+    BIND( ?m1_p AS ?uq_p2 )
+    BIND( ?m1_s AS ?uq_s )
+  }
+}`,
+    [{
+      head: c.AF.createMappingHead(
+        c.AF.createTemplateBlank([ c.DF.variable('s'), c.DF.variable('p') ]),
+        c.DF.variable('p'),
+        c.DF.variable('o'),
+      ),
+      body: <Algebra.Project> parseQuery(c, 'SELECT * { ?s ?p ?o }'),
+    }, {
+      head: c.AF.createMappingHead(
+        c.DF.variable('s'),
+        c.DF.variable('p'),
+        c.DF.variable('o'),
+      ),
+      body: <Algebra.Project> parseQuery(c, 'SELECT * { ?s ?p ?o }'),
+    }],
+  ));
 });

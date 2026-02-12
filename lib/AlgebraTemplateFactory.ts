@@ -1,6 +1,6 @@
 import { AlgebraFactory } from '@traqula/algebra-transformations-1-2';
 
-import type { MappingHead, TemplateIri } from './types.js';
+import type { MappingHead, TemplateBlank, TemplateIri, TemplateLiteral } from './types.js';
 import { optimizeTemplateArray } from './utils.js';
 
 export class AlgebraTemplateFactory extends AlgebraFactory {
@@ -11,6 +11,28 @@ export class AlgebraTemplateFactory extends AlgebraFactory {
       type: 'template',
       subType: 'NamedNode',
       value: optimizeTemplateArray(template),
+    };
+  }
+
+  public createTemplateLiteral(
+    template: TemplateLiteral['value'],
+    datatype: TemplateLiteral['datatype'],
+  ): TemplateLiteral {
+    return {
+      type: 'template',
+      subType: 'Literal',
+      value: optimizeTemplateArray(template),
+      datatype,
+    };
+  }
+
+  public createTemplateBlank(
+    template: TemplateBlank['value'],
+  ): TemplateBlank {
+    return {
+      type: 'template',
+      subType: 'BlankNode',
+      value: template,
     };
   }
 

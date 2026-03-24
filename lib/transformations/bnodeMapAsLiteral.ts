@@ -41,7 +41,9 @@ function expressionForConsistentConstruction(
         AF.createOperatorExpression('concat', [
           expressionLiteral(',literal@D,'),
           escapeUserInput(AF.createOperatorExpression('str', [ varAsExpr ])),
+          expressionLiteral(','),
           escapeUserInput(AF.createOperatorExpression('lang', [ varAsExpr ])),
+          expressionLiteral(','),
           escapeUserInput(AF.createOperatorExpression('langdir', [ varAsExpr ])),
         ]),
         AF.createOperatorExpression('if', [
@@ -50,11 +52,13 @@ function expressionForConsistentConstruction(
           AF.createOperatorExpression('concat', [
             expressionLiteral(',literal@,'),
             escapeUserInput(AF.createOperatorExpression('str', [ varAsExpr ])),
+            expressionLiteral(','),
             escapeUserInput(AF.createOperatorExpression('lang', [ varAsExpr ])),
           ]),
           AF.createOperatorExpression('concat', [
             expressionLiteral(',literal,'),
             escapeUserInput(AF.createOperatorExpression('str', [ varAsExpr ])),
+            expressionLiteral(','),
             escapeUserInput(AF.createOperatorExpression('str', [
               AF.createOperatorExpression('datatype', [ varAsExpr ]),
             ])),

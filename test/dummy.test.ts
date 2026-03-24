@@ -1,6 +1,7 @@
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { describe, it } from 'vitest';
 import type { expect as Expect } from 'vitest';
+import { internalBnodeAsSpecialIri, internalBnodeAsSpecialLiteral } from '../lib/transformations/bnodeMapAsLiteral.js';
 import { substituteVarsThatArePreBoundToTerms } from '../lib/transformations/boundedVarSubstitution.js';
 import { transformFilterFalse } from '../lib/transformations/filterFalse.js';
 import { nullifyJoinOverIncompatibleBounds } from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
@@ -907,5 +908,59 @@ describe('dummy', () => {
       ),
       body: <Algebra.Project> parseQuery(c, 'SELECT * { ?s ?p ?o }'),
     }],
+  ));
+
+  it('blankNode template followed by bnode filter rewritten to term', ({ expect }) => testMappers(
+    expect,
+    'SELECT * { ?s ?p1 ?o1 ; FILTER(isBlank(?s)) }',
+    `SELECT ( ?uq_o1 AS ?o1 ) ( ?uq_p1 AS ?p1 ) ( ?uq_s AS ?s ) WHERE {
+  {
+    {
+      SELECT ?m0_o ?m0_p ?m0_s WHERE {
+        ?m0_s ?m0_p ?m0_o .
+      }
+    }
+    BIND( ?m0_o AS ?uq_o1 )
+    BIND( ?m0_p AS ?uq_p1 )
+    BIND( STRDT( CONCAT( IF( ISIRI( ?m0_s ) , CONCAT( ",iri," , REPLACE( REPLACE( STR( ?m0_s ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) , IF( HASLANGDIR( ?m0_s ) , CONCAT( ",literal@D," , REPLACE( REPLACE( STR( ?m0_s ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) , "," , REPLACE( REPLACE( LANG( ?m0_s ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) , "," , REPLACE( REPLACE( LANGDIR( ?m0_s ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) , IF( HASLANG( ?m0_s ) , CONCAT( ",literal@," , REPLACE( REPLACE( STR( ?m0_s ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) , "," , REPLACE( REPLACE( LANG( ?m0_s ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) , CONCAT( ",literal," , REPLACE( REPLACE( STR( ?m0_s ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) , "," , REPLACE( REPLACE( STR( DATATYPE( ?m0_s ) ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) ) ) ) ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?uq_s )
+  }
+  FILTER ( ( DATATYPE( ?uq_s ) = "https://sparql-extension.knows.idlab.ugent.be/bnode" ) )
+}`,
+    [{
+      head: c.AF.createMappingHead(
+        c.AF.createTemplateBlank([ c.DF.variable('s') ]),
+        c.DF.variable('p'),
+        c.DF.variable('o'),
+      ),
+      body: <Algebra.Project> parseQuery(c, 'SELECT * { ?s ?p ?o }'),
+    }],
+    [ operationTransform, internalBnodeAsSpecialLiteral ],
+  ));
+
+  it('blankNode template followed by bnode filter rewritten to iri', ({ expect }) => testMappers(
+    expect,
+    'SELECT * { ?s ?p1 ?o1 ; FILTER(isBlank(?s)) }',
+    `SELECT ( ?uq_o1 AS ?o1 ) ( ?uq_p1 AS ?p1 ) ( ?uq_s AS ?s ) WHERE {
+  {
+    {
+      SELECT ?m0_o ?m0_p ?m0_s WHERE {
+        ?m0_s ?m0_p ?m0_o .
+      }
+    }
+    BIND( ?m0_o AS ?uq_o1 )
+    BIND( ?m0_p AS ?uq_p1 )
+    BIND( IRI( CONCAT( "https://myInternalBnode.example.org/" , SHA1( CONCAT( IF( ISIRI( ?m0_s ) , CONCAT( ",iri," , REPLACE( REPLACE( STR( ?m0_s ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) , IF( HASLANGDIR( ?m0_s ) , CONCAT( ",literal@D," , REPLACE( REPLACE( STR( ?m0_s ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) , "," , REPLACE( REPLACE( LANG( ?m0_s ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) , "," , REPLACE( REPLACE( LANGDIR( ?m0_s ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) , IF( HASLANG( ?m0_s ) , CONCAT( ",literal@," , REPLACE( REPLACE( STR( ?m0_s ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) , "," , REPLACE( REPLACE( LANG( ?m0_s ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) , CONCAT( ",literal," , REPLACE( REPLACE( STR( ?m0_s ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) , "," , REPLACE( REPLACE( STR( DATATYPE( ?m0_s ) ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) ) ) ) ) ) ) ) AS ?uq_s )
+  }
+  FILTER ( ( ISIRI( ?uq_s ) && STRSTARTS( STR( ?uq_s ) , "https://myInternalBnode.example.org/" ) ) )
+}`,
+    [{
+      head: c.AF.createMappingHead(
+        c.AF.createTemplateBlank([ c.DF.variable('s') ]),
+        c.DF.variable('p'),
+        c.DF.variable('o'),
+      ),
+      body: <Algebra.Project> parseQuery(c, 'SELECT * { ?s ?p ?o }'),
+    }],
+    [ operationTransform, internalBnodeAsSpecialIri ],
   ));
 });

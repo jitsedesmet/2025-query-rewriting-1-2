@@ -201,3 +201,26 @@ Empty groups emit a single binding that does not bind to anything ([proof](https
 
 Therefore, a mapping that does not match under a union does **NOT produce the empty group**.
 It does not produce results. To visualize this, one can also use the group: `{ FILTER(false) }` ([query](https://query.comunica.dev/#transientDatasources=%2F%2Ffragments.dbpedia.org%2F2016-04%2Fen&query=SELECT%20*%0AWHERE%20%7B%0A%20%20%7B%20FILTER%28false%29%20%7D%20UNION%20%7B%20FILTER%28false%29%20%7D%0A%7D))
+
+### Skolem function in mapping head
+
+We allow four skolem types:
+1. TemplateIri
+2. TemplateLiteral
+3. TemplateBlank
+4. TemplateQuad
+
+These functions will create a term of the appropriate term type, **but** TemplateBlank is special.
+First, we repeat the underlying datasets do NOT contain blanknode, since we require that we can consistently refer to all terms.
+The TemplateBlank skolem function receives a list of arguments and creates a unique term for each unique combination of arguments.
+To represent this into SPARQL, we have 2 options:
+1. We rewrite blank node creation to a [sparql extension function](https://www.w3.org/TR/sparql12-query/#extensionFunctions) `https://sparql-extension.knows.idlab.ugent.be/bnodeConsistent` that can create blank nodes matching the implementation described above.
+2. We use a combination of builtin sparql functions to mimic this implementation. Concretely, we use `strdt` together with `concat` to create a literal of type `my-special-blank` that implements the behaviour described.
+3. Same as two, but you use an iri with a specific prefix.
+4. You weaken the uniqueness requirement is less strong, and you wrap the literal of 2 within a sha1 function such that the chaining of TemplateBlank creations do not create increasingly long strings.
+
+All approaches have drawbacks.
+In the first case, you need to create an extension function within the federation query engine.
+In the other cases, the resulting term type is not a blank node, but instead an iri or literal.
+These approaches will thus not return a blanknode, but depending on the situation, that might even be desired.
+To correctly implement the last behavior, functions such as `isBlank` will need to be rewritten within the user query.

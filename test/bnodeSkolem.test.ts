@@ -31,7 +31,7 @@ describe('bnode skolem', () => {
       ]));
   });
 
-  it.skip('skolem to literal two vars param', async({ expect }) => {
+  it('skolem to literal two vars param', async({ expect }) => {
     const bnodeNoParams = AF.createNamedExpression(DF.namedNode('internal://blank'), [
       AF.createTermExpression(DF.variable('myVarA')),
       AF.createTermExpression(DF.variable('myVarB')),
@@ -43,11 +43,6 @@ describe('bnode skolem', () => {
 
     const res1 = internalBnodeAsSpecialLiteral(c, bnodeNoParams);
     const res2 = internalBnodeAsSpecialLiteral(c, bnodeNoParams2);
-    expect(res1)
-      .toEqual(AF.createOperatorExpression('strdt', [
-        AF.createOperatorExpression('struuid', []),
-        AF.createTermExpression(DF.namedNode(DT_INTERNAL_BNODE)),
-      ]));
-    expect(res1).toBe(res2);
+    expect(res1).toEqual(res2);
   });
 });

@@ -96,10 +96,9 @@ export function internalBnodeAsSpecialLiteral<T extends Algebra.Operation>(c: Tr
         let value = AF.createOperatorExpression('struuid', []);
         if (expression.args.length > 0) {
           // Make a big concat of conditionals
-          value = AF.createOperatorExpression('concat', expression.args.map((expression) => {
-            const casted = <Algebra.TermExpression> expression;
-            return mapVariable(<RDF.Variable> casted.term);
-          }));
+          value = AF.createOperatorExpression('concat', (<Algebra.TermExpression[]>expression.args)
+            .sort((a, b) => (<RDF.Variable> a.term).value.localeCompare((<RDF.Variable> b.term).value))
+            .map(expression => mapVariable(<RDF.Variable> expression.term)));
         }
 
         return AF.createOperatorExpression('strdt', [

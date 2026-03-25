@@ -5,6 +5,7 @@ import { internalBnodeAsSpecialIri, internalBnodeAsSpecialLiteral } from '../lib
 import { substituteVarsThatArePreBoundToTerms } from '../lib/transformations/boundedVarSubstitution.js';
 import { transformFilterFalse } from '../lib/transformations/filterFalse.js';
 import { nullifyJoinOverIncompatibleBounds } from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
+import { rewriteNonRecursivePaths } from '../lib/transformations/pathTransformation.js';
 import { pushUpBoundedFromUnion } from '../lib/transformations/pushUpBoundedFromUnion.js';
 import { operationTransform, queryTransform } from '../lib/transformBgp.js';
 import type { TransformContext } from '../lib/transformContext.js';
@@ -519,6 +520,63 @@ describe('dummy', () => {
 }`,
     [],
     [],
+  ));
+
+  it('algebra transformation on paths only leaving * and +', ({ expect }) => testConstructMappers(
+    expect,
+    `SELECT * {
+    ?s1 <ex://a> ?o1 .
+    ?s2 <ex://a>/<ex://b> ?o2.
+    ?s3 ^<ex://a> ?o3 .
+    ?s4 <ex://a> | <ex://b> ?o4 .
+    ?s5 !<ex://a> ?o5 .
+    ?s6 <ex://a>? ?o6 .
+    ?s7 <ex://a>* ?o7 .
+    ?s8 <ex://a>+ ?o8 .
+    ?s9 !(^<ex://a>|<ex://b>) ?o9 .
+    
+    ?s10 <ex://a> | ^<ex://b> ?o10 .
+}`,
+    `SELECT ( ?uq_o1 AS ?o1 ) ( ?uq_o10 AS ?o10 ) ( ?uq_o2 AS ?o2 ) ( ?uq_o3 AS ?o3 ) ( ?uq_o4 AS ?o4 ) ( ?uq_o5 AS ?o5 ) ( ?uq_o6 AS ?o6 ) ( ?uq_o7 AS ?o7 ) ( ?uq_o8 AS ?o8 ) ( ?uq_o9 AS ?o9 ) ( ?uq_s1 AS ?s1 ) ( ?uq_s10 AS ?s10 ) ( ?uq_s2 AS ?s2 ) ( ?uq_s3 AS ?s3 ) ( ?uq_s4 AS ?s4 ) ( ?uq_s5 AS ?s5 ) ( ?uq_s6 AS ?s6 ) ( ?uq_s7 AS ?s7 ) ( ?uq_s8 AS ?s8 ) ( ?uq_s9 AS ?s9 ) WHERE {
+  ?uq_s1 <ex://a> ?uq_o1 .
+  ?uq_s2 <ex://a> ?uq_var0 .
+  ?uq_var0 <ex://b> ?uq_o2 .
+  ?uq_o3 <ex://a> ?uq_s3 .
+  {
+    ?uq_s4 <ex://a> ?uq_o4 .
+  }
+  UNION {
+    ?uq_s4 <ex://b> ?uq_o4 .
+  }
+  ?uq_s5 (!(<ex://a>)) ?uq_o5 .
+  {
+    ?uq_s6 <ex://a> ?uq_o6 .
+  }
+  UNION {
+    {
+      SELECT DISTINCT ?uq_s6 WHERE {
+        ?uq_s6 ?p_uq_s6 ?o_uq_s6 .
+      }
+    }
+    BIND( ?uq_s6 AS ?uq_o6 )
+  }
+  ?uq_s7 (<ex://a>*) ?uq_o7 .
+  ?uq_s8 (<ex://a>+) ?uq_o8 .
+  {
+    ?uq_s9 (!(<ex://b>)) ?uq_o9 .
+  }
+  UNION {
+    ?uq_o9 (!(<ex://a>)) ?uq_s9 .
+  }
+  {
+    ?uq_s10 <ex://a> ?uq_o10 .
+  }
+  UNION {
+    ?uq_o10 <ex://b> ?uq_s10 .
+  }
+}`,
+    [],
+    [ rewriteNonRecursivePaths ],
   ));
 
   it('does not emit infinite recursion', ({ expect }) => testConstructMappers(

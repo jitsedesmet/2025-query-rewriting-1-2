@@ -45,7 +45,14 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
     }
     if (pathOp.type === 'nps') {
       // https://www.w3.org/TR/sparql12-query/#eval_negatedPropertySet
-      return AF.createPath(subject, pathOp, object, path.graph);
+      const predicate = DF.variable(`rewrite_${counter++}`);
+      return AF.createFilter(
+        AF.createPattern(subject, predicate, object, path.graph),
+        AF.createOperatorExpression('notin', [
+          AF.createTermExpression(predicate),
+          ...pathOp.iris.map(x => AF.createTermExpression(x)),
+        ]),
+      );
     }
     // https://www.w3.org/TR/sparql12-query/#defn_evalPP_ZeroOrOnePath
     if (pathOp.type === 'ZeroOrOnePath') {

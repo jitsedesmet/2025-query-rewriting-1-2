@@ -536,6 +536,7 @@ describe('dummy', () => {
     ?s9 !(^<ex://a>|<ex://b>) ?o9 .
     
     ?s10 <ex://a> | ^<ex://b> ?o10 .
+    ?s5 !(<ex://a>|<ex://b>) ?o5 .
 }`,
     `SELECT ( ?uq_o1 AS ?o1 ) ( ?uq_o10 AS ?o10 ) ( ?uq_o2 AS ?o2 ) ( ?uq_o3 AS ?o3 ) ( ?uq_o4 AS ?o4 ) ( ?uq_o5 AS ?o5 ) ( ?uq_o6 AS ?o6 ) ( ?uq_o7 AS ?o7 ) ( ?uq_o8 AS ?o8 ) ( ?uq_o9 AS ?o9 ) ( ?uq_s1 AS ?s1 ) ( ?uq_s10 AS ?s10 ) ( ?uq_s2 AS ?s2 ) ( ?uq_s3 AS ?s3 ) ( ?uq_s4 AS ?s4 ) ( ?uq_s5 AS ?s5 ) ( ?uq_s6 AS ?s6 ) ( ?uq_s7 AS ?s7 ) ( ?uq_s8 AS ?s8 ) ( ?uq_s9 AS ?s9 ) WHERE {
   ?uq_s1 <ex://a> ?uq_o1 .
@@ -548,7 +549,10 @@ describe('dummy', () => {
   UNION {
     ?uq_s4 <ex://b> ?uq_o4 .
   }
-  ?uq_s5 (!(<ex://a>)) ?uq_o5 .
+  {
+    ?uq_s5 ?rewrite_0 ?uq_o5 .
+    FILTER ( ( ?rewrite_0 NOT IN <ex://a> ) )
+  }
   {
     ?uq_s6 <ex://a> ?uq_o6 .
   }
@@ -563,16 +567,22 @@ describe('dummy', () => {
   ?uq_s7 (<ex://a>*) ?uq_o7 .
   ?uq_s8 (<ex://a>+) ?uq_o8 .
   {
-    ?uq_s9 (!(<ex://b>)) ?uq_o9 .
+    ?uq_s9 ?rewrite_1 ?uq_o9 .
+    FILTER ( ( ?rewrite_1 NOT IN <ex://b> ) )
   }
   UNION {
-    ?uq_o9 (!(<ex://a>)) ?uq_s9 .
+    ?uq_o9 ?rewrite_2 ?uq_s9 .
+    FILTER ( ( ?rewrite_2 NOT IN <ex://a> ) )
   }
   {
     ?uq_s10 <ex://a> ?uq_o10 .
   }
   UNION {
     ?uq_o10 <ex://b> ?uq_s10 .
+  }
+  {
+    ?uq_s5 ?rewrite_3 ?uq_o5 .
+    FILTER ( ( ?rewrite_3 NOT IN ( <ex://a> , <ex://b> ) ) )
   }
 }`,
     [],

@@ -551,7 +551,7 @@ describe('dummy', () => {
   }
   {
     ?uq_s5 ?rewrite_0 ?uq_o5 .
-    FILTER ( ( ?rewrite_0 NOT IN <ex://a> ) )
+    FILTER ( ( ?rewrite_0 NOT IN ( <ex://a> ) ) )
   }
   {
     ?uq_s6 <ex://a> ?uq_o6 .
@@ -568,11 +568,11 @@ describe('dummy', () => {
   ?uq_s8 (<ex://a>+) ?uq_o8 .
   {
     ?uq_s9 ?rewrite_1 ?uq_o9 .
-    FILTER ( ( ?rewrite_1 NOT IN <ex://b> ) )
+    FILTER ( ( ?rewrite_1 NOT IN ( <ex://b> ) ) )
   }
   UNION {
     ?uq_o9 ?rewrite_2 ?uq_s9 .
-    FILTER ( ( ?rewrite_2 NOT IN <ex://a> ) )
+    FILTER ( ( ?rewrite_2 NOT IN ( <ex://a> ) ) )
   }
   {
     ?uq_s10 <ex://a> ?uq_o10 .

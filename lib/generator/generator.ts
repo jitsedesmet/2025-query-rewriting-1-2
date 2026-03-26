@@ -1,9 +1,5 @@
 import { GeneratorBuilder } from '@traqula/core';
 import { Generator, sparql12GeneratorBuilder } from '@traqula/generator-sparql-1-2';
-
-// eslint-disable-next-line max-len
-// eslint-disable-next-line import/no-extraneous-dependencies,unused-imports/no-unused-imports,unused-imports/no-unused-imports-ts
-import { gram as gram11 } from '@traqula/rules-sparql-1-1';
 import type { Query, SparqlGeneratorContext, Update } from '@traqula/rules-sparql-1-2';
 import { datatypeBoolean, datatypeString } from '../utils.js';
 
@@ -35,7 +31,7 @@ const ownGeneratorBuilder = GeneratorBuilder.create(sparql12GeneratorBuilder)
 type OwnGenerator = ReturnType<(typeof ownGeneratorBuilder)['build']>;
 
 export class MyGenerator extends Generator {
-  public readonly myGenerator: OwnGenerator = ownGeneratorBuilder.build();
+  private readonly myGenerator: OwnGenerator = ownGeneratorBuilder.build();
 
   public override generate(ast: Query | Update, context?: Partial<SparqlGeneratorContext>): string {
     return this.myGenerator.queryOrUpdate(ast, { ...this.defaultContext, ...context });

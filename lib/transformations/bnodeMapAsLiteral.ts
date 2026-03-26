@@ -6,11 +6,34 @@ import { DT_INTERNAL_BNODE, EXTENSION_FUNCTION_BNODE, IRI_PREFIX_BNODE } from '.
 import type { TransformContext } from '../transformContext.js';
 
 /**
- * The contents of this expression is a bunch of vars:
- *   <internal://blank> ( ?m0_s , ?m0_p )
- * rewrite to:
- *   STRDT( ?m0_s, ?m0p,  <internal://bnodetype>)
- *   STRDT( CONCAT ( STR (?s), STR(?p) ), <internal://bnodetype> )
+ * @fileoverview Blank node transformation utilities.
+ *
+ * Since underlying RDF 1.1 datasets cannot consistently reference blank nodes,
+ * this module provides transformations that convert internal blank node
+ * representation to either:
+ * 1. Typed literals with a special datatype
+ * 2. IRIs with a special prefix
+ *
+ * Both approaches allow blank nodes to be consistently identified across
+ * query results while maintaining the semantics of "same inputs = same node".
+ */
+
+/**
+ * Transforms an internal blank node expression into a deterministic expression.
+ *
+ * The expression `<internal://blank>(?var1, ?var2, ...)` is converted to an
+ * expression that consistently produces the same value for the same variable bindings.
+ *
+ * The output encodes each variable's value with its type information:
+ * - IRIs: `,iri,<escaped-value>`
+ * - Literals with lang+dir: `,literal@D,<value>,<lang>,<dir>`
+ * - Literals with lang: `,literal@,<value>,<lang>`
+ * - Plain/typed literals: `,literal,<value>,<datatype>`
+ *
+ * @param c - The transformation context
+ * @param expression - The internal blank node expression
+ * @param hashFunc - Optional hash function to shorten the output
+ * @returns The transformed expression
  */
 function expressionForConsistentConstruction(
   c: TransformContext,
@@ -109,6 +132,21 @@ function expressionForConsistentConstruction(
   return AF.createOperatorExpression(hashFunc, [ value ]);
 }
 
+/**
+ * Transforms internal blank nodes to typed literals with a special datatype.
+ *
+ * This transformation:
+ * 1. Converts `<internal://blank>(...)` to `STRDT(computed-value, <internal-bnode-type>)`
+ * 2. Rewrites `ISBLANK(x)` to check if the datatype matches the special type
+ *
+ * @param c - The transformation context
+ * @param op - The operation to transform
+ * @returns The transformed operation with blank nodes as typed literals
+ *
+ * @example
+ * // Internal blank node expression becomes:
+ * // STRDT(CONCAT(...encoded vars...), <https://sparql-extension.knows.idlab.ugent.be/bnode>)
+ */
 export function internalBnodeAsSpecialLiteral<T extends Algebra.Operation>(c: TransformContext, op: T): T {
   const { AF, DF } = c;
   return algebraUtils.mapOperationSub<'unsafe', typeof op>(
@@ -140,6 +178,23 @@ export function internalBnodeAsSpecialLiteral<T extends Algebra.Operation>(c: Tr
   );
 }
 
+/**
+ * Transforms internal blank nodes to IRIs with a special prefix.
+ *
+ * This transformation:
+ * 1. Converts `<internal://blank>(...)` to `IRI(CONCAT(prefix, SHA1(computed-value)))`
+ * 2. Rewrites `ISBLANK(x)` to check if the IRI starts with the special prefix
+ *
+ * Using SHA1 keeps the IRI length manageable when blank nodes are nested.
+ *
+ * @param c - The transformation context
+ * @param op - The operation to transform
+ * @returns The transformed operation with blank nodes as prefixed IRIs
+ *
+ * @example
+ * // Internal blank node expression becomes:
+ * // IRI(CONCAT("https://myInternalBnode.example.org/", SHA1(...encoded vars...)))
+ */
 export function internalBnodeAsSpecialIri<T extends Algebra.Operation>(c: TransformContext, op: T): T {
   const { AF, DF } = c;
   return algebraUtils.mapOperationSub<'unsafe', typeof op>(

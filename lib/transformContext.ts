@@ -1,3 +1,4 @@
+/* eslint-disable jsdoc/check-param-names */
 import type * as RDF from '@rdfjs/types';
 import { toAlgebra } from '@traqula/algebra-sparql-1-2';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
@@ -12,19 +13,35 @@ import { MyGenerator } from './generator/generator.js';
 import type { Mapping, MappingHead } from './types.js';
 import { isRdfTerm } from './utils.js';
 
+/**
+ * The context object passed through all transformation operations.
+ * Contains all necessary factories, parsers, and the active mappings.
+ */
 export interface TransformContext {
+  /** SPARQL parser for parsing query strings */
   parser: Parser;
+  /** SPARQL generator for converting algebra back to query strings */
   generator: Generator;
+  /** Factory for creating AST nodes */
   astFactory: AstFactory;
+  /** Extended algebra factory with template creation methods */
   AF: AlgebraTemplateFactory;
+  /** RDF data factory for creating terms */
   DF: DataFactory;
+  /** Transformer for traversing and modifying AST/algebra structures */
   astTransformer: AstTransformer;
+  /** Solver for variable clustering and unification during rewriting */
   clusterSolver: ClusterSolver;
+  /** The active mappings to apply during transformation */
   mappers: Mapping[];
 }
 
 /**
- * Parse the query and change each variable by prefixing it with prefix
+ * Parses a SPARQL query string into algebra representation.
+ * Enables quad mode and converts blank nodes to variables.
+ * @param context - Object containing the parser
+ * @param query - SPARQL query string to parse
+ * @returns The parsed algebra operation
  */
 export function parseQuery(
   { parser }: Pick<TransformContext, 'parser'>,
@@ -34,6 +51,14 @@ export function parseQuery(
   return <Algebra.Construct> toAlgebra(ast, { quads: true, blankToVariable: true });
 }
 
+/**
+ * Prefixes all variable names in an operation with the given prefix.
+ * Used to avoid variable name collisions when combining multiple patterns.
+ * @param context - Object containing astTransformer and DF
+ * @param obj - The object to transform
+ * @param prefix - The prefix to add to all variable names
+ * @returns The object with all variables prefixed
+ */
 export function prefixVarsInOperation<T extends object>(
   { astTransformer, DF }: Pick<TransformContext, 'astTransformer' | 'DF'>,
   obj: T,
@@ -47,6 +72,13 @@ export function prefixVarsInOperation<T extends object>(
   });
 }
 
+/**
+ * Prefixes all variables in a mapping (both head and body) with the given prefix.
+ * @param c - Partial context with astTransformer and DF
+ * @param mapping - The mapping to transform
+ * @param prefix - The prefix to add (e.g., "m0_" for first mapper)
+ * @returns A new mapping with all variables prefixed
+ */
 export function prefixMappingVars(
   c: Pick<TransformContext, 'astTransformer' | 'DF'>,
   mapping: Mapping,
@@ -58,6 +90,20 @@ export function prefixMappingVars(
   };
 }
 
+/**
+ * Converts a SPARQL CONSTRUCT query string into a Mapping object.
+ *
+ * The CONSTRUCT query must have exactly one triple in the template (head).
+ * The WHERE clause becomes the mapping body, wrapped in a projection of
+ * the variables used in the head.
+ *
+ * @param context - Partial context with parser, AF, and astTransformer
+ * @param constructQuery - SPARQL CONSTRUCT query string
+ * @returns A Mapping with the template as head and WHERE clause as body
+ * @throws Error if the construct has != 1 template triple
+ * @throws Error if the head contains blank nodes
+ * @throws Error if the body uses the BNODE() function
+ */
 export function constructToMapper(
   { parser, AF, astTransformer }: Pick<TransformContext, 'parser' | 'AF' | 'astTransformer'>,
   constructQuery: string,
@@ -72,7 +118,7 @@ ${JSON.stringify(construct.template, null, 2)}`);
     type: 'template',
     subType: 'Quad',
   };
-  // Get used vars to create the propper projection
+  // Get used vars to create the proper projection
   const usedVars: Record<string, RDF.Variable> = {};
   for (const term of [ head.subject, head.object, head.predicate, head.graph ]) {
     if (term && isRdfTerm(term) && term.termType === 'Variable') {
@@ -103,6 +149,11 @@ ${JSON.stringify(construct.template, null, 2)}`);
   } satisfies Mapping;
 }
 
+/**
+ * Creates a partial TransformContext without mappers.
+ * Used as a base for creating full contexts with different mapper configurations.
+ * @returns A context object with all components except mappers
+ */
 export function createPartialContext(): Omit<TransformContext, 'mappers'> {
   return {
     parser: new Parser(),
@@ -115,6 +166,18 @@ export function createPartialContext(): Omit<TransformContext, 'mappers'> {
   };
 }
 
+/**
+ * Creates a complete TransformContext from an array of CONSTRUCT query strings.
+ * Each CONSTRUCT query becomes a mapper with its variables prefixed (m0_, m1_, etc.).
+ *
+ * @param mappers - Array of SPARQL CONSTRUCT query strings defining the mappings
+ * @returns A complete TransformContext ready for query transformation
+ * @example
+ * const context = transformContextFromConstructs([
+ *   'CONSTRUCT { ?t rdf:reifies <<( ?s ?p ?o )>> } WHERE { ... }',
+ *   'CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o . FILTER(!isTriple(?o)) }'
+ * ]);
+ */
 export function transformContextFromConstructs(mappers: readonly string[]): TransformContext {
   const partialContext = createPartialContext();
   const algebraMappers = mappers

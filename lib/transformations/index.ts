@@ -1,3 +1,29 @@
+/**
+ * @fileoverview Transformation module exports for SPARQL query rewriting.
+ *
+ * This module provides various optimization and transformation passes that can be
+ * applied to rewritten SPARQL queries. These transformations are typically applied
+ * in sequence after the core BGP rewriting.
+ *
+ * ## Available Transformations:
+ *
+ * - **substituteVarsThatArePreBoundToTerms**: Substitutes variables that are known
+ *   to be bound to specific terms, eliminating unnecessary bindings.
+ *
+ * - **transformFilterFalse**: Simplifies algebra by removing FILTER(FALSE) patterns
+ *   and their containing structures (UNION identity, JOIN absorbing element).
+ *
+ * - **nullifyJoinOverIncompatibleBounds**: Detects joins where variable bindings
+ *   from one branch are incompatible with another and replaces with FILTER(FALSE).
+ *
+ * - **pushUpBoundedFromUnion**: Hoists common variable bindings out of UNION branches
+ *   to the parent level for optimization.
+ *
+ * - **rewriteSinglePattern**: Core function that rewrites a single triple pattern
+ *   against a mapping definition.
+ *
+ * @module transformations
+ */
 export { substituteVarsThatArePreBoundToTerms } from './boundedVarSubstitution.js';
 export { transformFilterFalse } from './filterFalse.js';
 export { nullifyJoinOverIncompatibleBounds } from './nullifyJoinOverIncompatibleBounds.js';

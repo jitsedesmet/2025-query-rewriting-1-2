@@ -3,8 +3,14 @@ import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformContext } from '../transformContext.js';
 import { createFilterFalse, directExtensions, termIsStaticTerm } from '../utils.js';
 
+/**
+ * Represents a set of possible values for a variable.
+ * Supports union (combining possibilities) and disjunction (finding common values).
+ */
 class VariableSet {
+  /** If true, the variable has no fixed set of values (any value is possible) */
   public isNoFixed: boolean;
+  /** The set of possible values (only meaningful if isNoFixed is false) */
   public values: RDF.Term[];
 
   public constructor(...values: RDF.Term[]) {
@@ -12,12 +18,22 @@ class VariableSet {
     this.values = values;
   }
 
+  /**
+   * Creates a VariableSet representing an unbounded variable.
+   * @returns A VariableSet where any value is possible
+   */
   public static createNoFixed(): VariableSet {
     const res = new VariableSet();
     res.isNoFixed = true;
     return res;
   }
 
+  /**
+   * Computes the union of two VariableSets (all possible values from both).
+   * If either set is unbounded, the result is unbounded.
+   * @param other - The other VariableSet
+   * @returns A new VariableSet with combined values
+   */
   public union(other: VariableSet): VariableSet {
     if (this.isNoFixed || other.isNoFixed) {
       return VariableSet.createNoFixed();
@@ -28,6 +44,12 @@ class VariableSet {
     );
   }
 
+  /**
+   * Computes the intersection of two VariableSets (values present in both).
+   * If one set is unbounded, returns the bounded set's values.
+   * @param other - The other VariableSet
+   * @returns A new VariableSet with common values
+   */
   public disjunct(other: VariableSet): VariableSet {
     if (this.isNoFixed && other.isNoFixed) {
       return VariableSet.createNoFixed();
@@ -43,30 +65,52 @@ class VariableSet {
     );
   }
 
+  /**
+   * Checks if a term is compatible with this set of possible values.
+   * Variables are always compatible; concrete terms must be in the value set.
+   * @param term - The term to check
+   * @returns True if the term could match this VariableSet
+   */
   public termIsCompatible(term: RDF.Term): boolean {
     return this.isNoFixed || term.termType === 'Variable' || this.values.some(x => x.equals(term));
   }
 }
 
 /**
- * Example 1:
- * JOIN [
- *   UNION [ ?s = 'a', ?s = 'b' ],
- *   ?s = 'c'
- * ]
- *  -> { FILTER(false) }
+ * Optimization transformation that detects and eliminates incompatible join branches.
  *
- * Example 2:
- * JOIN [
- *   UNION [ ?s = 'a', ?s = 'b' ],
- *   ?s = 'a'
- * ]
- *  -> JOIN [ ?s = 'a', ?s = 'a'] -> Do not perform subquery resulting in ?s = 'b'
+ * After query rewriting, a JOIN may contain UNION branches where different alternatives
+ * bind variables to incompatible values. This transformation:
  *
- *  Each user query variable for a certain pattern gets bound after the subquery,
- *  either to a var of the subquery, or a term.
- * @param c
- * @param op
+ * 1. Analyzes variable bindings across JOIN operands
+ * 2. Computes the intersection of possible values for each variable
+ * 3. Replaces EXTEND operations with incompatible values with FILTER(FALSE)
+ * 4. Adds VALUES clauses to constrain subqueries to valid values only
+ *
+ * @example
+ * // Given query: SELECT * { ?s ?p ?o . <ex://a> ?p ?o }
+ * // With mappings: CONSTRUCT WHERE { <ex://a> <ex://a> ?o }
+ * //                CONSTRUCT WHERE { <ex://b> <ex://b> ?o }
+ * //
+ * // The first pattern creates a UNION binding ?s to <ex://a> or <ex://b>
+ * // The second pattern requires subject <ex://a>, constraining ?p
+ * // Since ?p from the <ex://b> mapping (value <ex://b>) doesn't match
+ * // the ?p from the second pattern (which works with <ex://a>),
+ * // the <ex://b> branch is eliminated.
+ *
+ * @example
+ * // With 3 mappings where the third has subject <ex://b>:
+ * // CONSTRUCT WHERE { <ex://a> <ex://a> ?o }
+ * // CONSTRUCT WHERE { <ex://a> <ex://b> ?o }
+ * // CONSTRUCT WHERE { <ex://b> <ex://c> ?o }
+ * //
+ * // The third mapping would bind ?s = <ex://b>, but the second pattern
+ * // in the query has subject <ex://a>. Since these are incompatible,
+ * // only the first two mappings (both with ?s = <ex://a>) survive.
+ *
+ * @param c - The transformation context
+ * @param op - The operation to transform
+ * @returns The transformed operation with incompatible branches eliminated
  */
 export function nullifyJoinOverIncompatibleBounds<T extends Algebra.Operation>(
   c: TransformContext,
@@ -90,6 +134,14 @@ export function nullifyJoinOverIncompatibleBounds<T extends Algebra.Operation>(
   );
 }
 
+/**
+ * Applies variable restrictions to JOIN operands.
+ * Replaces incompatible EXTEND operations with FILTER(FALSE) and
+ * adds VALUES constraints to subqueries where possible.
+ * @param c - The transformation context
+ * @param join - The JOIN to modify
+ * @param varSets - Map of variable names to their possible values
+ */
 function restrictOperations(c: TransformContext, join: Algebra.Join, varSets: Record<string, VariableSet>): void {
   const { AF } = c;
   const mappingVarsToScope: Record<string, VariableSet> = {};

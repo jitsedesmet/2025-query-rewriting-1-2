@@ -4,41 +4,69 @@ import { objectRange, RangeSet } from './RangeSet.js';
 import type { Template } from './types.js';
 import { isRdfTerm, isRdfVar } from './utils.js';
 
+/**
+ * A raw term that is either a concrete term (not a variable) or a ranged variable.
+ */
 export type RawTerm = Exclude<RDF.Term, RDF.Variable> | RangedVar;
+
+/**
+ * A basic raw term (not a quad/triple term).
+ */
 export type RawBasicTerm = Exclude<RawTerm, RDF.Quad>;
 
 /**
- * Solver that can solve what variables are equal to each-other and potentially what terms they are equal to.
- * When two mapping head vars are equal to each-other,
- * query rewriting needs to happen on the mapping to ensure they are equal.
+ * Solver for determining variable equality clusters during query rewriting.
  *
- * Since the term a group is assigned to can be a triple term containing vars, we get a DAG.
- * We are sure it is a DAG because a triple term cannot be targeted as a variable, while that variable is reused.
- * (Since you can only target it as a variable within the other term
- * (so the triple pattern can match a triple term in the mapping head and vice versa).
- * The variable cannot be used in any other position of the triple pattern/ mapping head though,
- * since that would cause an incompatible range.
- * -> triple terms need to be bounded last
+ * When rewriting a triple pattern against a mapping head, variables from both
+ * sides may need to be unified. The ClusterSolver tracks which variables are
+ * equivalent and what concrete terms they may be bound to.
+ *
+ * ## Core Concepts:
+ * - **Group**: A set of variables that must all have the same value
+ * - **Range**: The set of valid term types for a group (narrowed as constraints are added) - like position in triple.
+ * - **Term**: A concrete value that a group must equal
+ * - **Template**: A computed term (IRI template, etc.) that a group must equal
+ *
+ * ## DAG Structure:
+ * Since triple terms can contain variables, and those variables might be equated
+ * to other triple terms, the structure forms a DAG. Triple terms are always
+ * resolved last to ensure dependencies are handled correctly.
+ *
+ * @example
+ * // Given mapping head: ?t rdf:reifies <<( ?s ?p ?o )>>
+ * // And triple pattern: ?x rdf:reifies <<( ?x ?y ?z )>>
+ * // The solver determines: ?t = ?x = ?s, ?y = ?p, ?z = ?o
  */
 export class ClusterSolver {
+  /** Maps group ID to the variables in that group */
   private groupToVars: Record<number, RangedVar[]>;
-  // Templates also narrow the RangeSet
+  /** Maps group ID to the valid term type range for that group */
   private groupToRange: Record<number, RangeSet>;
-  // A single group can have many template equalities. This means all mHeadVars being equal are rewritten into one.
-  // And afterward you get a filter for each template equality.
+  /**
+   * Maps group ID to templates that must equal the group's value.
+   * Multiple template equalities can exist, creating filter conditions.
+   */
   private groupToTemplates: Record<number, Template[]>;
+  /** Maps group ID to the concrete term the group is bound to (if any) */
   private groupToTerm: Record<number, RawBasicTerm | undefined>;
+  /** Maps variable name to its group ID */
   private varToGroup: Record<string, number | undefined>;
-  // In case a mapping head templates need to equal a static term,
-  // it needs to be validated, but it is not bound to a var so no group is created.
-  // This list tracks all such conditions that should be checked.
+  /**
+   * Static template validations where no variable group is involved.
+   * These occur when a template must equal a concrete term.
+   */
   private staticTemplateValidation: { template: Template; term: RawBasicTerm }[];
+  /** Counter for generating unique group IDs */
   private cleanNumber: number;
 
   public constructor() {
     this.clear();
   }
 
+  /**
+   * Resets the solver to its initial state.
+   * Call this before processing a new triple pattern.
+   */
   public clear(): void {
     this.groupToVars = {};
     this.groupToTemplates = {};
@@ -50,7 +78,10 @@ export class ClusterSolver {
   }
 
   /**
-   * Register the range of the variable to the group it is contained in, if any.
+   * Registers the range constraint of a variable to its group.
+   * Narrows the group's range to the intersection with the variable's range.
+   * @param variable - The variable whose range to register
+   * @throws Error if the narrowed range conflicts with an existing term binding
    */
   private handleVarRange(variable: RangedVar): void {
     const range = variable.range;
@@ -66,9 +97,19 @@ export class ClusterSolver {
   }
 
   /**
-   * 'from' var is now linked to 'to' var. Meaning They share a group.
-   *  They cannot both be quads.
-   *  From is head, to is TP.
+   * Registers an equality constraint between two terms/templates.
+   *
+   * This is the main entry point for adding constraints. The behavior depends
+   * on the types of `from` and `to`:
+   * - Two variables: merge their groups
+   * - Variable + term: bind the variable's group to the term
+   * - Variable + template: add a template constraint to the group
+   * - Two terms: validate they are equal (throws if not)
+   * - Template + term: add to static validation list
+   *
+   * @param from - Term, variable, or template (typically from mapping head)
+   * @param to - Term or variable (typically from triple pattern)
+   * @throws Error if terms don't match or constraints conflict
    */
   public register(from: RDF.Term | Template, to: RDF.Term): void {
     if (isRdfTerm(from) && !isRdfVar(from) && isRdfTerm(to) && !isRdfVar(to)) {
@@ -111,8 +152,9 @@ ${JSON.stringify(to)}`);
   }
 
   /**
-   * Get an existing group for a var, or make a new one
-   * @param variable
+   * Gets or creates a group for a variable.
+   * @param variable - The variable to get/create a group for
+   * @returns The group ID
    */
   private getGroup(variable: RangedVar): number {
     let group = this.varToGroup[variable.value];
@@ -130,6 +172,13 @@ ${JSON.stringify(to)}`);
     return group;
   }
 
+  /**
+   * Registers a template constraint to a group.
+   * The template's output type must be compatible with the group's range.
+   * @param group - The group ID
+   * @param template - The template to add
+   * @throws Error if template type conflicts with group range or existing term
+   */
   private registerTemplateToGroup(group: number, template: Template): void {
     const curTerm = this.groupToTerm[group];
     if (curTerm && curTerm.termType !== template.subType) {
@@ -146,6 +195,12 @@ ${JSON.stringify(to)}`);
     this.groupToTemplates[group].push(template);
   }
 
+  /**
+   * Registers a concrete term binding to a group.
+   * @param group - The group ID
+   * @param term - The term to bind
+   * @throws Error if term conflicts with existing binding or range
+   */
   private registerTermToGroup(group: number, term: RawBasicTerm): void {
     const curTerm = this.groupToTerm[group];
     // TODO: validate in the case of triple term by also registering that some variables present might be the same.
@@ -159,6 +214,12 @@ ${JSON.stringify(to)}`);
     this.groupToTerm[group] = curTerm ?? term;
   }
 
+  /**
+   * Merges two variable groups into one.
+   * Combines ranges, terms, and templates from both groups.
+   * @param from - First variable
+   * @param to - Second variable
+   */
   public mergeVars(from: RangedVar, to: RangedVar): void {
     const fromGroup = this.getGroup(from);
     const toGroup = this.getGroup(to);
@@ -182,6 +243,10 @@ ${JSON.stringify(to)}`);
     }
   }
 
+  /**
+   * Sorts variables within each cluster for consistent output.
+   * Mapping variables (starting with 'm') are sorted before user query variables ('uq').
+   */
   public sortClusters(): void {
     for (const groupVars of Object.values(this.groupToVars)) {
       groupVars.sort((a, b) =>
@@ -191,12 +256,12 @@ ${JSON.stringify(to)}`);
   }
 
   /**
-   * Returns order list of bounded.
-   * First the terms - when matching term you have a binding, unless you match multiple terms, then you have conflict.
-   * Then the blank nodes: if you match a blank node,   - We can just prune blanknodes here...
-   *   all variables matching that blankNode should be converted into a single var
-   * Then the vars, if you match a var, you should align yourself to that var.
-   * @param from
+   * Gets the cluster information for a variable.
+   * @param from - The variable to look up
+   * @returns Object containing:
+   *   - `term`: The concrete term bound to this cluster (if any)
+   *   - `vars`: Other variables in the same cluster
+   *   - `group`: The cluster's group ID
    */
   public getCluster(from: RDF.Variable): { term: RawBasicTerm | undefined ; vars: RDF.Variable[]; group: number } {
     const varGroup = this.varToGroup[from.value];
@@ -208,11 +273,21 @@ ${JSON.stringify(to)}`);
     };
   }
 
+  /**
+   * Gets all templates that must equal the given variable's value.
+   * @param from - The variable to look up
+   * @returns Array of templates that must equal this variable
+   */
   public getTemplates(from: RDF.Variable): Template[] {
     const varGroup = this.varToGroup[from.value];
     return this.groupToTemplates[varGroup!];
   }
 
+  /**
+   * Gets all static template validations (template-to-term equality checks).
+   * These are cases where a template must equal a concrete term with no variable involved.
+   * @returns Array of template-term pairs to validate
+   */
   public getStaticTemplateValidation(): typeof this.staticTemplateValidation {
     return this.staticTemplateValidation;
   }

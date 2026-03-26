@@ -7,10 +7,39 @@ import type { TransformContext } from '../transformContext.js';
 import type { Mapping, MappingHead, Template } from '../types.js';
 import { isMappingHead, isRdfDefaultGraph, isRdfQuad, isRdfVar, templateToExpr } from '../utils.js';
 
+/**
+ * @fileoverview Core pattern rewriting logic.
+ *
+ * This module implements the core algorithm for rewriting a single triple pattern
+ * against a mapping definition. The rewriting process involves:
+ *
+ * 1. **Variable Clustering**: Determine which variables from the user query and
+ *    mapping are equivalent (must have the same value).
+ *
+ * 2. **Bind Collection**: Determine what values each variable will be bound to
+ *    after the subquery executes.
+ *
+ * 3. **Query Construction**: Build the subquery that finds matching data in the
+ *    underlying RDF 1.1 store.
+ *
+ * 4. **Result Binding**: Add EXTEND operations to bind the user query variables
+ *    to the values retrieved from the subquery.
+ */
+
+/**
+ * Extracts subject, predicate, object from a mapping head or quad.
+ * @param head - The mapping head or quad
+ * @returns Array of [subject, predicate, object]
+ */
 function headSPO(head: MappingHead | RDF.BaseQuad): (RDF.Term | MappingHead | Template)[] {
   return [ head.subject, head.predicate, head.object ];
 }
 
+/**
+ * Extracts subject, predicate, object from a pattern or quad.
+ * @param pattern - The pattern or quad
+ * @returns Array of [subject, predicate, object]
+ */
 function patternSPO(pattern: Algebra.Pattern | RDF.BaseQuad): RDF.Term[] {
   return [ pattern.subject, pattern.predicate, pattern.object ];
 }
@@ -65,6 +94,22 @@ function iterateMappingHead(
   }
 }
 
+/**
+ * Collects bindings for triple pattern variables based on cluster analysis.
+ *
+ * For each variable in the user's triple pattern, determines what it should
+ * be bound to after the subquery executes:
+ * - A concrete term (if the mapping determines a specific value)
+ * - A mapping variable (if bound through the subquery)
+ * - A template (if the value needs to be constructed)
+ *
+ * @param params - Configuration object
+ * @param params.clusterSolver - The cluster solver with variable unification info
+ * @param params.triplePatternVars - Variables from the user's triple pattern
+ * @param params.headVarsRemap - Remapping for unified head variables
+ * @param params.templateFilters - Array to collect template equality filters
+ * @returns A record mapping variable names to their bindings
+ */
 function collectTriplePatternBinds({
   clusterSolver,
   triplePatternVars,
@@ -104,6 +149,20 @@ function collectTriplePatternBinds({
   return triplePatternBinds;
 }
 
+/**
+ * Collects bindings for mapping head variables and generates necessary filters.
+ *
+ * For each variable in the mapping head:
+ * - If bound to a concrete term, adds to mappingHeadBinds (for subquery injection)
+ * - If equal to other head vars, creates a unified replacement variable
+ * - If needs template validation, adds to templateFilters
+ *
+ * @param params - Configuration object
+ * @param params.clusterSolver - The cluster solver with variable unification info
+ * @param params.mappingHeadVars - Variables from the mapping head
+ * @param params.DF - Data factory for creating variables
+ * @returns Object containing binds, remapping, and filters
+ */
 function collectMappingHeadBindsAndFilters({ clusterSolver, mappingHeadVars, DF }: {
   clusterSolver: ClusterSolver;
   mappingHeadVars: Record<string, RDF.Variable>;
@@ -175,6 +234,18 @@ function collectMappingHeadBindsAndFilters({ clusterSolver, mappingHeadVars, DF 
   };
 }
 
+/**
+ * Rewrites an operation to use unified variable names.
+ *
+ * When multiple head variables are determined to be equal, they must use
+ * the same variable name in the query. This function performs that substitution.
+ *
+ * @param params - Configuration object
+ * @param params.headVarsRemap - Map of original var names to unified var names
+ * @param params.operation - The operation to transform
+ * @param params.astTransformer - AST transformer utility
+ * @returns The transformed operation with unified variable names
+ */
 function rewriteUnifiedVariables({
   headVarsRemap,
   operation,
@@ -194,6 +265,20 @@ function rewriteUnifiedVariables({
   });
 }
 
+/**
+ * Adds EXTEND operations at the start of the subquery for known variable bindings.
+ *
+ * When a mapping head variable is determined to equal a specific term,
+ * we inject that binding at the start of the subquery using EXTEND operations.
+ * This allows pattern matching to use the concrete values.
+ *
+ * @param params - Configuration object
+ * @param params.mappingHeadBinds - Map of variable names to their bound terms
+ * @param params.operation - The operation to wrap
+ * @param params.AF - Algebra factory
+ * @param params.DF - Data factory
+ * @returns The operation wrapped with necessary EXTEND operations
+ */
 function rewriteToPreBindVars({ AF, DF, mappingHeadBinds, operation }: {
   mappingHeadBinds: Record<string, RDF.Term>;
   operation: Algebra.Operation;
@@ -216,6 +301,19 @@ function rewriteToPreBindVars({ AF, DF, mappingHeadBinds, operation }: {
   return operation;
 }
 
+/**
+ * Wraps an operation with FILTER expressions for template validations.
+ *
+ * When a template (constructed IRI, literal, etc.) must equal a specific term,
+ * we add a FILTER to verify this equality at runtime.
+ *
+ * @param params - Configuration object
+ * @param params.operation - The operation to wrap
+ * @param params.templateFilters - Array of template-term equality checks
+ * @param params.AF - Algebra factory
+ * @param params.DF - Data factory
+ * @returns The operation wrapped with necessary FILTER operations
+ */
 function wrapInTemplateFilters({ operation, templateFilters, AF, DF }: {
   operation: Algebra.Operation;
   templateFilters: { term: RDF.Term; template: Template }[];
@@ -233,6 +331,20 @@ function wrapInTemplateFilters({ operation, templateFilters, AF, DF }: {
   return buildOperation;
 }
 
+/**
+ * Wraps an operation in a PROJECT (subselect) with appropriate variable projection.
+ *
+ * Creates the subselect that will execute against the RDF 1.1 store.
+ * Projects only the variables needed for binding the triple pattern results.
+ *
+ * @param params - Configuration object
+ * @param params.triplePatternBinds - The bindings for triple pattern variables
+ * @param params.operation - The operation to project
+ * @param params.astTransformer - AST transformer for collecting variables
+ * @param params.DF - Data factory
+ * @param params.AF - Algebra factory
+ * @returns A PROJECT operation with the correct variable projection
+ */
 function wrapOperationInProject({
   triplePatternBinds,
   operation,
@@ -268,6 +380,19 @@ function wrapOperationInProject({
   return AF.createProject(buildOperation, vars);
 }
 
+/**
+ * Adds EXTEND operations after the subselect to bind triple pattern variables.
+ *
+ * After the subquery executes, we need to bind the user query's variables
+ * to the appropriate values (mapping variables, concrete terms, or template results).
+ *
+ * @param params - Configuration object
+ * @param params.subQuery - The subquery (PROJECT operation)
+ * @param params.triplePatternBinds - Map of variable names to their bindings
+ * @param params.DF - Data factory
+ * @param params.AF - Algebra factory
+ * @returns The subquery with EXTEND operations for variable binding
+ */
 function bindPatternTerms({ subQuery, AF, DF, triplePatternBinds }: {
   subQuery: Algebra.Project;
   triplePatternBinds: Record<string, RDF.Term | Template>;
@@ -286,11 +411,40 @@ function bindPatternTerms({ subQuery, AF, DF, triplePatternBinds }: {
 }
 
 /**
- * You register the mapping head and link the variables. After that, you solve.
- * Once you have solved, go over the mapping head again.
- *  If mapping head is variable, check whether bound to a non-var (check if only one).
- *    If not bound to non-var, it is because the user query has a var in this position.
- * For the user query, if there is a var in this position, look whether it is bound to a term and does not conflict.
+ * Rewrites a single triple pattern using a mapping definition.
+ *
+ * This is the core function that transforms a user's triple pattern into
+ * an equivalent subquery that retrieves data from the RDF 1.1 representation.
+ *
+ * ## Algorithm Overview:
+ *
+ * 1. **Cluster Analysis**: Match the triple pattern against the mapping head,
+ *    determining which variables must be equal and what values they're bound to.
+ *
+ * 2. **Head Variable Processing**: For each mapping head variable, determine
+ *    if it's bound to a term, needs unification with other vars, or has template constraints.
+ *
+ * 3. **Pattern Variable Processing**: For each triple pattern variable, determine
+ *    what it should bind to (term, mapping var, or template).
+ *
+ * 4. **Query Construction**: Build the subquery by:
+ *    - Unifying variable names where needed
+ *    - Injecting known bindings at query start
+ *    - Adding template validation filters
+ *    - Projecting required variables
+ *
+ * 5. **Result Binding**: Add EXTEND operations to bind user variables to results.
+ *
+ * @param c - The transformation context
+ * @param pattern - The user's triple pattern to rewrite
+ * @param mapping - The mapping definition to use
+ * @returns A PROJECT or EXTEND operation representing the rewritten pattern
+ * @throws Error if the pattern cannot be matched to the mapping
+ *
+ * @example
+ * // Given pattern: ?t rdf:reifies <<( :me :name ?name )>>
+ * // And mapping: CONSTRUCT { ?t rdf:reifies <<(?s ?p ?o)>> } WHERE { ... }
+ * // Produces: { SELECT ?m0_o ?m0_t WHERE { ... } } BIND(?m0_o AS ?uq_name) BIND(?m0_t AS ?uq_t)
  */
 export function rewriteSinglePattern(
   c: TransformContext,

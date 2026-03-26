@@ -1,60 +1,142 @@
-# Query Rewriting SPARQL 1.2 over RDF 1.1
+# Query Rewriting: SPARQL 1.2 over RDF 1.1
 
-We will be using SPARQL CONSTRUCT queries to express the mapping between RDF 1.1 and RDF 1.2.
-![img.png](assets/schematic-plan.png)
+A library for rewriting SPARQL 1.2 queries into equivalent SPARQL 1.1 queries that can be executed against RDF 1.1 data sources.
 
-Query rewrites like this are called GAV, LAV and GLAV in literature.
-See: Principles of Data Integration - AnHai Doan - Alon Halevy - Zachary Ives
-NOTE: in the construct template/ mapping head, you cannot share non-existential atoms (bnodes) between triples.
-(unless you bind to them through your bgp (they map to a source bnode))
+![Schematic overview of query rewriting](assets/schematic-plan.png)
 
-There is a working draft for a spec describing the mapping between RDF1.1 and RDF 1.2: [RDF1.2 interoperability](https://w3c.github.io/rdf-interop/spec/)
+## Overview
 
-Example data expressed in Turtle 1.2
+This library enables querying RDF 1.2 data (including triple terms/quoted triples) when your data is stored in an RDF 1.1 representation.
+It uses SPARQL CONSTRUCT queries to define mappings between the two representations, following GAV (Global-As-View) / LAV (Local-As-View) / GLAV approaches from data integration literature.
 
-### Sparql 1.2 rewrite
+> **Reference**: Principles of Data Integration - AnHai Doan, Alon Halevy, Zachary Ives
 
-The intention is that you have a SPARQL 1.2 query and mapping using construct queries.
-The body of this mapping should not contain any SPARQL 1.2 syntax, but the head can contain triple terms.
-Using this approach means that you cannot rewrite recursive triple terms for arbitrary depth,
-you will need a construct for every depth you want to support.
-What our rewriter will do is map each triple pattern in your BGP to a list of unions for each construct over some selects.
-When you are solving the variables of your mapping head, it should be noted that triple term binding appears outside the SUB-SELECTS,
-thereby creating a toplevel query that can use SPARQL 1.2 construct, but does not contain any BGPs, and a bunch of subselects that only use SPARQL1.1 and do contain the BGPs.
-![](assets/query-rewritten.jpg)
+There is also a [working draft for RDF 1.2 interoperability](https://w3c.github.io/rdf-interop/spec/) describing standard mappings between RDF 1.1 and RDF 1.2.
 
-### RDF 1.2 examples
+## Installation
 
+```bash
+npm install query-rewriting-1-2
 ```
+
+## Quick Start
+
+```typescript
+import {
+  transformContextFromConstructs,
+  queryTransform,
+  operationTransform,
+  substituteVarsThatArePreBoundToTerms,
+  transformFilterFalse
+} from 'query-rewriting-1-2';
+
+// Define mappings from RDF 1.2 to RDF 1.1 representation
+const mappings = [
+  // Map triple terms from RDF 1.1 reification vocabulary
+  `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+   CONSTRUCT { ?t rdf:reifies <<( ?s ?p ?o )>> }
+   WHERE {
+     ?t rdf:reifies [
+       a rdf:tripleTerm ;
+       rdf:ttSubject ?s ;
+       rdf:ttPredicate ?p ;
+       rdf:ttObject ?o
+     ]
+   }`,
+  // Map regular triples (excluding reification)
+  `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+   CONSTRUCT { ?s ?p ?o }
+   WHERE {
+     ?s ?p ?o .
+     FILTER(!isTriple(?o))
+     FILTER(?p != rdf:reifies)
+   }`
+];
+
+// Create transformation context
+const context = transformContextFromConstructs(mappings);
+
+// Rewrite a SPARQL 1.2 query
+const userQuery = `
+  PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+  SELECT * WHERE {
+    ?t rdf:reifies <<( :me :name ?name )>> .
+    ?t :statedBy :govBE .
+  }
+`;
+
+// Apply transformations
+const rewrittenQuery = queryTransform(
+  context,
+  userQuery,
+  [operationTransform, substituteVarsThatArePreBoundToTerms, transformFilterFalse]
+);
+
+console.log(rewrittenQuery);
+```
+
+## How It Works
+
+The rewriter transforms each triple pattern in your BGP (Basic Graph Pattern) into a UNION of subselects, one for each mapping:
+
+![Query rewriting visualization](assets/query-rewritten.jpg)
+
+### Key Architecture Points
+
+1. **Mapping Structure**: Each mapping is a SPARQL CONSTRUCT with:
+   - **Head** (template): The RDF 1.2 pattern (can contain triple terms)
+   - **Body** (WHERE): The equivalent RDF 1.1 pattern (must be SPARQL 1.1 compatible)
+
+2. **Variable Clustering**: When a user query matches a mapping, variables are unified using a ClusterSolver that determines which variables must be equal and what values they're bound to.
+
+3. **Transformation Pipeline**: Multiple optimization passes can be applied:
+   - `operationTransform`: Core BGP-to-UNION rewriting
+   - `substituteVarsThatArePreBoundToTerms`: Inline known variable bindings
+   - `transformFilterFalse`: Remove impossible branches (FILTER FALSE)
+   - `nullifyJoinOverIncompatibleBounds`: Detect incompatible join conditions
+   - `pushUpBoundedFromUnion`: Hoist common bindings out of UNIONs
+
+## Mapping Constraints
+
+- **Single triple in head**: Each mapping must have exactly one triple in the CONSTRUCT template
+- **No blank nodes in head**: Use variables instead; blank node templates are supported for skolemization
+- **No BNODE() function in body**: Blank node creation in the mapping body is not allowed
+
+## RDF 1.2 Representation Examples
+
+### Standard RDF Reification Vocabulary
+
+RDF 1.2 (with triple term):
+```turtle
 :me :name "jitse" ~ :t {| :statedBy :govBE |}
 ```
 -- RDF 1.2 spec ->
-```
+```turtle
 :me :name "jitse" .
 < :me :name "jitse" ~ :t > :satatedBy :govBE
 ```
 -- RDF 1.2 spec ->
-```
-:me :name "jitse"
-:t rdf:reifies <<( :me :name "jitse" )>>
-:t :statedBy :govBE
+```turtle
+:me :name "jitse" .
+:t rdf:reifies <<( :me :name "jitse" )>> .
+:t :statedBy :govBE .
 ```
 
-#### Interop spec/ RDF reification
--- to RDF1.1 ->
-```
+RDF 1.1 representation:
+```turtle
 :me :name "jitse" .
-:t :rdf:reifies _:temp .
+:t rdf:reifies _:triple1 .
 :t :statedBy :govBE .
 
-_:temp a rdftripleTerm .
-_:temp rdf:ttSubject :me .
-_:temp rdf:ttPredicate :name .
-_:temp rdf:ttObject "jitse" .
+_:triple1 a rdf:tripleTerm .
+_:triple1 rdf:ttSubject :me .
+_:triple1 rdf:ttPredicate :name .
+_:triple1 rdf:ttObject "jitse" .
 ```
 
-construct to go back:
-```
+Mapping to go back to RDF 1.2:
+```sparql
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 CONSTRUCT {
     ?t rdf:reifies <<( ?s ?p ?o )>>
 } WHERE {
@@ -90,17 +172,17 @@ CONSTRUCT {
 }
 ```
 
-#### Singleton Property
--- to RDF 1.1 ->
-```
-:me :name "jitse"
-:me :name#1 "jitse"
-:name#1 rdf:singletonProperyOf :name ;
+### Singleton Property Pattern
+
+```turtle
+:me :name "jitse" .
+:me :name#1 "jitse" .
+:name#1 rdf:singletonPropertyOf :name ;
         :statedBy :govBE .
 ```
 
-Construct to go back:
-```
+Mapping:
+```sparql
 CONSTRUCT {
     ?p rdf:reifies <<( ?s ?trueProp ?o )>>
 } WHERE {
@@ -109,21 +191,20 @@ CONSTRUCT {
 }
 ```
 
-#### Named Graphs
+### Named Graphs Pattern
 Either:
 1. trust the graph has only one triple,
 2. use one subject multiple times to reify many triples,
 3. Annotate the graph has only one triple (could also use a count subquery?)
 
--- to RDF1.1 ->
-```
-:me :name "jitse"
-_:temp { :me :name "jitse" }
-_:temp :statedBy :govBE .
+```turtle
+:me :name "jitse" .
+_:g { :me :name "jitse" }
+_:g :statedBy :govBE .
 ```
 
-Construct to go back:
-```
+Mapping:
+```sparql
 CONSTRUCT {
     ?t rdf:reifies <<( ?s ?p ?o )>> ; ?p1 ?o1 .
 } WHERE {
@@ -133,8 +214,8 @@ CONSTRUCT {
 }
 ```
 
-Construct to go back with a check for only one triple
-```
+Mapping with check for only one triple:
+```sparql
 CONSTRUCT {
     ?t rdf:reifies <<( ?s ?p ?o )>> ; ?p1 ?o1 .
 } WHERE {
@@ -148,11 +229,10 @@ CONSTRUCT {
 }
 ```
 
-#### N-ary
+### N-ary Pattern (e.g., Wikidata style)
 (used by Wikidata under the [prefixes](https://www.wikidata.org/wiki/EntitySchema:E49), p(property), ps(property statement) and wdt(property direct))
 
--- to RDF 1.1 ->
-```
+```turtle
 :me :name "jitse" .
 :me :nameP _:temp .
 _:temp :statedBy :govBE .
@@ -163,8 +243,8 @@ _:temp :namePs "jitse" .
 :nameP :hasPropertyStatement ?ps .
 ```
 
-Construct to go back:
-```
+Mapping:
+```sparql
 CONSTRUCT {
     ?rel rdf:reifies <<( ?s ?trueProp ?o )>> ; ?p1 ?o1 .
 } WHERE {
@@ -177,50 +257,60 @@ CONSTRUCT {
 }
 ```
 
-### Matchers
-You match recursive triples:
-`?rel rdf:reifies <<( :me :name ?name )>>`
-=> `(?rel, rdf:reifies, (:me, :name, ?name)) ''` ('' = DefaultGraph)
+## Blank Node Handling (Skolem Functions)
 
-#### Why you need a solver:
-Take rewrite head: `?t rdf:reifies <<( ?s ?p ?o )>>`
-With query: `?s1 ?s1 <<( ?s1 ?p1 ?o1 )>>`
-Your solver will now be able to say conclude:
-```
-?t -> rdf:reifies
-?s -> rdf:reifies
-?p -> p1
-?o -> o1
-```
+Since underlying RDF 1.1 datasets cannot consistently reference blank nodes across queries, this library supports four skolem types in mapping heads:
 
-### Quirks documented
+1. **TemplateIri**: Construct IRIs from variable values
+2. **TemplateLiteral**: Construct typed literals from variable values
+3. **TemplateBlank**: Construct consistent blank node identities
+4. **TemplateQuad**: Construct triple terms
 
-Empty groups emit a single binding that does not bind to anything ([proof](https://www.w3.org/TR/sparql11-query/#emptyGroupPattern)):
-* `SELECT * {}`  gives 1 binding ([query](https://query.comunica.dev/#transientDatasources=%2F%2Ffragments.dbpedia.org%2F2016-04%2Fen&query=SELECT%20*%0AWHERE%20%7B%0A%0A%7D))
-* `SELECT * { {} UNION {} }` gives 2 bindings [(query](https://query.comunica.dev/#transientDatasources=%2F%2Ffragments.dbpedia.org%2F2016-04%2Fen&query=SELECT%20*%0AWHERE%20%7B%0A%20%20%7B%7D%20UNION%20%7B%7D%0A%7D))
+For TemplateBlank, since actual blank nodes cannot be consistently referenced, the library provides transformations to represent them as:
 
-Therefore, a mapping that does not match under a union does **NOT produce the empty group**.
-It does not produce results. To visualize this, one can also use the group: `{ FILTER(false) }` ([query](https://query.comunica.dev/#transientDatasources=%2F%2Ffragments.dbpedia.org%2F2016-04%2Fen&query=SELECT%20*%0AWHERE%20%7B%0A%20%20%7B%20FILTER%28false%29%20%7D%20UNION%20%7B%20FILTER%28false%29%20%7D%0A%7D))
+- [sparql extension function](https://www.w3.org/TR/sparql12-query/#extensionFunctions) `https://sparql-extension.knows.idlab.ugent.be/bnodeConsistent` that can create blank nodes matching the implementation described above.
+- **Typed literals**: `internalBnodeAsSpecialLiteral()` - Uses a special datatype
+- **Prefixed IRIs**: `internalBnodeAsSpecialIri()` - Uses SHA1 hashing for manageable length
 
-### Skolem function in mapping head
+Both approaches ensure "same inputs = same identity" semantics.
 
-We allow four skolem types:
-1. TemplateIri
-2. TemplateLiteral
-3. TemplateBlank
-4. TemplateQuad
+## SPARQL Quirks
 
-These functions will create a term of the appropriate term type, **but** TemplateBlank is special.
-First, we repeat the underlying datasets do NOT contain blanknode, since we require that we can consistently refer to all terms.
-The TemplateBlank skolem function receives a list of arguments and creates a unique term for each unique combination of arguments.
-To represent this into SPARQL, we have 2 options:
-1. We rewrite blank node creation to a [sparql extension function](https://www.w3.org/TR/sparql12-query/#extensionFunctions) `https://sparql-extension.knows.idlab.ugent.be/bnodeConsistent` that can create blank nodes matching the implementation described above.
-2. We use a combination of builtin sparql functions to mimic this implementation. Concretely, we use `strdt` together with `concat` to create a literal of type `my-special-blank` that implements the behaviour described.
-3. Same as two, but you use an iri with a specific prefix.
-4. You weaken the uniqueness requirement is less strong, and you wrap the literal of 2 within a sha1 function such that the chaining of TemplateBlank creations do not create increasingly long strings.
+**Empty groups produce one binding**: An empty group `{}` emits a single binding with no variables bound ([spec reference](https://www.w3.org/TR/sparql11-query/#emptyGroupPattern)).
 
-All approaches have drawbacks.
-In the first case, you need to create an extension function within the federation query engine.
-In the other cases, the resulting term type is not a blank node, but instead an iri or literal.
-These approaches will thus not return a blanknode, but depending on the situation, that might even be desired.
-To correctly implement the last behavior, functions such as `isBlank` will need to be rewritten within the user query.
+- `SELECT * {}` → 1 binding
+- `SELECT * { {} UNION {} }` → 2 bindings
+- `SELECT * { FILTER(FALSE) }` → 0 bindings
+
+This means a mapping that doesn't match uses `FILTER(FALSE)` (zero results), not an empty group.
+
+## API Reference
+
+### Core Functions
+
+| Function | Description |
+|----------|-------------|
+| `transformContextFromConstructs(mappings)` | Create a context from CONSTRUCT query strings |
+| `queryTransform(context, query, transformations)` | Rewrite a query with the given transformations |
+| `operationTransform(context, operation)` | Core BGP rewriting transformation |
+
+### Optimization Transformations
+
+| Transformation | Description |
+|----------------|-------------|
+| `substituteVarsThatArePreBoundToTerms` | Inline known variable values into patterns |
+| `transformFilterFalse` | Remove FILTER(FALSE) branches and simplify |
+| `nullifyJoinOverIncompatibleBounds` | Replace incompatible join branches with FILTER(FALSE) |
+| `pushUpBoundedFromUnion` | Hoist common bindings out of UNION branches |
+| `rewriteNonRecursivePaths` | Expand property paths into BGPs |
+
+### Blank Node Transformations
+
+| Transformation | Description |
+|----------------|-------------|
+| `internalBnodeAsSpecialLiteral` | Represent blank nodes as typed literals |
+| `internalBnodeAsSpecialIri` | Represent blank nodes as prefixed IRIs |
+
+## License
+
+See [LICENSE.txt](LICENSE.txt)

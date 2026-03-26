@@ -207,7 +207,45 @@ describe('dummy', () => {
   ));
 
   describe('join over union optimizations', () => {
-    it('join optimization', ({ expect }) => testConstructMappers(
+    it('join optimization no-prune union branch', ({ expect }) => testConstructMappers(
+      expect,
+      `SELECT * { ?s ?p ?o . <ex://a> ?p ?o }`,
+      `SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) WHERE {
+  {
+    {
+      SELECT ?m0_o WHERE {
+        <ex://a> <ex://a> ?m0_o .
+      }
+    }
+    BIND( ?m0_o AS ?uq_o )
+    BIND( <ex://a> AS ?uq_p )
+    BIND( <ex://a> AS ?uq_s )
+  }
+  UNION {
+    {
+      SELECT ?m1_o WHERE {
+        <ex://b> <ex://b> ?m1_o .
+      }
+    }
+    BIND( ?m1_o AS ?uq_o )
+    BIND( <ex://b> AS ?uq_p )
+    BIND( <ex://b> AS ?uq_s )
+  }
+  {
+    {
+      SELECT ?m0_o WHERE {
+        <ex://a> <ex://a> ?m0_o .
+      }
+    }
+    BIND( ?m0_o AS ?uq_o )
+    BIND( <ex://a> AS ?uq_p )
+  }
+}`,
+      [ `CONSTRUCT WHERE { <ex://a> <ex://a> ?o }`, `CONSTRUCT WHERE { <ex://b> <ex://b> ?o }` ],
+      [ operationTransform, transformFilterFalse ],
+    ));
+
+    it('join optimization prune union branch', ({ expect }) => testConstructMappers(
       expect,
       `SELECT * { ?s ?p ?o . <ex://a> ?p ?o }`,
       `SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) WHERE {

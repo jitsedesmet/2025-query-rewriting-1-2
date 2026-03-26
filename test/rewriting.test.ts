@@ -1021,4 +1021,180 @@ describe('dummy', () => {
       [ operationTransform, internalBnodeAsSpecialIri ],
     ));
   });
+
+  describe('bind/values in mapping body on head variables', () => {
+    it('bind in mapping body on head variable - simple query', ({ expect }) => testConstructMappers(
+      expect,
+      `SELECT * { ?a <ex://test> ?b }`,
+      `SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
+  {
+    {
+      SELECT ?m0_o ?m0_s WHERE {
+        {
+          BIND( <ex://test> AS ?m0_p )
+        }
+        {
+          ?m0_x ?m0_p ?m0_o .
+          BIND( IRI( CONCAT( "http://example.org/" , STR( ?m0_x ) ) ) AS ?m0_s )
+        }
+      }
+    }
+    BIND( ?m0_s AS ?uq_a )
+    BIND( ?m0_o AS ?uq_b )
+  }
+}`,
+      [ `CONSTRUCT { ?s ?p ?o } WHERE { ?x ?p ?o . BIND(IRI(CONCAT("http://example.org/", STR(?x))) AS ?s) }` ],
+    ));
+
+    it('bind in mapping body when user query has constant subject', ({ expect }) => testConstructMappers(
+      expect,
+      `SELECT * { <http://example.org/foo> <ex://test> ?b }`,
+      `SELECT ( ?uq_b AS ?b ) WHERE {
+  {
+    {
+      SELECT ?m0_o WHERE {
+        {
+          BIND( <ex://test> AS ?m0_p )
+          BIND( <http://example.org/foo> AS ?m0_s )
+        }
+        {
+          ?m0_x ?m0_p ?m0_o .
+          BIND( IRI( CONCAT( "http://example.org/" , STR( ?m0_x ) ) ) AS ?m0_s )
+        }
+      }
+    }
+    BIND( ?m0_o AS ?uq_b )
+  }
+}`,
+      [ `CONSTRUCT { ?s ?p ?o } WHERE { ?x ?p ?o . BIND(IRI(CONCAT("http://example.org/", STR(?x))) AS ?s) }` ],
+      [ operationTransform ],
+    ));
+
+    /**
+     * BROKEN because of substituteVarsThatArePreBoundToTerms.
+     */
+    it('bind in mapping body when user query has constant subject & optimize terms', ({ expect }) =>
+      testConstructMappers(
+        expect,
+      `SELECT * { <http://example.org/foo> <ex://test> ?b }`,
+      `SELECT ( ?uq_b AS ?b ) WHERE {
+  {
+    {
+      SELECT ?m0_o WHERE {
+        {
+          ?m0_x <ex://test> ?m0_o .
+          BIND( IRI( CONCAT( "http://example.org/" , STR( ?m0_x ) ) ) AS ?m0_s )
+        }
+      }
+    }
+    BIND( ?m0_o AS ?uq_b )
+  }
+}`,
+      [ `CONSTRUCT { ?s ?p ?o } WHERE { ?x ?p ?o . BIND(IRI(CONCAT("http://example.org/", STR(?x))) AS ?s) }` ],
+      [ operationTransform, substituteVarsThatArePreBoundToTerms ],
+      ));
+
+    /**
+     * BROKEN!!! Very weird that this undef is introduced. It should remain the same body.
+     * (I suspect this is because of the variable renaming?)
+     */
+    it('values in mapping body on head variable', ({ expect }) => testConstructMappers(
+      expect,
+      `SELECT * { ?x ?p ?y }`,
+      `SELECT ( ?uq_p AS ?p ) ( ?uq_x AS ?x ) ( ?uq_y AS ?y ) WHERE {
+  {
+    {
+      SELECT ?m0_o ?m0_p ?m0_s WHERE {
+        VALUES ?m0_p {
+          UNDEF
+          UNDEF
+        }
+        ?m0_s ?m0_p ?m0_o .
+      }
+    }
+    BIND( ?m0_p AS ?uq_p )
+    BIND( ?m0_s AS ?uq_x )
+    BIND( ?m0_o AS ?uq_y )
+  }
+}`,
+      [ `CONSTRUCT { ?s ?p ?o } WHERE { VALUES ?p { <ex://a> <ex://b> } ?s ?p ?o . }` ],
+    ));
+
+    /**
+     * BROKEN!!! Same undef as before. The values join with bind is okay.
+     */
+    it('values in mapping body when user query constrains the same variable', ({ expect }) => testConstructMappers(
+      expect,
+      `SELECT * { ?x <ex://a> ?y }`,
+      `SELECT ( ?uq_x AS ?x ) ( ?uq_y AS ?y ) WHERE {
+  {
+    {
+      SELECT ?m0_o ?m0_s WHERE {
+        {
+          BIND( <ex://a> AS ?m0_p )
+        }
+        VALUES ?m0_p {
+          UNDEF
+          UNDEF
+        }
+        ?m0_s ?m0_p ?m0_o .
+      }
+    }
+    BIND( ?m0_s AS ?uq_x )
+    BIND( ?m0_o AS ?uq_y )
+  }
+}`,
+      [ `CONSTRUCT { ?s ?p ?o } WHERE { VALUES ?p { <ex://a> <ex://b> } ?s ?p ?o . }` ],
+    ));
+
+    /**
+     * BROKEN!!! Same values bindings. So it's similar to before.
+     */
+    it('values in mapping body with user query constant not in VALUES set', ({ expect }) => testConstructMappers(
+      expect,
+      `SELECT * { ?x <ex://c> ?y }`,
+      `SELECT ( ?uq_x AS ?x ) ( ?uq_y AS ?y ) WHERE {
+  {
+    {
+      SELECT ?m0_o ?m0_s WHERE {
+        {
+          BIND( <ex://c> AS ?m0_p )
+        }
+        VALUES ?m0_p {
+          UNDEF
+          UNDEF
+        }
+        ?m0_s ?m0_p ?m0_o .
+      }
+    }
+    BIND( ?m0_s AS ?uq_x )
+    BIND( ?m0_o AS ?uq_y )
+  }
+}`,
+      [ `CONSTRUCT { ?s ?p ?o } WHERE { VALUES ?p { <ex://a> <ex://b> } ?s ?p ?o . }` ],
+    ));
+
+    it('bind in mapping body creates value that must match user constant', ({ expect }) => testConstructMappers(
+      expect,
+      `SELECT * { <ex://differentValue> <ex://p> ?b }`,
+      `SELECT ( ?uq_b AS ?b ) WHERE {
+  {
+    {
+      SELECT ?m0_o WHERE {
+        {
+          BIND( <ex://p> AS ?m0_p )
+          BIND( <ex://differentValue> AS ?m0_s )
+        }
+        {
+          ?m0_x ?m0_p ?m0_o .
+          BIND( <ex://computedValue> AS ?m0_s )
+        }
+      }
+    }
+    BIND( ?m0_o AS ?uq_b )
+  }
+}`,
+      [ `CONSTRUCT { ?s ?p ?o } WHERE { ?x ?p ?o . BIND(<ex://computedValue> AS ?s) }` ],
+    ));
+  });
 });

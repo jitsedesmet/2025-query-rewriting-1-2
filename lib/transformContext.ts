@@ -43,6 +43,28 @@ export function prefixVarsInOperation<T extends object>(
     if (isRdfTerm(obj) && obj.termType === 'Variable') {
       return DF.variable(prefix + obj.value);
     }
+    // VALUES bindings use string keys for variable names (e.g. `{ s: NamedNode }` for `?s`).
+    // `transformObject` only transforms RDF term values, not object keys.
+    // So we must rename binding keys here to keep them in sync with the prefixed variables array.
+    if (
+      obj &&
+      typeof obj === 'object' &&
+      !isRdfTerm(obj) &&
+      'type' in obj &&
+      (obj as { type: unknown }).type === 'values'
+    ) {
+      const valuesOp = obj as unknown as Algebra.Values;
+      return {
+        ...valuesOp,
+        bindings: valuesOp.bindings.map((binding) => {
+          const newBinding: Record<string, RDF.NamedNode | RDF.Literal> = {};
+          for (const [ key, value ] of Object.entries(binding)) {
+            newBinding[prefix + key] = value;
+          }
+          return newBinding;
+        }),
+      };
+    }
     return obj;
   });
 }

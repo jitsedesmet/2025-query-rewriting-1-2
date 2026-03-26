@@ -8,7 +8,7 @@ import { transformFilterFalse } from '../lib/transformations/filterFalse.js';
 import { nullifyJoinOverIncompatibleBounds } from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
 import { operationTransform, queryTransform } from '../lib/transformBgp.js';
 import { transformContextFromConstructs } from '../lib/transformContext.js';
-import { nonTripleTermConstruct, tripleTermConstruct } from './queries.js';
+import { nonTripleTermConstruct, tripleTermConstruct } from './queryConsts.js';
 import './matchers/toBeRdfIsomorphic.js';
 
 // Crazy workaround to support both CJS and ESM

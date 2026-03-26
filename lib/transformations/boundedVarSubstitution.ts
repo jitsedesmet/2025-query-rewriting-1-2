@@ -17,6 +17,24 @@ export function substituteVarsThatArePreBoundToTerms<T extends Algebra.Operation
 }
 
 // Minus: continue = false, project: continue = false -- stay in var scope?
+/**
+ * Finds mapping-head variables inside `projection` that are statically bound to a term
+ * (via a top-level `Extend` chain within the join that is the projection input), unwraps
+ * those `Extend` nodes, and substitutes the term directly into every triple pattern
+ * that references the variable.
+ *
+ * A mapping-head variable is a candidate for substitution when:
+ * 1. It is not projected to the outer scope (i.e. not in `projection.variables`).
+ * 2. Its `Extend` expression is a static `Literal` or `NamedNode` (not a variable or
+ *    computed expression).
+ *
+ * Substituting early avoids redundant variable look-ups in the SPARQL engine and makes
+ * subsequent optimisations (e.g. {@link nullifyJoinOverIncompatibleBounds}) more effective.
+ *
+ * @param c          - The transformation context.
+ * @param projection - The `Project` algebra node to optimise.
+ * @returns The modified `Project` with substituted triple patterns.
+ */
 function substituteAndUnwrapExtends(c: TransformContext, projection: Algebra.Project): Algebra.Project {
   let join: Algebra.Join | undefined;
   const stillUsedVars: RDF.Variable[] = [ ...projection.variables ];
@@ -77,6 +95,14 @@ function substituteAndUnwrapExtends(c: TransformContext, projection: Algebra.Pro
   return transformedProjection;
 }
 
+/**
+ * Replaces `term` with the statically known assignment from `assignments` when
+ * `term` is a variable that has been bound to a static term.
+ *
+ * @param term        - The RDF term to potentially translate.
+ * @param assignments - Map from variable name to its statically bound term.
+ * @returns The translated term, or the original term if no assignment exists.
+ */
 function translateTerm(term: RDF.Term, assignments: Record<string, RDF.Term>): RDF.Term {
   if (term.termType === 'Variable' && assignments[term.value]) {
     return assignments[term.value];

@@ -7,10 +7,22 @@ import type { TransformContext } from '../transformContext.js';
 import type { Mapping, MappingHead, Template } from '../types.js';
 import { isMappingHead, isRdfDefaultGraph, isRdfQuad, isRdfVar, templateToExpr } from '../utils.js';
 
+/**
+ * Returns the subject, predicate, and object of a {@link MappingHead} or
+ * {@link RDF.BaseQuad} as an ordered triple.
+ *
+ * @param head - The mapping head or quad to destructure.
+ */
 function headSPO(head: MappingHead | RDF.BaseQuad): (RDF.Term | MappingHead | Template)[] {
   return [ head.subject, head.predicate, head.object ];
 }
 
+/**
+ * Returns the subject, predicate, and object of an algebra {@link Algebra.Pattern}
+ * or {@link RDF.BaseQuad} as an ordered triple.
+ *
+ * @param pattern - The triple pattern or quad to destructure.
+ */
 function patternSPO(pattern: Algebra.Pattern | RDF.BaseQuad): RDF.Term[] {
   return [ pattern.subject, pattern.predicate, pattern.object ];
 }
@@ -65,6 +77,20 @@ function iterateMappingHead(
   }
 }
 
+/**
+ * Builds the binding map for each user-query triple-pattern variable by inspecting its cluster.
+ *
+ * For every variable in `triplePatternVars` the function looks up its cluster in the solver
+ * and decides what it is bound to:
+ * - **Bound to a static term** – the term is recorded directly, and any template equalities that
+ *   were not already covered by a mapping-head variable comparison are queued as `templateFilters`.
+ * - **Bound to a mapping-head variable** – the mapping variable (potentially remapped to a unified
+ *   variable by `headVarsRemap`) is used as the binding value.
+ * - **Bound to a template** – the first template associated with the cluster is used directly.
+ *
+ * @returns A map from user-query variable name to the term or template it should be bound to
+ *          after the subselect.
+ */
 function collectTriplePatternBinds({
   clusterSolver,
   triplePatternVars,
@@ -104,6 +130,23 @@ function collectTriplePatternBinds({
   return triplePatternBinds;
 }
 
+/**
+ * Builds the pre-bind map for mapping-head variables and collects any template filter constraints.
+ *
+ * For each mapping-head variable this function:
+ * 1. Detects whether it is part of a cluster with other mapping-head variables.  When multiple
+ *    mapping-head variables are equal to each other they are all renamed to a fresh unified variable
+ *    (prefix `r`), and the `headVarsRemap` map is populated accordingly.
+ * 2. If the cluster is bound to a static term, that term is recorded in `mappingHeadBinds`
+ *    so it can be injected via a `BIND(term AS ?var)` extend before the mapping body.
+ * 3. If the cluster has associated templates, template filter entries are produced that will
+ *    later be emitted as `FILTER` expressions inside the subselect.
+ *
+ * @returns An object containing:
+ *   - `mappingHeadBinds`  – map from (possibly remapped) variable name to bound static term.
+ *   - `headVarsRemap`     – map from original mapping-head variable name to its unified replacement.
+ *   - `templateFilters`   – list of `{ template, term }` pairs to emit as `FILTER` expressions.
+ */
 function collectMappingHeadBindsAndFilters({ clusterSolver, mappingHeadVars, DF }: {
   clusterSolver: ClusterSolver;
   mappingHeadVars: Record<string, RDF.Variable>;
@@ -175,6 +218,17 @@ function collectMappingHeadBindsAndFilters({ clusterSolver, mappingHeadVars, DF 
   };
 }
 
+/**
+ * Walks `operation` and replaces every variable whose name appears in `headVarsRemap`
+ * with the corresponding unified replacement variable.
+ *
+ * This is a no-op when `headVarsRemap` is empty.
+ *
+ * @param args.headVarsRemap  - Map from original variable name to its replacement.
+ * @param args.operation      - The algebra operation to transform.
+ * @param args.astTransformer - The AST transformer used for the deep walk.
+ * @returns The (possibly new) algebra operation with renamed variables.
+ */
 function rewriteUnifiedVariables({
   headVarsRemap,
   operation,
@@ -194,6 +248,20 @@ function rewriteUnifiedVariables({
   });
 }
 
+/**
+ * Prepends `BIND(term AS ?var)` extend nodes to `operation` for every entry in
+ * `mappingHeadBinds`, making each mapping-head variable carry its statically known value
+ * inside the subselect.
+ *
+ * The extends are joined with an empty BGP so the static bindings do not interfere
+ * with the mapping body.  The entries are sorted alphabetically for test stability.
+ *
+ * @param args.mappingHeadBinds - Map from variable name to the static term to bind.
+ * @param args.operation        - The mapping-body operation to extend.
+ * @param args.AF               - Algebra factory.
+ * @param args.DF               - Data factory.
+ * @returns The extended algebra operation.
+ */
 function rewriteToPreBindVars({ AF, DF, mappingHeadBinds, operation }: {
   mappingHeadBinds: Record<string, RDF.Term>;
   operation: Algebra.Operation;
@@ -216,6 +284,21 @@ function rewriteToPreBindVars({ AF, DF, mappingHeadBinds, operation }: {
   return operation;
 }
 
+/**
+ * Wraps `operation` in a chain of `FILTER(term = templateExpr)` expressions for
+ * each entry in `templateFilters`.
+ *
+ * These filters ensure that, at evaluation time, the value of a variable matches
+ * what the template would produce.  They are needed when a mapping-head variable is
+ * constrained by both a static term and a template (or when a static term in the
+ * user query must match a template in the mapping head).
+ *
+ * @param args.operation       - The inner operation to filter.
+ * @param args.templateFilters - List of `{ term, template }` pairs to emit as filters.
+ * @param args.AF              - Algebra factory.
+ * @param args.DF              - Data factory.
+ * @returns The (possibly wrapped) algebra operation.
+ */
 function wrapInTemplateFilters({ operation, templateFilters, AF, DF }: {
   operation: Algebra.Operation;
   templateFilters: { term: RDF.Term; template: Template }[];
@@ -233,6 +316,22 @@ function wrapInTemplateFilters({ operation, templateFilters, AF, DF }: {
   return buildOperation;
 }
 
+/**
+ * Wraps `operation` in a `Project` node that selects exactly the variables needed
+ * to compute the `triplePatternBinds` in the outer scope.
+ *
+ * The projected variable set is derived by visiting the values of `triplePatternBinds`
+ * and collecting all variables referenced there.  If no variables are needed (all
+ * bindings are static terms), a dummy `SELECT (1 AS ?dummy)` is emitted so the
+ * sub-query remains valid SPARQL.
+ *
+ * @param args.triplePatternBinds - Map from user-query variable name to its binding (term or template).
+ * @param args.operation          - The inner operation to project.
+ * @param args.astTransformer     - Used to collect variables from the bind values.
+ * @param args.DF                 - Data factory.
+ * @param args.AF                 - Algebra factory.
+ * @returns A `Project` node selecting the required variables.
+ */
 function wrapOperationInProject({
   triplePatternBinds,
   operation,
@@ -268,6 +367,20 @@ function wrapOperationInProject({
   return AF.createProject(buildOperation, vars);
 }
 
+/**
+ * Appends `BIND(templateExpr AS ?var)` extends after the sub-query for every entry
+ * in `triplePatternBinds`.
+ *
+ * These extends expose the rewritten values of the user-query variables to the
+ * outer join, making the sub-query act as a self-contained "virtual triple pattern".
+ * Entries are sorted alphabetically for test stability.
+ *
+ * @param args.subQuery            - The subselect `Project` node to extend.
+ * @param args.triplePatternBinds  - Map from user-query variable name to its binding.
+ * @param args.DF                  - Data factory.
+ * @param args.AF                  - Algebra factory.
+ * @returns The extended projection.
+ */
 function bindPatternTerms({ subQuery, AF, DF, triplePatternBinds }: {
   subQuery: Algebra.Project;
   triplePatternBinds: Record<string, RDF.Term | Template>;

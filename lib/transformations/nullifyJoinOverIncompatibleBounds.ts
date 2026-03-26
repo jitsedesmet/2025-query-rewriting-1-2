@@ -3,8 +3,19 @@ import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformContext } from '../transformContext.js';
 import { createFilterFalse, directExtensions, termIsStaticTerm } from '../utils.js';
 
+/**
+ * A variable value set that tracks the possible concrete RDF terms a variable may equal.
+ *
+ * - When `isNoFixed` is `true` the set represents "unknown / unbounded" – any term is possible.
+ *   Under union semantics this is the absorbing element: a union with an unbounded variable
+ *   remains unbounded.
+ * - When `isNoFixed` is `false` the `values` array lists the exact terms the variable may equal.
+ *   Under join semantics only the intersection of two sets is possible.
+ */
 class VariableSet {
+  /** When `true`, the set is unbounded – the variable may equal any term. */
   public isNoFixed: boolean;
+  /** The concrete RDF terms the variable may equal (only meaningful when `isNoFixed` is `false`). */
   public values: RDF.Term[];
 
   public constructor(...values: RDF.Term[]) {
@@ -18,6 +29,14 @@ class VariableSet {
     return res;
   }
 
+  /**
+   * Returns a new `VariableSet` that represents the union of `this` and `other`.
+   *
+   * If either operand is unbounded (`isNoFixed`), the result is unbounded (absorbing).
+   * Otherwise the result is the deduplicated concatenation of both value lists.
+   *
+   * @param other - The set to union with.
+   */
   public union(other: VariableSet): VariableSet {
     if (this.isNoFixed || other.isNoFixed) {
       return VariableSet.createNoFixed();
@@ -28,6 +47,15 @@ class VariableSet {
     );
   }
 
+  /**
+   * Returns a new `VariableSet` that represents the intersection (join) of `this` and `other`.
+   *
+   * If both operands are unbounded, the result is unbounded.  If only one is unbounded,
+   * the bounded set is returned unchanged.  Otherwise the result contains only the
+   * values present in both sets.
+   *
+   * @param other - The set to intersect with.
+   */
   public disjunct(other: VariableSet): VariableSet {
     if (this.isNoFixed && other.isNoFixed) {
       return VariableSet.createNoFixed();
@@ -43,6 +71,14 @@ class VariableSet {
     );
   }
 
+  /**
+   * Returns `true` when `term` is compatible with this set.
+   *
+   * A term is compatible when the set is unbounded, when `term` is a variable (its concrete
+   * value is unknown at rewrite time), or when `term` is explicitly in `values`.
+   *
+   * @param term - The RDF term to check for compatibility.
+   */
   public termIsCompatible(term: RDF.Term): boolean {
     return this.isNoFixed || term.termType === 'Variable' || this.values.some(x => x.equals(term));
   }
@@ -90,6 +126,24 @@ export function nullifyJoinOverIncompatibleBounds<T extends Algebra.Operation>(
   );
 }
 
+/**
+ * Applies the known variable constraints (`varSets`) across all members of the join
+ * by recursively walking each member's algebra tree.
+ *
+ * For each `Extend` node encountered:
+ * - If the variable is bound to a mapping variable (prefix `m` or `r`) the scope of
+ *   that mapping variable is narrowed by injecting `VALUES` into the subselect.
+ * - If the bound term is incompatible with the known constraint the `Extend` is
+ *   replaced by `FILTER(false)` (together with its outer extend chain).
+ *
+ * For each `Union` node, all members are recursed into.
+ * For each `Project` node, a `VALUES` clause is injected for any mapping variables
+ * whose concrete value set is known (see {@link restrictProjectUsingValues}).
+ *
+ * @param c       - The transformation context.
+ * @param join    - The join whose members are to be restricted (mutated in place).
+ * @param varSets - Map from variable name to its known value set across the join.
+ */
 function restrictOperations(c: TransformContext, join: Algebra.Join, varSets: Record<string, VariableSet>): void {
   const { AF } = c;
   const mappingVarsToScope: Record<string, VariableSet> = {};
@@ -126,6 +180,19 @@ function restrictOperations(c: TransformContext, join: Algebra.Join, varSets: Re
   join.input = join.input.map(x => recurse(x));
 }
 
+/**
+ * Injects `VALUES` clauses into a `Project` node to restrict the mapping variables
+ * whose concrete value sets are known from the outer join context.
+ *
+ * This is the preferred implementation strategy because `VALUES` clauses are
+ * efficiently handled by SPARQL engines and do not require additional `FILTER`
+ * expressions that would need to be evaluated for every solution.
+ *
+ * @param c                  - The transformation context.
+ * @param project            - The subselect `Project` to restrict.
+ * @param mappingVarsToScope - Map from mapping variable name to its known value set.
+ * @returns The (possibly restructured) algebra operation.
+ */
 function restrictProjectUsingValues(
   c: TransformContext,
   project: Algebra.Project,
@@ -237,6 +304,18 @@ function createFilterBound(
   return AF.createFilter(input, andOfVars(mappedEntries));
 }
 
+/**
+ * Computes the intersection of the variable-to-value-set maps produced by each member
+ * of `join`.
+ *
+ * Each member is analysed by {@link directExtensionOverUnionsAndMore}.  When a variable
+ * appears in multiple join members its value sets are intersected (joined) across all of
+ * them, because in a join every member must agree on the variable's value.
+ *
+ * @param c    - The transformation context.
+ * @param join - The join to analyse.
+ * @returns A map from variable name to the intersection of its value sets across all members.
+ */
 function variableExtensionsOverJoin(c: TransformContext, join: Algebra.Join): Record<string, VariableSet> {
   const head = join.input[0];
   // Not knowing the variable makes it be noFixed, and that is identity of disjuntion
@@ -255,6 +334,20 @@ function variableExtensionsOverJoin(c: TransformContext, join: Algebra.Join): Re
   return varSets;
 }
 
+/**
+ * Traverses a single algebra operation (which may contain `Extend` chains and
+ * nested `Union` nodes) and returns a map from variable name to its possible value set.
+ *
+ * - **`Extend`** nodes with static term expressions contribute a singleton set.
+ * - **`Union`** nodes are handled by {@link directExtensionOverUnions} which merges
+ *   the value sets from all union branches.
+ * - Any other node type is ignored (the operation may still bind variables deeper,
+ *   but those are not tracked here).
+ *
+ * @param c  - The transformation context.
+ * @param op - The algebra operation to analyse.
+ * @returns A map from variable name to its known value set.
+ */
 function directExtensionOverUnionsAndMore(c: TransformContext, op: Algebra.Operation): Record<string, VariableSet> {
   const varSets: Record<string, VariableSet> = {};
   const traverse = (op: Algebra.Operation): void => {
@@ -272,6 +365,17 @@ function directExtensionOverUnionsAndMore(c: TransformContext, op: Algebra.Opera
   return varSets;
 }
 
+/**
+ * Computes the union of the variable-to-value-set maps produced by each branch of a `Union`.
+ *
+ * A variable that appears in all branches contributes the union of its value sets.
+ * A variable that is absent from some branch becomes unbounded (`isNoFixed = true`)
+ * because the engine might choose any branch at evaluation time.
+ *
+ * @param c     - The transformation context.
+ * @param union - The union operation to analyse.
+ * @returns A map from variable name to its unified value set across all branches.
+ */
 function directExtensionOverUnions(c: TransformContext, union: Algebra.Union): Record<string, VariableSet> {
   const head = union.input[0];
   // Not knowing the variable makes it be noFixed, which is absorbing element under union

@@ -7,6 +7,24 @@ import { createFilterFalse, isFilterFalse, termFalse } from '../utils.js';
  * https://www.w3.org/TR/sparql11-query/#sparqlSimplification
  */
 
+/**
+ * Propagates `FILTER(false)` upwards through the algebra tree, eliminating
+ * operations that are guaranteed to produce no results.
+ *
+ * Rules applied (based on SPARQL simplification identities):
+ * - **Join** with any `FILTER(false)` member → `FILTER(false)`.
+ * - **Union** whose every member is `FILTER(false)` → `FILTER(false)`.
+ *   A `FILTER(false)` member that is not the only member is pruned from the union.
+ * - **Extend, From, Distinct, Filter, Service, Reduced, Slice, Graph, OrderBy** –
+ *   if their input is `FILTER(false)`, the operation itself becomes `FILTER(false)`.
+ * - **Minus** – if the left operand is `FILTER(false)`, the result is `FILTER(false)`;
+ *   if the right operand is `FILTER(false)`, the result is just the left operand.
+ * - **LeftJoin** – same as Minus with respect to `FILTER(false)` on either side.
+ *
+ * @param c  - The transformation context.
+ * @param op - The algebra operation to simplify.
+ * @returns The simplified operation.
+ */
 export function transformFilterFalse(c: TransformContext, op: Algebra.Operation): Algebra.Operation {
   const absorbSingle = { transform: (x: Algebra.Single): Algebra.Single => absorbingSingle(c, x) };
   return algebraUtils.mapOperation<'unsafe', typeof op>(
@@ -47,6 +65,16 @@ export function transformFilterFalse(c: TransformContext, op: Algebra.Operation)
   );
 }
 
+/**
+ * If the input of `single` is `FILTER(false)`, replaces `single` with `FILTER(false)`.
+ * Otherwise returns `single` unchanged.
+ *
+ * Used as the default handler for all single-input algebra operations inside
+ * {@link transformFilterFalse}.
+ *
+ * @param c      - The transformation context.
+ * @param single - The single-input algebra operation to absorb.
+ */
 export function absorbingSingle(
   c: TransformContext,
   single: Algebra.Single,

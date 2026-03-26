@@ -6,11 +6,21 @@ import { DT_INTERNAL_BNODE, EXTENSION_FUNCTION_BNODE, IRI_PREFIX_BNODE } from '.
 import type { TransformContext } from '../transformContext.js';
 
 /**
- * The contents of this expression is a bunch of vars:
- *   <internal://blank> ( ?m0_s , ?m0_p )
- * rewrite to:
- *   STRDT( ?m0_s, ?m0p,  <internal://bnodetype>)
- *   STRDT( CONCAT ( STR (?s), STR(?p) ), <internal://bnodetype> )
+ * Rewrites the internal blank-node named-expression into an expression that produces
+ * a deterministic string key encoding the types and values of all key variables.
+ *
+ * The generated expression uses a big nested `IF` chain per variable to serialise each
+ * possible term kind (IRI, language-direction literal, language literal, typed literal)
+ * into a comma-separated string.  Commas and backslashes that appear in user values are
+ * escaped with a backslash so the separator is unambiguous.
+ *
+ * If `hashFunc` is provided the resulting string is hashed before use.
+ *
+ * @param c          - The transformation context providing the algebra and data factories.
+ * @param expression - The named expression to inspect and potentially rewrite.
+ * @param hashFunc   - Optional hash function to apply to the concatenated key string.
+ * @returns The rewritten expression, or the original expression unchanged when
+ *          `expression.name` does not match `{@link EXTENSION_FUNCTION_BNODE}`.
  */
 function expressionForConsistentConstruction(
   c: TransformContext,
@@ -109,6 +119,21 @@ function expressionForConsistentConstruction(
   return AF.createOperatorExpression(hashFunc, [ value ]);
 }
 
+/**
+ * Transforms all internal blank-node named expressions in `op` into SPARQL expressions
+ * that produce a **typed literal** carrying the {@link DT_INTERNAL_BNODE} datatype.
+ *
+ * The generated expression is `STRDT(<key>, <DT_INTERNAL_BNODE>)` where `<key>` is
+ * the deterministic concatenation produced by {@link expressionForConsistentConstruction}.
+ *
+ * Additionally, any `ISBLANK(?var)` operator is rewritten to
+ * `DATATYPE(?var) = <DT_INTERNAL_BNODE>` so that blank-node checks continue to work
+ * against the skolemised representation.
+ *
+ * @param c  - The transformation context.
+ * @param op - The algebra operation to transform.
+ * @returns The transformed operation.
+ */
 export function internalBnodeAsSpecialLiteral<T extends Algebra.Operation>(c: TransformContext, op: T): T {
   const { AF, DF } = c;
   return algebraUtils.mapOperationSub<'unsafe', typeof op>(
@@ -140,6 +165,21 @@ export function internalBnodeAsSpecialLiteral<T extends Algebra.Operation>(c: Tr
   );
 }
 
+/**
+ * Transforms all internal blank-node named expressions in `op` into SPARQL expressions
+ * that produce an **IRI** by hashing the key with SHA-1 and prepending
+ * {@link IRI_PREFIX_BNODE}.
+ *
+ * The generated expression is `IRI(CONCAT(<IRI_PREFIX_BNODE>, SHA1(<key>)))`.
+ *
+ * Additionally, any `ISBLANK(?var)` operator is rewritten to
+ * `ISIRI(?var) && STRSTARTS(STR(?var), <IRI_PREFIX_BNODE>)` so that blank-node checks
+ * continue to work against the IRI-based skolemised representation.
+ *
+ * @param c  - The transformation context.
+ * @param op - The algebra operation to transform.
+ * @returns The transformed operation.
+ */
 export function internalBnodeAsSpecialIri<T extends Algebra.Operation>(c: TransformContext, op: T): T {
   const { AF, DF } = c;
   return algebraUtils.mapOperationSub<'unsafe', typeof op>(

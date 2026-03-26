@@ -6,6 +6,29 @@ import { createFilterFalse, isRdfVar } from '../utils.js';
 
 let counter = 0;
 
+/**
+ * Rewrites all non-recursive property-path expressions in `op` into equivalent BGP /
+ * algebra constructs so that downstream query-rewriting passes only need to handle
+ * plain triple patterns.
+ *
+ * Supported path operators and their rewrites:
+ * - **`alt`** (`|`)          – expanded to a `UNION` of the alternative paths.
+ * - **`link`**               – converted to a single-pattern BGP.
+ * - **`inv`** (`^`)          – subject and object are swapped and the inner path is recursed.
+ * - **`seq`** (`/`)          – converted to a `JOIN` chain with fresh intermediate variables.
+ * - **`nps`** (negated set)  – converted to a `FILTER(?p NOT IN (...))` over a fresh predicate variable.
+ * - **`ZeroOrOnePath`** (`?`) – expanded according to whether subject/object are variables or terms:
+ *   - both variables → `UNION` of the path and a same-subject extend over the node-set.
+ *   - both terms and equal → empty BGP (matches trivially).
+ *   - both terms and unequal → recursed inner path.
+ *   - one variable → `UNION` of the path and a `BIND(term AS ?var)` extend.
+ *
+ * Recursive operators (`*`, `+`) are left as-is (not supported by this rewrite).
+ *
+ * @param c  - The transformation context providing the algebra and data factories.
+ * @param op - The algebra operation to rewrite.
+ * @returns The transformed operation with non-recursive paths expanded.
+ */
 export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: TransformContext, op: T): T {
   const { AF, DF } = c;
 

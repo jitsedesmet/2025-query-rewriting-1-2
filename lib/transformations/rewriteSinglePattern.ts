@@ -261,6 +261,16 @@ function rewriteUnifiedVariables({
     if (isRdfVar(something) && headVarsRemap[something.value]) {
       return headVarsRemap[something.value];
     }
+    // Values.bindings uses string keys for variable names — rename those too.
+    if ('type' in something && something.type === 'values' && 'bindings' in something) {
+      const valuesOp = <Alg.Values> something;
+      valuesOp.bindings = valuesOp.bindings.map(binding => Object.fromEntries(
+        Object.entries(binding).map(([ key, value ]) => [
+          headVarsRemap[key] ? headVarsRemap[key].value : key,
+          value,
+        ]),
+      ));
+    }
     return something;
   });
 }

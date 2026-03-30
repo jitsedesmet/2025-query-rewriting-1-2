@@ -1,6 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformContext } from '../transformContext.js';
+import { isRdfVar } from '../utils.js';
 
 /**
  * Optimization transformation that substitutes variables with their known bound values.
@@ -61,6 +62,34 @@ function substituteAndUnwrapExtends(c: TransformContext, projection: Algebra.Pro
     return projection;
   }
 
+  // Collect variables that appear as subjects/predicates/objects in triple patterns.
+  // Only those can be safely substituted (and their BIND safely unwrapped).
+  const varsInTriplePatterns = new Set<string>();
+  algebraUtils.visitOperation(projection, {
+    pattern: {
+      visitor: (pattern) => {
+        for (const term of [ pattern.subject, pattern.predicate, pattern.object ]) {
+          if (isRdfVar(term)) {
+            varsInTriplePatterns.add((<RDF.Variable> term).value);
+          }
+        }
+      },
+    },
+  });
+
+  // Collect variables declared in VALUES clauses. Substituting such a variable
+  // would leave the VALUES clause unconstrained, causing spurious duplicate results.
+  const varsInValuesClauses = new Set<string>();
+  algebraUtils.visitOperation(projection, {
+    values: {
+      visitor: (values) => {
+        for (const variable of values.variables) {
+          varsInValuesClauses.add(variable.value);
+        }
+      },
+    },
+  });
+
   // Find the variables that are bounded to a term on this level
   const assignments: Record<string, RDF.Term> = {};
   const findAssignmentsAndUnwrap = (op: Algebra.Operation): Algebra.Operation => {
@@ -69,7 +98,12 @@ function substituteAndUnwrapExtends(c: TransformContext, projection: Algebra.Pro
       const varIsProjected = stillUsedVars.some(var_ => var_.equals(op.variable));
       const expressionIsBasicTerm = op.expression.subType === Algebra.ExpressionTypes.TERM && (
         op.expression.term.termType === 'Literal' || op.expression.term.termType === 'NamedNode');
-      if (!varIsProjected && expressionIsBasicTerm) {
+      // Only unwrap when the variable actually appears in a triple pattern AND is not
+      // declared in a VALUES clause — otherwise removing the BIND loses a join constraint
+      // (against a computed value or against a VALUES filter).
+      const varIsInTriplePattern = varsInTriplePatterns.has(op.variable.value);
+      const varIsInValuesClause = varsInValuesClauses.has(op.variable.value);
+      if (!varIsProjected && expressionIsBasicTerm && varIsInTriplePattern && !varIsInValuesClause) {
         assignments[op.variable.value] = (<Algebra.TermExpression>op.expression).term;
         // Unwrap
         return findAssignmentsAndUnwrap(op.input);

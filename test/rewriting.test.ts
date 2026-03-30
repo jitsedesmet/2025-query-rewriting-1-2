@@ -1070,9 +1070,6 @@ describe('dummy', () => {
       [ operationTransform ],
     ));
 
-    /**
-     * BROKEN because of substituteVarsThatArePreBoundToTerms.
-     */
     it('bind in mapping body when user query has constant subject & optimize terms', ({ expect }) =>
       testConstructMappers(
         expect,
@@ -1081,6 +1078,9 @@ describe('dummy', () => {
   {
     {
       SELECT ?m0_o WHERE {
+        {
+          BIND( <http://example.org/foo> AS ?m0_s )
+        }
         {
           ?m0_x <ex://test> ?m0_o .
           BIND( IRI( CONCAT( "http://example.org/" , STR( ?m0_x ) ) ) AS ?m0_s )
@@ -1094,10 +1094,6 @@ describe('dummy', () => {
       [ operationTransform, substituteVarsThatArePreBoundToTerms ],
       ));
 
-    /**
-     * BROKEN!!! Very weird that this undef is introduced. It should remain the same body.
-     * (I suspect this is because of the variable renaming?)
-     */
     it('values in mapping body on head variable', ({ expect }) => testConstructMappers(
       expect,
       `SELECT * { ?x ?p ?y }`,
@@ -1106,8 +1102,8 @@ describe('dummy', () => {
     {
       SELECT ?m0_o ?m0_p ?m0_s WHERE {
         VALUES ?m0_p {
-          UNDEF
-          UNDEF
+          <ex://a>
+          <ex://b>
         }
         ?m0_s ?m0_p ?m0_o .
       }
@@ -1120,9 +1116,6 @@ describe('dummy', () => {
       [ `CONSTRUCT { ?s ?p ?o } WHERE { VALUES ?p { <ex://a> <ex://b> } ?s ?p ?o . }` ],
     ));
 
-    /**
-     * BROKEN!!! Same undef as before. The values join with bind is okay.
-     */
     it('values in mapping body when user query constrains the same variable', ({ expect }) => testConstructMappers(
       expect,
       `SELECT * { ?x <ex://a> ?y }`,
@@ -1134,8 +1127,8 @@ describe('dummy', () => {
           BIND( <ex://a> AS ?m0_p )
         }
         VALUES ?m0_p {
-          UNDEF
-          UNDEF
+          <ex://a>
+          <ex://b>
         }
         ?m0_s ?m0_p ?m0_o .
       }
@@ -1147,9 +1140,6 @@ describe('dummy', () => {
       [ `CONSTRUCT { ?s ?p ?o } WHERE { VALUES ?p { <ex://a> <ex://b> } ?s ?p ?o . }` ],
     ));
 
-    /**
-     * BROKEN!!! Same values bindings. So it's similar to before.
-     */
     it('values in mapping body with user query constant not in VALUES set', ({ expect }) => testConstructMappers(
       expect,
       `SELECT * { ?x <ex://c> ?y }`,
@@ -1161,8 +1151,8 @@ describe('dummy', () => {
           BIND( <ex://c> AS ?m0_p )
         }
         VALUES ?m0_p {
-          UNDEF
-          UNDEF
+          <ex://a>
+          <ex://b>
         }
         ?m0_s ?m0_p ?m0_o .
       }
@@ -1196,5 +1186,71 @@ describe('dummy', () => {
 }`,
       [ `CONSTRUCT { ?s ?p ?o } WHERE { ?x ?p ?o . BIND(<ex://computedValue> AS ?s) }` ],
     ));
+
+    it('values in mapping body with variable unification (same user var in two positions)', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT * { ?x ?x ?y }`,
+        `SELECT ( ?uq_x AS ?x ) ( ?uq_y AS ?y ) WHERE {
+  {
+    {
+      SELECT ?m0_o ?rm0_s_AND_p WHERE {
+        VALUES ?rm0_s_AND_p {
+          <ex://a>
+          <ex://b>
+        }
+        ?rm0_s_AND_p ?rm0_s_AND_p ?m0_o .
+      }
+    }
+    BIND( ?rm0_s_AND_p AS ?uq_x )
+    BIND( ?m0_o AS ?uq_y )
+  }
+}`,
+        [ `CONSTRUCT { ?s ?p ?o } WHERE { VALUES ?s { <ex://a> <ex://b> } ?s ?p ?o . }` ],
+      ));
+
+    it('optimize terms substitutes variables that appear only in triple patterns', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT * { <ex://foo> <ex://p> ?o }`,
+        `SELECT ( ?uq_o AS ?o ) WHERE {
+  {
+    {
+      SELECT ?m0_o WHERE {
+        <ex://foo> <ex://p> ?m0_o .
+      }
+    }
+    BIND( ?m0_o AS ?uq_o )
+  }
+}`,
+        [ `CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }` ],
+        [ operationTransform, substituteVarsThatArePreBoundToTerms ],
+      ));
+
+    it('optimize terms does not substitute variable that appears in VALUES clause', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT * { ?x <ex://a> ?y }`,
+        `SELECT ( ?uq_x AS ?x ) ( ?uq_y AS ?y ) WHERE {
+  {
+    {
+      SELECT ?m0_o ?m0_s WHERE {
+        {
+          BIND( <ex://a> AS ?m0_p )
+        }
+        VALUES ?m0_p {
+          <ex://a>
+          <ex://b>
+        }
+        ?m0_s ?m0_p ?m0_o .
+      }
+    }
+    BIND( ?m0_s AS ?uq_x )
+    BIND( ?m0_o AS ?uq_y )
+  }
+}`,
+        [ `CONSTRUCT { ?s ?p ?o } WHERE { VALUES ?p { <ex://a> <ex://b> } ?s ?p ?o . }` ],
+        [ operationTransform, substituteVarsThatArePreBoundToTerms ],
+      ));
   });
 });

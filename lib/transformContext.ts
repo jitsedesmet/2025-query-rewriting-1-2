@@ -66,7 +66,14 @@ export function prefixVarsInOperation<T extends object>(
 ): T {
   return <T> astTransformer.transformObject(obj, (obj) => {
     if (isRdfTerm(obj) && obj.termType === 'Variable') {
-      return DF.variable(prefix + obj.value);
+      return DF.variable(prefix + (obj).value);
+    }
+    // Values.bindings uses string keys for variable names — rename those too.
+    if ('type' in obj && obj.type === 'values' && 'bindings' in obj) {
+      const valuesOp = <Algebra.Values> obj;
+      valuesOp.bindings = valuesOp.bindings.map(binding => Object.fromEntries(
+        Object.entries(binding).map(([ key, value ]) => [ prefix + key, value ]),
+      ));
     }
     return obj;
   });

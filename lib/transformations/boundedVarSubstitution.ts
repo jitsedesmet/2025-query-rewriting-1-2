@@ -1,7 +1,8 @@
 import type * as RDF from '@rdfjs/types';
-import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
+import type { Algebra } from '@traqula/algebra-transformations-1-2';
+import { algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformContext } from '../transformContext.js';
-import { createFilterFalse } from '../utils.js';
+import { createFilterFalse, deleteVarExtensionsInPlace, directExtensions } from '../utils.js';
 
 /**
  * Optimization transformation that substitutes variables with their known bound values.
@@ -53,8 +54,9 @@ interface BranchAnalysis {
  * about variable bindings.
  */
 function analyzeBranch(
+  c: TransformContext,
   branch: Algebra.Operation,
-  stillUsedVars: RDF.Variable[],
+  stillUsedVarNames: Set<string>,
 ): BranchAnalysis {
   const result: BranchAnalysis = {
     termBinds: {},
@@ -62,21 +64,17 @@ function analyzeBranch(
     valuesConstraints: {},
   };
 
-  // Walk the top-level EXTEND chain and collect simple-term bindings.
+  // Collect top-level EXTEND term bindings, skipping still-used variables.
+  for (const [ varName, term ] of Object.entries(directExtensions(c, branch))) {
+    if (!stillUsedVarNames.has(varName)) {
+      result.termBinds[varName] = term;
+    }
+  }
+
+  // Walk past the top-level EXTEND chain to reach the content below.
   let belowChain: Algebra.Operation = branch;
   while (belowChain.type === 'extend') {
-    const ext = belowChain;
-    const varName = ext.variable.value;
-    if (!stillUsedVars.some(v => v.equals(ext.variable))) {
-      const expr = ext.expression;
-      const isTermExpr =
-        expr.subType === Algebra.ExpressionTypes.TERM &&
-        (expr.term.termType === 'Literal' || expr.term.termType === 'NamedNode');
-      if (isTermExpr) {
-        result.termBinds[varName] = (expr).term;
-      }
-    }
-    belowChain = ext.input;
+    belowChain = belowChain.input;
   }
 
   // Scan everything below the top-level chain for:
@@ -85,7 +83,7 @@ function analyzeBranch(
   algebraUtils.visitOperation(belowChain, {
     extend: {
       visitor: (ext) => {
-        if (!stillUsedVars.some(v => v.equals(ext.variable))) {
+        if (!stillUsedVarNames.has(ext.variable.value)) {
           result.nestedExtendVars.add(ext.variable.value);
         }
       },
@@ -93,14 +91,9 @@ function analyzeBranch(
     values: {
       visitor: (values) => {
         for (const variable of values.variables) {
-          const terms: (RDF.Literal | RDF.NamedNode)[] = [];
-          for (const binding of values.bindings) {
-            const term = binding[variable.value];
-            if (term !== undefined) {
-              terms.push(term);
-            }
-          }
-          result.valuesConstraints[variable.value] = terms;
+          result.valuesConstraints[variable.value] = values.bindings
+            .map(binding => binding[variable.value])
+            .filter((term): term is RDF.Literal | RDF.NamedNode => term !== undefined);
         }
       },
     },
@@ -129,28 +122,26 @@ function analyzeBranch(
 function substituteAndUnwrapExtends(c: TransformContext, projection: Algebra.Project): Algebra.Project {
   const { AF } = c;
 
+  const stillUsedVarNames = new Set<string>(projection.variables.map(v => v.value));
+
   let join: Algebra.Join | undefined;
-  const stillUsedVars: RDF.Variable[] = [ ...projection.variables ];
   if (projection.input.type === 'join') {
     join = projection.input;
   } else if (projection.input.type === 'extend') {
-    const iter = (op: Algebra.Operation): void => {
-      if (op.type === 'join') {
-        join = op;
-      } else if (op.type === 'extend') {
-        stillUsedVars.push(op.variable);
-        iter(op.input);
-      }
-    };
-    iter(projection.input);
-    if (!join) {
+    let cursor: Algebra.Operation = projection.input;
+    while (cursor.type === 'extend') {
+      stillUsedVarNames.add(cursor.variable.value);
+      cursor = cursor.input;
+    }
+    if (cursor.type !== 'join') {
       return projection;
     }
+    join = cursor;
   } else {
     return projection;
   }
 
-  const branchAnalyses = join.input.map(branch => analyzeBranch(branch, stillUsedVars));
+  const branchAnalyses = join.input.map(branch => analyzeBranch(c, branch, stillUsedVarNames));
 
   // Variables that appear as subject/predicate/object in any triple pattern.
   // Substitution is only useful (and safe) for those.
@@ -214,19 +205,6 @@ function substituteAndUnwrapExtends(c: TransformContext, projection: Algebra.Pro
     return projection;
   }
 
-  // Remove BIND(t AS v) from the top-level EXTEND chain of each branch.
-  const unwrapExtendChain = (op: Algebra.Operation): Algebra.Operation => {
-    if (op.type !== 'extend') {
-      return op;
-    }
-    const ext = op;
-    if (ext.variable.value in assignments) {
-      return unwrapExtendChain(ext.input);
-    }
-    ext.input = unwrapExtendChain(ext.input);
-    return ext;
-  };
-
   // For VALUES clauses that constrain a substituted variable:
   //   • Filter their rows to those where the variable equals the assigned term.
   //   • Remove the variable from the clause.
@@ -247,15 +225,9 @@ function substituteAndUnwrapExtends(c: TransformContext, projection: Algebra.Pro
                 return bindTerm !== undefined &&
                   bindTerm.equals(<RDF.NamedNode | RDF.Literal> assignments[v.value]);
               }))
-            .map((binding) => {
-              const newBinding: Record<string, RDF.Literal | RDF.NamedNode> = {};
-              for (const [ key, value ] of Object.entries(binding)) {
-                if (!(key in assignments)) {
-                  newBinding[key] = value;
-                }
-              }
-              return newBinding;
-            });
+            .map(binding => <Record<string, RDF.Literal | RDF.NamedNode>> Object.fromEntries(
+              Object.entries(binding).filter(([ key ]) => !(key in assignments)),
+            ));
           const newVariables = values.variables.filter(v => !(v.value in assignments));
           if (newVariables.length === 0) {
             return AF.createBgp([]);
@@ -265,7 +237,10 @@ function substituteAndUnwrapExtends(c: TransformContext, projection: Algebra.Pro
       },
     });
 
-  join.input = join.input.map(branch => cleanupValues(unwrapExtendChain(branch)));
+  // Remove BIND(t AS v) from the top-level EXTEND chain of each branch,
+  // then clean up VALUES clauses.
+  const assignedVars = Object.keys(assignments);
+  join.input = join.input.map(branch => cleanupValues(deleteVarExtensionsInPlace(c, branch, assignedVars)));
 
   return algebraUtils.mapOperation<'unsafe', typeof projection>(projection, {
     pattern: {

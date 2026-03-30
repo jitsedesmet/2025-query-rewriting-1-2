@@ -1227,7 +1227,7 @@ describe('dummy', () => {
         [ operationTransform, substituteVarsThatArePreBoundToTerms ],
       ));
 
-    it('optimize terms does not substitute variable that appears in VALUES clause', ({ expect }) =>
+    it('optimize terms substitutes variable in VALUES clause when term is in the set', ({ expect }) =>
       testConstructMappers(
         expect,
         `SELECT * { ?x <ex://a> ?y }`,
@@ -1235,14 +1235,7 @@ describe('dummy', () => {
   {
     {
       SELECT ?m0_o ?m0_s WHERE {
-        {
-          BIND( <ex://a> AS ?m0_p )
-        }
-        VALUES ?m0_p {
-          <ex://a>
-          <ex://b>
-        }
-        ?m0_s ?m0_p ?m0_o .
+        ?m0_s <ex://a> ?m0_o .
       }
     }
     BIND( ?m0_s AS ?uq_x )
@@ -1250,6 +1243,66 @@ describe('dummy', () => {
   }
 }`,
         [ `CONSTRUCT { ?s ?p ?o } WHERE { VALUES ?p { <ex://a> <ex://b> } ?s ?p ?o . }` ],
+        [ operationTransform, substituteVarsThatArePreBoundToTerms ],
+      ));
+
+    it('optimize terms emits FILTER(false) when term is not in VALUES set', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT * { ?x <ex://c> ?y }`,
+        `SELECT ( ?uq_x AS ?x ) ( ?uq_y AS ?y ) WHERE {
+  {
+    {
+      SELECT ?m0_o ?m0_s WHERE {
+        FILTER ( FALSE )
+      }
+    }
+    BIND( ?m0_s AS ?uq_x )
+    BIND( ?m0_o AS ?uq_y )
+  }
+}`,
+        [ `CONSTRUCT { ?s ?p ?o } WHERE { VALUES ?p { <ex://a> <ex://b> } ?s ?p ?o . }` ],
+        [ operationTransform, substituteVarsThatArePreBoundToTerms ],
+      ));
+
+    it('optimize terms prunes rows and removes variable from multi-variable VALUES', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT * { ?a <ex://a> ?b }`,
+        `SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
+  {
+    {
+      SELECT ?m0_o ?m0_s WHERE {
+        VALUES ?m0_s {
+          <ex://x>
+        }
+        ?m0_s <ex://a> ?m0_o .
+      }
+    }
+    BIND( ?m0_s AS ?uq_a )
+    BIND( ?m0_o AS ?uq_b )
+  }
+}`,
+        [ `CONSTRUCT { ?s ?p ?o } WHERE { VALUES (?p ?s) { (<ex://a> <ex://x>) (<ex://b> <ex://y>) } ?s ?p ?o . }` ],
+        [ operationTransform, substituteVarsThatArePreBoundToTerms ],
+      ));
+
+    it('optimize terms emits FILTER(false) when term not in multi-variable VALUES set', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT * { ?a <ex://c> ?b }`,
+        `SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
+  {
+    {
+      SELECT ?m0_o ?m0_s WHERE {
+        FILTER ( FALSE )
+      }
+    }
+    BIND( ?m0_s AS ?uq_a )
+    BIND( ?m0_o AS ?uq_b )
+  }
+}`,
+        [ `CONSTRUCT { ?s ?p ?o } WHERE { VALUES (?p ?s) { (<ex://a> <ex://x>) (<ex://b> <ex://y>) } ?s ?p ?o . }` ],
         [ operationTransform, substituteVarsThatArePreBoundToTerms ],
       ));
   });

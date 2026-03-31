@@ -1254,7 +1254,10 @@ describe('dummy', () => {
   {
     {
       SELECT ?m0_o ?m0_s WHERE {
-        FILTER ( FALSE )
+        {
+          FILTER ( FALSE )
+        }
+        ?m0_s <ex://c> ?m0_o .
       }
     }
     BIND( ?m0_s AS ?uq_x )
@@ -1295,7 +1298,10 @@ describe('dummy', () => {
   {
     {
       SELECT ?m0_o ?m0_s WHERE {
-        FILTER ( FALSE )
+        {
+          FILTER ( FALSE )
+        }
+        ?m0_s <ex://c> ?m0_o .
       }
     }
     BIND( ?m0_s AS ?uq_a )

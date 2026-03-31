@@ -1,8 +1,7 @@
 import type * as RDF from '@rdfjs/types';
-import type { Algebra } from '@traqula/algebra-transformations-1-2';
-import { algebraUtils } from '@traqula/algebra-transformations-1-2';
+import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformContext } from '../transformContext.js';
-import { createFilterFalse, deleteVarExtensionsInPlace, directExtensions } from '../utils.js';
+import { createFilterFalse, deleteVarExtensionsInPlace } from '../utils.js';
 
 /**
  * Optimization transformation that substitutes variables with their known bound values.
@@ -32,26 +31,27 @@ export function substituteVarsThatArePreBoundToTerms<T extends Algebra.Operation
 }
 
 /**
- * Per-branch static analysis result:
+ * Per-branch static analysis result (top-level EXTEND chain only — no deep traversal):
  *
- * - `termBinds`: top-level EXTEND chains that bind a variable to a simple term.
- *   These are candidates for substitution.
- * - `nestedExtendVars`: variables that have *any* EXTEND binding below the
- *   top-level chain (i.e., a computed value that cannot be determined statically).
- *   Their presence in another branch blocks substitution.
- * - `valuesConstraints`: variables constrained by a VALUES clause anywhere in
- *   this branch, mapped to the concrete terms they may take.  When a candidate
- *   `BIND(t AS v)` from another branch is checked, `t` must appear in this set.
+ * - `termBinds`: EXTEND operations at the top of the branch chain that bind a variable
+ *   to a simple term (Literal or NamedNode). Candidates for direct substitution.
+ * - `complexBinds`: EXTEND operations at the top of the chain whose expression is NOT a
+ *   simple term. For each substituted variable in this set, the BIND is replaced with a
+ *   FILTER that checks whether the complex expression equals the substituted term.
+ * - `valuesConstraints`: variables constrained by a VALUES clause that is directly at (or
+ *   directly below) the EXTEND chain of this branch. Mapped to the concrete terms they
+ *   may take.
  */
 interface BranchAnalysis {
   termBinds: Record<string, RDF.Term>;
-  nestedExtendVars: Set<string>;
+  complexBinds: Record<string, Algebra.Expression>;
   valuesConstraints: Record<string, (RDF.Literal | RDF.NamedNode)[]>;
 }
 
 /**
  * Analyses a single join branch to determine what static information it carries
- * about variable bindings.
+ * about variable bindings. Only the top-level EXTEND chain is examined; no deep
+ * traversal into nested operations is performed.
  */
 function analyzeBranch(
   c: TransformContext,
@@ -60,44 +60,36 @@ function analyzeBranch(
 ): BranchAnalysis {
   const result: BranchAnalysis = {
     termBinds: {},
-    nestedExtendVars: new Set(),
+    complexBinds: {},
     valuesConstraints: {},
   };
 
-  // Collect top-level EXTEND term bindings, skipping still-used variables.
-  for (const [ varName, term ] of Object.entries(directExtensions(c, branch))) {
-    if (!stillUsedVarNames.has(varName)) {
-      result.termBinds[varName] = term;
-    }
-  }
-
-  // Walk past the top-level EXTEND chain to reach the content below.
+  // Walk the top-level EXTEND chain, collecting simple term binds and complex binds.
   let belowChain: Algebra.Operation = branch;
   while (belowChain.type === 'extend') {
+    if (!stillUsedVarNames.has(belowChain.variable.value)) {
+      const expr = belowChain.expression;
+      if (expr.subType === Algebra.ExpressionTypes.TERM &&
+          // Only Literals and NamedNodes are substitutable: blank nodes have local scope
+          // and cannot be safely lifted out of the branch they originate in.
+          (expr.term.termType === 'Literal' || expr.term.termType === 'NamedNode')) {
+        result.termBinds[belowChain.variable.value] = expr.term;
+      } else {
+        result.complexBinds[belowChain.variable.value] = expr;
+      }
+    }
     belowChain = belowChain.input;
   }
 
-  // Scan everything below the top-level chain for:
-  //   - Any EXTEND (nested / computed value) → blocks substitution for that var
-  //   - VALUES clauses → provide a candidate set for that var
-  algebraUtils.visitOperation(belowChain, {
-    extend: {
-      visitor: (ext) => {
-        if (!stillUsedVarNames.has(ext.variable.value)) {
-          result.nestedExtendVars.add(ext.variable.value);
-        }
-      },
-    },
-    values: {
-      visitor: (values) => {
-        for (const variable of values.variables) {
-          result.valuesConstraints[variable.value] = values.bindings
-            .map(binding => binding[variable.value])
-            .filter((term): term is RDF.Literal | RDF.NamedNode => term !== undefined);
-        }
-      },
-    },
-  });
+  // If the content directly below the EXTEND chain is a VALUES clause, collect its
+  // variable constraints. No further traversal is needed.
+  if (belowChain.type === 'values') {
+    for (const variable of belowChain.variables) {
+      result.valuesConstraints[variable.value] = belowChain.bindings
+        .map(binding => binding[variable.value])
+        .filter((term): term is RDF.Literal | RDF.NamedNode => term !== undefined);
+    }
+  }
 
   return result;
 }
@@ -105,17 +97,17 @@ function analyzeBranch(
 /**
  * Processes a projection to find and apply variable substitutions.
  *
- * A variable `v` is eligible for substitution with term `t` when, across all
- * branches of the immediate join:
- *  - Exactly one branch has a top-level `BIND(t AS v)`.
- *  - `v` appears as a subject/predicate/object in at least one triple pattern
- *    (otherwise there is nothing to substitute into).
- *  - No other branch has any EXTEND that binds `v` (a computed value whose
- *    equality with `t` cannot be verified statically).
- *  - Every branch with a VALUES clause for `v` includes `t` in its term set.
+ * A variable `v` with a top-level `BIND(t AS v)` in one branch of the join is
+ * substituted into triple patterns with the concrete term `t`. Conflicts in other
+ * branches are resolved locally rather than blocking the substitution:
  *
- * When eligible, the BIND is removed, the matching VALUES rows are filtered
- * (and the variable removed from the VALUES), and triple patterns are rewritten.
+ *  - Another branch with `BIND(t' AS v)` where `t' ≠ t`: that branch is replaced
+ *    with `FILTER(FALSE)` since the two constant assignments can never unify.
+ *  - Another branch with `BIND(complexExpr AS v)`: the complex BIND is replaced
+ *    with `FILTER(complexExpr = t)` to preserve the runtime constraint.
+ *  - Another branch with a VALUES clause for `v`: the VALUES is cleaned up by
+ *    `cleanupValues` — rows not matching `t` are removed, and if no rows remain
+ *    the VALUES is replaced with `FILTER(FALSE)`.
  *
  * Only perform this operation when the variables go out of scope due to the projection.
  */
@@ -158,8 +150,10 @@ function substituteAndUnwrapExtends(c: TransformContext, projection: Algebra.Pro
     },
   });
 
-  // Determine which variables can be safely substituted.
+  // Determine which variables to substitute and which branches need local fixes.
   const assignments: Record<string, RDF.Term> = {};
+  // Branch indices to replace entirely with FILTER(FALSE) due to a conflicting termBind.
+  const branchesToWrapFF = new Set<number>();
 
   for (let srcIdx = 0; srcIdx < branchAnalyses.length; srcIdx++) {
     const srcAnalysis = branchAnalyses[srcIdx];
@@ -167,37 +161,28 @@ function substituteAndUnwrapExtends(c: TransformContext, projection: Algebra.Pro
       if (!varsInTriplePatterns.has(varName)) {
         continue;
       }
-      let substitutable = true;
+      if (varName in assignments) {
+        // Already handled in a previous source branch; if this branch carries a
+        // different term it is contradictory and must be wrapped with FILTER(FALSE).
+        if (!term.equals(assignments[varName])) {
+          branchesToWrapFF.add(srcIdx);
+        }
+        continue;
+      }
+      // Check other branches for conflicting simple term binds.
       for (const [ otherIdx, other ] of branchAnalyses.entries()) {
         if (otherIdx === srcIdx) {
           continue;
         }
-        // Conflict: another branch also term-binds this variable.
-        if (other.termBinds[varName] !== undefined) {
-          substitutable = false;
-          break;
+        if (other.termBinds[varName] !== undefined &&
+            !other.termBinds[varName].equals(term)) {
+          // Conflicting constant assignment in another branch → that branch can
+          // never satisfy the join for this variable.
+          branchesToWrapFF.add(otherIdx);
         }
-        // Blocker: another branch has a nested (computed) EXTEND for this variable.
-        if (other.nestedExtendVars.has(varName)) {
-          substitutable = false;
-          break;
-        }
-        // Compatibility: if another branch constrains v via VALUES,
-        // the candidate term must be present in the allowed set.
-        // If it is NOT, BIND(t AS v) and VALUES v {t1,...} can never both be
-        // satisfied simultaneously → the whole projection is always empty.
-        const valuesTerms = other.valuesConstraints[varName];
-        if (valuesTerms !== undefined) {
-          const termInValues = valuesTerms.some(v =>
-            v.equals(<RDF.NamedNode | RDF.Literal> term));
-          if (!termInValues) {
-            return AF.createProject(createFilterFalse(c), projection.variables);
-          }
-        }
+        // Complex binds and VALUES mismatches are handled during the transform step.
       }
-      if (substitutable) {
-        assignments[varName] = term;
-      }
+      assignments[varName] = term;
     }
   }
 
@@ -208,8 +193,9 @@ function substituteAndUnwrapExtends(c: TransformContext, projection: Algebra.Pro
   // For VALUES clauses that constrain a substituted variable:
   //   • Filter their rows to those where the variable equals the assigned term.
   //   • Remove the variable from the clause.
-  //   • If no variables remain, replace the entire clause with an empty BGP
-  //     (semantically a single empty row — the term was confirmed to be in the set).
+  //   • If no rows survive (mismatch), replace the clause with FILTER(FALSE).
+  //   • If all variable columns are removed and rows survive (confirmed match),
+  //     replace with an empty BGP (a single empty solution row).
   const cleanupValues = (op: Algebra.Operation): Algebra.Operation =>
     algebraUtils.mapOperation<'unsafe', typeof op>(op, {
       values: {
@@ -228,8 +214,13 @@ function substituteAndUnwrapExtends(c: TransformContext, projection: Algebra.Pro
             .map(binding => <Record<string, RDF.Literal | RDF.NamedNode>> Object.fromEntries(
               Object.entries(binding).filter(([ key ]) => !(key in assignments)),
             ));
+          // No matching rows → the VALUES constraint can never be satisfied.
+          if (filteredBindings.length === 0) {
+            return createFilterFalse(c);
+          }
           const newVariables = values.variables.filter(v => !(v.value in assignments));
           if (newVariables.length === 0) {
+            // All columns substituted and at least one row matched → confirmed.
             return AF.createBgp([]);
           }
           return AF.createValues(newVariables, filteredBindings);
@@ -237,10 +228,30 @@ function substituteAndUnwrapExtends(c: TransformContext, projection: Algebra.Pro
       },
     });
 
-  // Remove BIND(t AS v) from the top-level EXTEND chain of each branch,
-  // then clean up VALUES clauses.
+  // Apply per-branch transformations, then clean up VALUES clauses.
   const assignedVars = Object.keys(assignments);
-  join.input = join.input.map(branch => cleanupValues(deleteVarExtensionsInPlace(c, branch, assignedVars)));
+  join.input = join.input.map((branch, idx) => {
+    if (branchesToWrapFF.has(idx)) {
+      return createFilterFalse(c);
+    }
+
+    const analysis = branchAnalyses[idx];
+    let transformed: Algebra.Operation = branch;
+
+    // Convert BIND(complexExpr AS v) → FILTER(complexExpr = t) for each assigned
+    // variable that has a complex bind in this branch. Do this before
+    // deleteVarExtensionsInPlace so the EXTEND is replaced rather than deleted.
+    for (const [ varName, term ] of Object.entries(assignments)) {
+      const complexExpr = analysis.complexBinds[varName];
+      if (complexExpr !== undefined) {
+        transformed = replaceExtendWithFilter(c, transformed, varName, complexExpr, term);
+      }
+    }
+
+    // Remove simple term BINDs and clean up VALUES clauses.
+    transformed = deleteVarExtensionsInPlace(c, transformed, assignedVars);
+    return cleanupValues(transformed);
+  });
 
   return algebraUtils.mapOperation<'unsafe', typeof projection>(projection, {
     pattern: {
@@ -265,4 +276,47 @@ function translateTerm(term: RDF.Term, assignments: Record<string, RDF.Term>): R
     return assignments[term.value];
   }
   return term;
+}
+
+/**
+ * Replaces `BIND(complexExpr AS varName)` with `FILTER(complexExpr = term, input)` within
+ * the top-level EXTEND chain of `op`. Used to preserve the runtime constraint expressed
+ * by a complex BIND when the variable is being statically substituted with `term`.
+ *
+ * @param c - The transformation context
+ * @param op - The operation whose EXTEND chain should be patched
+ * @param varName - The variable name whose complex BIND should be replaced
+ * @param complexExpr - The complex expression from the original BIND
+ * @param term - The concrete term that will be substituted for the variable.
+ *   By construction this is always a NamedNode or Literal: `assignments` is
+ *   only populated from `termBinds`, which filters for those two term types.
+ * @returns The patched operation with the BIND replaced by a FILTER
+ */
+function replaceExtendWithFilter(
+  c: TransformContext,
+  op: Algebra.Operation,
+  varName: string,
+  complexExpr: Algebra.Expression,
+  term: RDF.Term,
+): Algebra.Operation {
+  const { AF } = c;
+  const traverse = (current: Algebra.Operation): Algebra.Operation => {
+    if (current.type !== 'extend') {
+      return current;
+    }
+    if (current.variable.value === varName) {
+      return AF.createFilter(
+        traverse(current.input),
+        AF.createOperatorExpression('=', [
+          complexExpr,
+          AF.createTermExpression(<RDF.NamedNode | RDF.Literal> term),
+        ]),
+      );
+    }
+    // Mutate in place, consistent with the rest of the algebra-patching helpers
+    // (e.g. deleteVarExtensionsInPlace) that also reuse existing nodes.
+    current.input = traverse(current.input);
+    return current;
+  };
+  return traverse(op);
 }

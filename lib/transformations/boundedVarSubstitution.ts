@@ -66,12 +66,12 @@ function analyzeBranch(
 
   // Walk the top-level EXTEND chain, collecting simple term binds and complex binds.
   let belowChain: Algebra.Operation = branch;
-  while (belowChain.type === 'extend') {
+  while (belowChain.type === Algebra.Types.EXTEND) {
     if (!stillUsedVarNames.has(belowChain.variable.value)) {
       const expr = belowChain.expression;
       if (expr.subType === Algebra.ExpressionTypes.TERM &&
-          // Only Literals and NamedNodes are substitutable: blank nodes have local scope
-          // and cannot be safely lifted out of the branch they originate in.
+          // Only Literals and NamedNodes are substitutable:
+          // blank nodes cannot appear in bind, and TT is maybe not simple term (may contain vars).
           (expr.term.termType === 'Literal' || expr.term.termType === 'NamedNode')) {
         result.termBinds[belowChain.variable.value] = expr.term;
       } else {
@@ -83,7 +83,7 @@ function analyzeBranch(
 
   // If the content directly below the EXTEND chain is a VALUES clause, collect its
   // variable constraints. No further traversal is needed.
-  if (belowChain.type === 'values') {
+  if (belowChain.type === Algebra.Types.VALUES) {
     for (const variable of belowChain.variables) {
       result.valuesConstraints[variable.value] = belowChain.bindings
         .map(binding => binding[variable.value])
@@ -116,22 +116,37 @@ function substituteAndUnwrapExtends(c: TransformContext, projection: Algebra.Pro
 
   const stillUsedVarNames = new Set<string>(projection.variables.map(v => v.value));
 
+  // Find the top level join in the project, only unwrapping outer extends
   let join: Algebra.Join | undefined;
-  if (projection.input.type === 'join') {
+  if (projection.input.type === Algebra.Types.JOIN) {
     join = projection.input;
-  } else if (projection.input.type === 'extend') {
+  } else if (projection.input.type === Algebra.Types.EXTEND) {
     let cursor: Algebra.Operation = projection.input;
-    while (cursor.type === 'extend') {
+    while (cursor.type === Algebra.Types.EXTEND) {
       stillUsedVarNames.add(cursor.variable.value);
       cursor = cursor.input;
     }
-    if (cursor.type !== 'join') {
+    if (cursor.type !== Algebra.Types.JOIN) {
       return projection;
     }
     join = cursor;
   } else {
     return projection;
   }
+
+  // Flatten the join. Has more joins, inline them into one.
+  const joinInput: typeof join.input = [];
+  function flattenJoin(join: Algebra.Join): void {
+    for (const item of join.input) {
+      if (item.type === Algebra.Types.JOIN) {
+        flattenJoin(item);
+      } else {
+        joinInput.push(item);
+      }
+    }
+  }
+  flattenJoin(join);
+  join.input = joinInput;
 
   const branchAnalyses = join.input.map(branch => analyzeBranch(c, branch, stillUsedVarNames));
 

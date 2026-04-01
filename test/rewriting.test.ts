@@ -1079,11 +1079,8 @@ describe('dummy', () => {
     {
       SELECT ?m0_o WHERE {
         {
-          BIND( <http://example.org/foo> AS ?m0_s )
-        }
-        {
           ?m0_x <ex://test> ?m0_o .
-          BIND( IRI( CONCAT( "http://example.org/" , STR( ?m0_x ) ) ) AS ?m0_s )
+          FILTER ( ( IRI( CONCAT( "http://example.org/" , STR( ?m0_x ) ) ) = <http://example.org/foo> ) )
         }
       }
     }
@@ -1227,7 +1224,7 @@ describe('dummy', () => {
         [ operationTransform, substituteVarsThatArePreBoundToTerms ],
       ));
 
-    it('optimize terms does not substitute variable that appears in VALUES clause', ({ expect }) =>
+    it('optimize terms substitutes variable in VALUES clause when term is in the set', ({ expect }) =>
       testConstructMappers(
         expect,
         `SELECT * { ?x <ex://a> ?y }`,
@@ -1235,14 +1232,7 @@ describe('dummy', () => {
   {
     {
       SELECT ?m0_o ?m0_s WHERE {
-        {
-          BIND( <ex://a> AS ?m0_p )
-        }
-        VALUES ?m0_p {
-          <ex://a>
-          <ex://b>
-        }
-        ?m0_s ?m0_p ?m0_o .
+        ?m0_s <ex://a> ?m0_o .
       }
     }
     BIND( ?m0_s AS ?uq_x )
@@ -1252,5 +1242,241 @@ describe('dummy', () => {
         [ `CONSTRUCT { ?s ?p ?o } WHERE { VALUES ?p { <ex://a> <ex://b> } ?s ?p ?o . }` ],
         [ operationTransform, substituteVarsThatArePreBoundToTerms ],
       ));
+
+    it('optimize terms emits FILTER(false) when term is not in VALUES set', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT * { ?x <ex://c> ?y }`,
+        `SELECT ( ?uq_x AS ?x ) ( ?uq_y AS ?y ) WHERE {
+  {
+    {
+      SELECT ?m0_o ?m0_s WHERE {
+        FILTER ( FALSE )
+      }
+    }
+    BIND( ?m0_s AS ?uq_x )
+    BIND( ?m0_o AS ?uq_y )
+  }
+}`,
+        [ `CONSTRUCT { ?s ?p ?o } WHERE { VALUES ?p { <ex://a> <ex://b> } ?s ?p ?o . }` ],
+        [ operationTransform, substituteVarsThatArePreBoundToTerms ],
+      ));
+
+    it('optimize terms prunes rows and removes variable from multi-variable VALUES', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT * { ?a <ex://a> ?b }`,
+        `SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
+  {
+    {
+      SELECT ?m0_o ?m0_s WHERE {
+        VALUES ?m0_s {
+          <ex://x>
+        }
+        ?m0_s <ex://a> ?m0_o .
+      }
+    }
+    BIND( ?m0_s AS ?uq_a )
+    BIND( ?m0_o AS ?uq_b )
+  }
+}`,
+        [ `CONSTRUCT { ?s ?p ?o } WHERE { VALUES (?p ?s) { (<ex://a> <ex://x>) (<ex://b> <ex://y>) } ?s ?p ?o . }` ],
+        [ operationTransform, substituteVarsThatArePreBoundToTerms ],
+      ));
+
+    it('optimize terms emits FILTER(false) when term not in multi-variable VALUES set', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT * { ?a <ex://c> ?b }`,
+        `SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
+  {
+    {
+      SELECT ?m0_o ?m0_s WHERE {
+        FILTER ( FALSE )
+      }
+    }
+    BIND( ?m0_s AS ?uq_a )
+    BIND( ?m0_o AS ?uq_b )
+  }
+}`,
+        [ `CONSTRUCT { ?s ?p ?o } WHERE { VALUES (?p ?s) { (<ex://a> <ex://x>) (<ex://b> <ex://y>) } ?s ?p ?o . }` ],
+        [ operationTransform, substituteVarsThatArePreBoundToTerms ],
+      ));
+
+    it('terms emits can handle queries using aggregates', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT * { ?a <ex://c> ?b }`,
+        `SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
+  {
+    {
+      SELECT ?m0_count ?m0_s WHERE {
+        {
+          BIND( <ex://c> AS ?m0_p )
+        }
+        {
+          SELECT ?m0_s ?m0_p ( COUNT( ?m0_o ) AS ?m0_count ) WHERE {
+            ?m0_s ?m0_p ?m0_o .
+          }
+          GROUP BY ?m0_s?m0_p
+        }
+      }
+    }
+    BIND( ?m0_s AS ?uq_a )
+    BIND( ?m0_count AS ?uq_b )
+  }
+}`,
+        [ `CONSTRUCT { ?s ?p ?count } WHERE {
+  { SELECT ?s ?p (COUNT(?o) AS ?count) { ?s ?p ?o } GROUP BY ?s ?p }
+}` ],
+        [ operationTransform ],
+      ));
   });
+
+  it('optimize terms emits can handle queries using aggregates', ({ expect }) =>
+    testConstructMappers(
+      expect,
+        `SELECT * { ?a <ex://c> ?b }`,
+        `SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
+  {
+    {
+      SELECT ?m0_count ?m0_s WHERE {
+        {
+          SELECT ?m0_s ( COUNT( ?m0_o ) AS ?m0_count ) WHERE {
+            ?m0_s <ex://c> ?m0_o .
+          }
+          GROUP BY ?m0_s
+        }
+      }
+    }
+    BIND( ?m0_s AS ?uq_a )
+    BIND( ?m0_count AS ?uq_b )
+  }
+}`,
+        [ `CONSTRUCT { ?s ?p ?count } WHERE {
+  { SELECT ?s ?p (COUNT(?o) AS ?count) { ?s ?p ?o } GROUP BY ?s ?p }
+}` ],
+        [ operationTransform, substituteVarsThatArePreBoundToTerms ],
+    ));
+
+  it('optimize terms substitutes predicate into ORDER BY of a subquery', ({ expect }) =>
+    testConstructMappers(
+      expect,
+      `SELECT * { ?a <ex://c> ?b }`,
+      `SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
+  {
+    {
+      SELECT ?m0_o ?m0_s WHERE {
+        {
+          SELECT ?m0_s ?m0_o WHERE {
+            ?m0_s <ex://c> ?m0_o .
+          }
+        }
+      }
+    }
+    BIND( ?m0_s AS ?uq_a )
+    BIND( ?m0_o AS ?uq_b )
+  }
+}`,
+      [ `CONSTRUCT { ?s ?p ?o } WHERE { SELECT ?s ?p ?o WHERE { ?s ?p ?o } ORDER BY ?p }` ],
+      [ operationTransform, substituteVarsThatArePreBoundToTerms ],
+    ));
+
+  it('optimize terms propagates substitution through two levels of nested subqueries', ({ expect }) =>
+    testConstructMappers(
+      expect,
+      `SELECT * { ?a <ex://c> ?b }`,
+      `SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
+  {
+    {
+      SELECT ?m0_o ?m0_s WHERE {
+        {
+          SELECT ?m0_s ?m0_o WHERE {
+            SELECT ?m0_s ?m0_o WHERE {
+              ?m0_s <ex://c> ?m0_o .
+            }
+          }
+        }
+      }
+    }
+    BIND( ?m0_s AS ?uq_a )
+    BIND( ?m0_o AS ?uq_b )
+  }
+}`,
+      [ `CONSTRUCT { ?s ?p ?o } WHERE { { SELECT ?s ?p ?o WHERE { { SELECT ?s ?p ?o WHERE { ?s ?p ?o } } } } }` ],
+      [ operationTransform, substituteVarsThatArePreBoundToTerms ],
+    ));
+
+  it('optimize terms substitutes predicate in OPTIONAL branch of a subquery', ({ expect }) =>
+    testConstructMappers(
+      expect,
+      `SELECT * { ?a <ex://c> ?b }`,
+      `SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
+  {
+    {
+      SELECT ?m0_o ?m0_s WHERE {
+        ?m0_s <ex://x> ?m0_o .
+        OPTIONAL {
+          ?m0_s <ex://c> ?m0_o .
+        }
+      }
+    }
+    BIND( ?m0_s AS ?uq_a )
+    BIND( ?m0_o AS ?uq_b )
+  }
+}`,
+      [ `CONSTRUCT { ?s ?p ?o } WHERE { ?s <ex://x> ?o . OPTIONAL { ?s ?p ?o } }` ],
+      [ operationTransform, substituteVarsThatArePreBoundToTerms ],
+    ));
+
+  it('optimize terms substitutes predicate variable inside FILTER condition of a subquery', ({ expect }) =>
+    testConstructMappers(
+      expect,
+      `SELECT * { ?a <ex://c> ?b }`,
+      `SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
+  {
+    {
+      SELECT ?m0_o ?m0_s WHERE {
+        {
+          SELECT ?m0_s ?m0_o WHERE {
+            ?m0_s <ex://c> ?m0_o .
+            FILTER ( ( <ex://c> = <ex://c> ) )
+          }
+        }
+      }
+    }
+    BIND( ?m0_s AS ?uq_a )
+    BIND( ?m0_o AS ?uq_b )
+  }
+}`,
+      [ `CONSTRUCT { ?s ?p ?o } WHERE { SELECT ?s ?p ?o WHERE { ?s ?p ?o . FILTER(?p = <ex://c>) } }` ],
+      [ operationTransform, substituteVarsThatArePreBoundToTerms ],
+    ));
+
+  it('optimize terms substitutes predicate in aggregate subquery with HAVING', ({ expect }) =>
+    testConstructMappers(
+      expect,
+      `SELECT * { ?a <ex://c> ?b }`,
+      `SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
+  {
+    {
+      SELECT ?m0_count ?m0_s WHERE {
+        {
+          SELECT ?m0_s ( COUNT( ?m0_o ) AS ?m0_count ) WHERE {
+            ?m0_s <ex://c> ?m0_o .
+          }
+          GROUP BY ?m0_s
+          HAVING ( COUNT( ?m0_o ) > "5"^^<http://www.w3.org/2001/XMLSchema#integer> )
+        }
+      }
+    }
+    BIND( ?m0_s AS ?uq_a )
+    BIND( ?m0_count AS ?uq_b )
+  }
+}`,
+      [ `CONSTRUCT { ?s ?p ?count } WHERE {
+  { SELECT ?s ?p (COUNT(?o) AS ?count) { ?s ?p ?o } GROUP BY ?s ?p HAVING(COUNT(?o) > 5) }
+}` ],
+      [ operationTransform, substituteVarsThatArePreBoundToTerms ],
+    ));
 });

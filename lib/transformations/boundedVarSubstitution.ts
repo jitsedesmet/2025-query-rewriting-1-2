@@ -231,6 +231,7 @@ function substituteInExpr(
   subs: Record<string, RDF.Term>,
 ): Algebra.Expression {
   const { AF } = c;
+  // TODO: no exists should be handled here?
   switch (expr.subType) {
     case Algebra.ExpressionTypes.TERM: {
       const { term } = expr;
@@ -293,39 +294,43 @@ function cleanupValues(
 ): Algebra.Operation {
   const { AF } = c;
 
-  const affectedVars = values.variables.filter(v => subs[v.value] !== undefined);
-  if (affectedVars.length === 0) {
+  const variablesInReplacement = values.variables.filter(v => subs[v.value] === undefined);
+  if (variablesInReplacement.length === values.variables.length) {
     return values;
   }
 
-  let { bindings } = values;
-  for (const v of affectedVars) {
-    const term = subs[v.value];
-    bindings = bindings.filter((binding) => {
-      const bindingTerm = binding[v.value];
-      return bindingTerm !== undefined && bindingTerm.equals(term);
-    });
+  // Construct the replacement.
+  const origVars = values.variables;
+  const replacementBindings: Algebra.Values['bindings'] = [];
+  for (const binding of values.bindings) {
+    const newBinding: typeof replacementBindings[0] = {};
+    let validBinding = true;
+    for (const variable of origVars) {
+      const replacementTerm = subs[variable.value];
+      if (replacementTerm === undefined) {
+        newBinding[variable.value] = binding[variable.value];
+      } else if (!replacementTerm.equals(binding[variable.value])) {
+        validBinding = false;
+      }
+    }
+    if (validBinding) {
+      replacementBindings.push(newBinding);
+    }
   }
 
-  if (bindings.length === 0) {
+  if (replacementBindings.length === 0) {
     return createFilterFalse(c);
   }
 
-  const remainingVars = values.variables.filter(v => subs[v.value] === undefined);
-  if (remainingVars.length === 0) {
+  if (variablesInReplacement.length === 0) {
     return AF.createBgp([]);
   }
 
-  const remainingBindings = bindings.map(binding =>
-    <Record<string, RDF.Literal | RDF.NamedNode>> Object.fromEntries(
-      Object.entries(binding).filter(([ key ]) => subs[key] === undefined),
-    ));
-
-  return AF.createValues(remainingVars, remainingBindings);
+  return AF.createValues(variablesInReplacement, replacementBindings);
 }
 
 /**
- * Recursively applies a term-substitution map to an operation sub-tree.
+ * Applies a term-substitution map to an operation sub-tree using `mapOperation` for traversal.
  *
  * - BGP / PATH: substitutes variable references in subjects, predicates and objects.
  * - EXTEND whose variable is being substituted:
@@ -333,11 +338,11 @@ function cleanupValues(
  *     term differ → FILTER(FALSE)
  *     complex     → FILTER(expr = term) (case 2.1)
  * - VALUES: delegated to cleanupValues.
- * - PROJECT: left unchanged; each PROJECT is handled by the outer mapOperation traversal.
- * - FILTER: only recurses into its input (triple patterns), never rewrites the filter expression
- *   itself, because the expression is a constraint on existing bindings, not a data pattern.
- * - All other single/multi-input operations: recurses into children; substitutes in embedded
- *   BIND expressions (EXTEND whose variable is NOT substituted) but not in FILTER expressions.
+ * - PROJECT: traversal stops; each PROJECT is handled by the outer mapOperation call.
+ * - FILTER: the filter expression is excluded from automatic traversal and handled manually —
+ *   boolean conditions are left untouched, but EXISTS/NOT EXISTS sub-patterns are substituted.
+ * - EXTEND expression: also excluded from automatic traversal and handled via substituteInExpr.
+ * - All other operations: traversal is handled automatically by mapOperation.
  */
 function applySubstitutions(
   c: TransformContext,
@@ -346,79 +351,69 @@ function applySubstitutions(
 ): Algebra.Operation {
   const { AF } = c;
   const subExpr = (e: Algebra.Expression): Algebra.Expression => substituteInExpr(c, e, subs);
-  const subTerm = (t: RDF.Term): RDF.Term =>
-    (t.termType === 'Variable' && subs[t.value] !== undefined) ? subs[t.value] : t;
+  const subTerm = (term: RDF.Term): RDF.Term =>
+    (term.termType === 'Variable' && subs[term.value] !== undefined) ? subs[term.value] : term;
 
-  switch (op.type) {
-    case Algebra.Types.BGP:
-      op.patterns = op.patterns.map(p =>
-        AF.createPattern(subTerm(p.subject), subTerm(p.predicate), subTerm(p.object), p.graph));
-      return op;
+  return algebraUtils.mapOperation<'unsafe', Algebra.Operation>(op, {
+    [Algebra.Types.BGP]: { transform: (bgp) => {
+      bgp.patterns = bgp.patterns.map(p =>
+        AF.createPattern(subTerm(p.subject), subTerm(p.predicate), subTerm(p.object), subTerm(p.graph)));
+      return bgp;
+    } },
+    [Algebra.Types.PATH]: { transform: (path) => {
+      path.subject = subTerm(path.subject);
+      path.object = subTerm(path.object);
+      return path;
+    } },
+    // Exclude expression from automatic traversal; it is handled manually in the transform.
+    [Algebra.Types.EXTEND]: {
+      preVisitor: () => ({ ignoreKeys: new Set([ 'expression' ]) }),
+      transform: (extend) => {
+        const varSub = subs[extend.variable.value];
 
-    case Algebra.Types.PATH:
-      op.subject = subTerm(op.subject);
-      op.object = subTerm(op.object);
-      return op;
+        if (varSub === undefined) {
+          // Substitute vars in the expression itself.
+          extend.expression = subExpr(extend.expression);
+          return extend;
+        }
 
-    case Algebra.Types.EXTEND: {
-      const varSub = subs[op.variable.value];
-      if (varSub !== undefined) {
-        const { expression: expr } = op;
+        // In case the var being assigned to is in replaced:
+        // 1. the simple bind matching assignment is removed, and
+        // 2. Simple bind not matching becomes a Filter false.
+        // 3. complex bind becomes a filter,
+
+        const expr = extend.expression;
         if (expr.subType === Algebra.ExpressionTypes.TERM && expr.term.termType !== 'Variable') {
           if (expr.term.equals(varSub)) {
-            return applySubstitutions(c, op.input, subs);
+            return extend.input;
           }
-          return createFilterFalse(c, applySubstitutions(c, op.input, subs));
+          return createFilterFalse(c, extend.input);
         }
         return AF.createFilter(
-          applySubstitutions(c, op.input, subs),
-          AF.createOperatorExpression('=', [ subExpr(op.expression), AF.createTermExpression(varSub) ]),
+          extend.input,
+          AF.createOperatorExpression('=', [ subExpr(expr), AF.createTermExpression(varSub) ]),
         );
-      }
-      op.expression = subExpr(op.expression);
-      op.input = applySubstitutions(c, op.input, subs);
-      return op;
-    }
-
-    case Algebra.Types.VALUES:
-      return cleanupValues(c, op, subs);
-
+      },
+    },
+    [Algebra.Types.VALUES]: {
+      transform: values => cleanupValues(c, values, subs),
+    },
     // Each PROJECT is handled by the outer mapOperation traversal; do not recurse here.
-    case Algebra.Types.PROJECT:
-      return op;
-
-    // Only recurse into the input (data patterns); leave the filter expression untouched.
-    // FILTER is a constraint on existing bindings, not a data pattern.
-    // Exception: EXISTS/NOT EXISTS sub-patterns inside the expression ARE data patterns
-    // and must have substitutions applied to them.
-    case Algebra.Types.FILTER:
-      op.expression = applySubstitutionsInExistencePatterns(c, op.expression, subs);
-      op.input = applySubstitutions(c, op.input, subs);
-      return op;
-
-    case Algebra.Types.LEFT_JOIN:
-      op.input = [ applySubstitutions(c, op.input[0], subs), applySubstitutions(c, op.input[1], subs) ];
-      return op;
-
-    case Algebra.Types.JOIN:
-    case Algebra.Types.UNION:
-    case Algebra.Types.MINUS:
-      op.input = op.input.map(x => applySubstitutions(c, x, subs));
-      return op;
-
-    case Algebra.Types.GRAPH:
-      op.name = <RDF.Variable | RDF.NamedNode> subTerm(op.name);
-      op.input = applySubstitutions(c, op.input, subs);
-      return op;
-
-    default:
-      if ('input' in op && op.input !== undefined) {
-        if (Array.isArray(op.input)) {
-          (<Algebra.Multi> op).input = (<Algebra.Multi> op).input.map(x => applySubstitutions(c, x, subs));
-        } else {
-          (<Algebra.Single> op).input = applySubstitutions(c, (<Algebra.Single> op).input, subs);
-        }
-      }
-      return op;
-  }
+    [Algebra.Types.PROJECT]: {
+      preVisitor: () => ({ continue: false }),
+    },
+    // Exclude expression from automatic traversal. Only EXISTS/NOT EXISTS sub-patterns are
+    // substituted; the boolean conditions themselves are left untouched.
+    [Algebra.Types.FILTER]: {
+      preVisitor: () => ({ ignoreKeys: new Set([ 'expression' ]) }),
+      transform: (filter) => {
+        filter.expression = subExpr(filter.expression);
+        return filter;
+      },
+    },
+    [Algebra.Types.GRAPH]: { transform: (graph) => {
+      graph.name = <RDF.Variable | RDF.NamedNode> subTerm(graph.name);
+      return graph;
+    } },
+  });
 }

@@ -161,7 +161,7 @@ SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) (
     SELECT ( "dummy" AS ?dummy ) WHERE {
       {
         <https://example.com/t> <https://example.com/statedBy> <https://example.com/govBE> .
-        FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?m1_p != "rdf:reifies" ) && NOT EXISTS {
+        FILTER ( ( ! ISTRIPLE( <https://example.com/govBE> ) && ( ( <https://example.com/statedBy> != "rdf:reifies" ) && NOT EXISTS {
           ?m1_sRoot <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <https://example.com/t> .
         }
         ) ) )
@@ -242,7 +242,7 @@ SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) (
     SELECT ( "dummy" AS ?dummy ) WHERE {
       {
         <https://example.com/t> <https://example.com/statedBy> <https://example.com/govBE> .
-        FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?m1_p != "rdf:reifies" ) && NOT EXISTS {
+        FILTER ( ( ! ISTRIPLE( <https://example.com/govBE> ) && ( ( <https://example.com/statedBy> != "rdf:reifies" ) && NOT EXISTS {
           ?m1_sRoot <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <https://example.com/t> .
         }
         ) ) )

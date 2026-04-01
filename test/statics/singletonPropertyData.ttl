@@ -1,0 +1,18 @@
+PREFIX : <ex://>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+
+# Base facts (direct properties)
+:alice :worksFor :acme .
+:bob :worksFor :acme .
+
+# Singleton property 1: Alice works for ACME (with start date and role)
+:alice :worksFor_1 :acme .
+:worksFor_1 rdf:singletonPropertyOf :worksFor .
+:worksFor_1 :startDate "2020-01-01" .
+:worksFor_1 :role "engineer" .
+
+# Singleton property 2: Bob works for ACME (with start date and role)
+:bob :worksFor_2 :acme .
+:worksFor_2 rdf:singletonPropertyOf :worksFor .
+:worksFor_2 :startDate "2019-06-01" .
+:worksFor_2 :role "manager" .

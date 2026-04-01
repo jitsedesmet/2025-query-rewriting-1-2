@@ -1,4 +1,5 @@
 node_modules
+package-lock.json
 coverage
 .idea
 out
@@ -15,3 +16,4 @@ tsconfig.tsbuildinfo
 dist
 *.ttl
 *.nt
+!test/statics/*.ttl

@@ -1,0 +1,69 @@
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX sb:  <http://starbench.example.org/>
+
+# ── Direct (non-annotated) triples ──────────────────────────────────────────
+sb:alice sb:age 30 .
+sb:bob   sb:age 25 .
+sb:charlie sb:age 35 .
+sb:dave  sb:age 28 .
+
+# ── Reified triple 1: alice knows bob, cited by paper1 (high confidence) ────
+sb:t1 rdf:reifies _:tt1 .
+sb:t1 sb:source     sb:paper1 .
+sb:t1 sb:confidence "0.9"^^xsd:decimal .
+sb:t1 sb:date       "2020-01-01"^^xsd:date .
+_:tt1 a rdf:tripleTerm .
+_:tt1 rdf:ttSubject   sb:alice .
+_:tt1 rdf:ttPredicate sb:knows .
+_:tt1 rdf:ttObject    sb:bob .
+
+# ── Reified triple 2: alice knows charlie, cited by paper2 (low confidence) ─
+sb:t2 rdf:reifies _:tt2 .
+sb:t2 sb:source     sb:paper2 .
+sb:t2 sb:confidence "0.4"^^xsd:decimal .
+sb:t2 sb:date       "2021-03-15"^^xsd:date .
+_:tt2 a rdf:tripleTerm .
+_:tt2 rdf:ttSubject   sb:alice .
+_:tt2 rdf:ttPredicate sb:knows .
+_:tt2 rdf:ttObject    sb:charlie .
+
+# ── Reified triple 3: bob knows charlie, cited by paper1 (medium confidence) ─
+sb:t3 rdf:reifies _:tt3 .
+sb:t3 sb:source     sb:paper1 .
+sb:t3 sb:confidence "0.75"^^xsd:decimal .
+sb:t3 sb:date       "2020-06-10"^^xsd:date .
+_:tt3 a rdf:tripleTerm .
+_:tt3 rdf:ttSubject   sb:bob .
+_:tt3 rdf:ttPredicate sb:knows .
+_:tt3 rdf:ttObject    sb:charlie .
+
+# ── Reified triple 4: bob knows dave, cited by survey1 (high confidence) ────
+sb:t4 rdf:reifies _:tt4 .
+sb:t4 sb:source     sb:survey1 .
+sb:t4 sb:confidence "0.85"^^xsd:decimal .
+sb:t4 sb:date       "2019-11-20"^^xsd:date .
+_:tt4 a rdf:tripleTerm .
+_:tt4 rdf:ttSubject   sb:bob .
+_:tt4 rdf:ttPredicate sb:knows .
+_:tt4 rdf:ttObject    sb:dave .
+
+# ── Reified triple 5: charlie knows dave, cited by paper2 (medium confidence)─
+sb:t5 rdf:reifies _:tt5 .
+sb:t5 sb:source     sb:paper2 .
+sb:t5 sb:confidence "0.6"^^xsd:decimal .
+sb:t5 sb:date       "2022-07-01"^^xsd:date .
+_:tt5 a rdf:tripleTerm .
+_:tt5 rdf:ttSubject   sb:charlie .
+_:tt5 rdf:ttPredicate sb:knows .
+_:tt5 rdf:ttObject    sb:dave .
+
+# ── Reified triple 6: alice livesIn london, cited by paper1 (high confidence)─
+sb:t6 rdf:reifies _:tt6 .
+sb:t6 sb:source     sb:paper1 .
+sb:t6 sb:confidence "0.95"^^xsd:decimal .
+sb:t6 sb:date       "2018-02-28"^^xsd:date .
+_:tt6 a rdf:tripleTerm .
+_:tt6 rdf:ttSubject   sb:alice .
+_:tt6 rdf:ttPredicate sb:livesIn .
+_:tt6 rdf:ttObject    sb:london .

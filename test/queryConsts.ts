@@ -26,6 +26,37 @@ CONSTRUCT {
 }
 `;
 
+/**
+ * Maps singleton properties to RDF 1.2 triple terms.
+ * A singleton property (?prop) represents a unique occurrence of a property relationship
+ * that carries annotations via rdf:singletonPropertyOf.
+ */
+export const singletonPropertyConstruct = `
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+CONSTRUCT {
+  ?prop rdf:reifies <<( ?s ?trueProp ?o )>>
+} WHERE {
+  ?s ?prop ?o .
+  ?prop rdf:singletonPropertyOf ?trueProp .
+}
+`;
+
+/**
+ * Maps non-singleton triples (excluding singleton property predicates and their metadata)
+ * to normal form for use alongside singletonPropertyConstruct.
+ */
+export const nonSingletonTripleConstruct = `
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+CONSTRUCT {
+  ?s ?p ?o .
+} WHERE {
+  ?s ?p ?o .
+  FILTER ( !isTriple(?o) ) .
+  FILTER NOT EXISTS { ?p rdf:singletonPropertyOf ?trueProp . }
+  FILTER NOT EXISTS { ?s rdf:singletonPropertyOf ?trueProp . }
+}
+`;
+
 export const testQuery = `
 PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 PREFIX : <https://example.com/>

@@ -12,11 +12,6 @@ export default defineConfig({
     include: [
       'test/**/*.test.ts',
     ],
-    benchmark: {
-      include: [
-        'test/**/*.bench.ts',
-      ],
-    },
     typecheck: {
       enabled: true,
       include: [

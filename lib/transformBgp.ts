@@ -10,10 +10,12 @@ import { createFilterFalse } from './utils.js';
  *
  * This is the main entry point for query rewriting. It:
  * 1. Parses the input query
- * 2. Prefixes user query variables with "uq_"
- * 3. Applies each transformation in order
- * 4. Wraps the result with EXTEND operations to map back to original variable names
- * 5. Generates the output SPARQL string
+ * 2. Strips any outer DISTINCT/REDUCED modifier, then the Project
+ * 3. Prefixes user query variables with "uq_"
+ * 4. Applies each transformation in order
+ * 5. Wraps the result with EXTEND operations to map back to original variable names
+ * 6. Re-applies the Project and any stripped DISTINCT/REDUCED modifier
+ * 7. Generates the output SPARQL string
  *
  * @param c - The transformation context containing mappings and factories
  * @param input - The SPARQL query string to transform
@@ -29,25 +31,38 @@ export function queryTransform(
   transformations: ((c: TransformContext, op: Algebra.Operation) => Algebra.Operation)[],
 ): string {
   const algebra = parseQuery(c, input);
-  let transformedAlgebra = algebra;
-  if (algebra.type === 'project') {
-    transformedAlgebra = algebra.input;
+
+  // Peel off a DISTINCT or REDUCED modifier so we can reach the inner Project.
+  // SELECT DISTINCT/REDUCED produce Distinct/Reduced(Project(...)) in the algebra.
+  const isDistinct = algebra.type === 'distinct';
+  const isReduced = algebra.type === 'reduced';
+  const innerAlgebra: Algebra.Operation = (isDistinct || isReduced) ? algebra.input : algebra;
+
+  let transformedAlgebra = innerAlgebra;
+  if (innerAlgebra.type === 'project') {
+    transformedAlgebra = innerAlgebra.input;
   }
   transformedAlgebra = prefixVarsInOperation(c, transformedAlgebra, 'uq_');
   for (const transformation of transformations) {
     transformedAlgebra = transformation(c, transformedAlgebra);
   }
 
-  if (algebra.type === 'project') {
+  if (innerAlgebra.type === 'project') {
     // Wrap the transformedAlgebra in extends to the originalVar names and project those
-    for (const variable of algebra.variables) {
+    for (const variable of innerAlgebra.variables) {
       transformedAlgebra = c.AF.createExtend(
         transformedAlgebra,
         variable,
         c.AF.createTermExpression(c.DF.variable(`uq_${variable.value}`)),
       );
     }
-    transformedAlgebra = c.AF.createProject(transformedAlgebra, algebra.variables);
+    transformedAlgebra = c.AF.createProject(transformedAlgebra, innerAlgebra.variables);
+  }
+
+  if (isDistinct) {
+    transformedAlgebra = c.AF.createDistinct(transformedAlgebra);
+  } else if (isReduced) {
+    transformedAlgebra = c.AF.createReduced(transformedAlgebra);
   }
 
   const transformedAst = toAst(transformedAlgebra);

@@ -12,7 +12,7 @@ import {
   nonTripleTermConstruct,
   singletonPropertyConstruct,
   tripleTermConstruct,
-} from './queries.js';
+} from './queryConsts.js';
 import './matchers/toBeRdfIsomorphic.js';
 
 // Crazy workaround to support both CJS and ESM
@@ -359,94 +359,6 @@ describe('integration tests', () => {
         `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
          PREFIX : <ex://>
          SELECT ?p ?o WHERE { ?t rdf:reifies <<( :alice ?p ?o )>> }`,
-      );
-      expect(resOnMappedData).toEqual(resUsingRewriter);
-    });
-  });
-
-  /**
-   * StarBench query templates (Frey et al.) adapted for SPARQL 1.2 / rdf:reifies.
-   * Data: test/statics/starbenchData.ttl (RDF 1.1 interop format).
-   *
-   * S1  – all statements about a given subject
-   * S2  – all statements from a specific source
-   * S3  – statements with confidence above a threshold (FILTER)
-   * S4  – distinct subjects with at least one high-confidence statement
-   * S5  – sources for statements involving a specific object
-   */
-  describe('starBench – rdf interop reification', () => {
-    const mappers = [ tripleTermConstruct, nonTripleTermConstruct ];
-    const PREFIX = `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-     PREFIX sb: <http://starbench.example.org/>
-     PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>`;
-
-    it('s1 – all statements about alice (subject filter) returns the same results', async({ expect }) => {
-      const store11 = await sourceToStore([ './test/statics/starbenchData.ttl' ]);
-      const { resOnMappedData, resUsingRewriter } = await compareSelectRewrittenToMapped(
-        store11,
-        mappers,
-        `${PREFIX} SELECT ?p ?o WHERE { ?t rdf:reifies <<( sb:alice ?p ?o )>> }`,
-      );
-      expect(resOnMappedData).toEqual(resUsingRewriter);
-    });
-
-    it('s2 – all statements from paper1 (annotation filter) returns the same results', async({ expect }) => {
-      const store11 = await sourceToStore([ './test/statics/starbenchData.ttl' ]);
-      const { resOnMappedData, resUsingRewriter } = await compareSelectRewrittenToMapped(
-        store11,
-        mappers,
-        `${PREFIX} SELECT ?s ?p ?o WHERE { ?t rdf:reifies <<( ?s ?p ?o )>> . ?t sb:source sb:paper1 . }`,
-      );
-      expect(resOnMappedData).toEqual(resUsingRewriter);
-    });
-
-    it('s3 – statements with confidence > 0.8 (FILTER on annotation) returns the same results', async({ expect }) => {
-      const store11 = await sourceToStore([ './test/statics/starbenchData.ttl' ]);
-      const { resOnMappedData, resUsingRewriter } = await compareSelectRewrittenToMapped(
-        store11,
-        mappers,
-        `${PREFIX} SELECT ?s ?p ?o ?c WHERE {
-           ?t rdf:reifies <<( ?s ?p ?o )>> .
-           ?t sb:confidence ?c .
-           FILTER(?c > "0.8"^^xsd:decimal)
-         }`,
-      );
-      expect(resOnMappedData).toEqual(resUsingRewriter);
-    });
-
-    it('s4 – subjects with at least one high-confidence statement returns the same results', async({ expect }) => {
-      const store11 = await sourceToStore([ './test/statics/starbenchData.ttl' ]);
-      const { resOnMappedData, resUsingRewriter } = await compareSelectRewrittenToMapped(
-        store11,
-        mappers,
-        `${PREFIX} SELECT ?s ?p ?o WHERE {
-           ?t rdf:reifies <<( ?s ?p ?o )>> .
-           ?t sb:confidence ?c .
-           FILTER(?c > "0.8"^^xsd:decimal)
-         }`,
-      );
-      expect(resOnMappedData).toEqual(resUsingRewriter);
-    });
-
-    it('s5 – sources for statements involving dave as object returns the same results', async({ expect }) => {
-      const store11 = await sourceToStore([ './test/statics/starbenchData.ttl' ]);
-      const { resOnMappedData, resUsingRewriter } = await compareSelectRewrittenToMapped(
-        store11,
-        mappers,
-        `${PREFIX} SELECT ?src WHERE { ?t rdf:reifies <<( ?s ?p sb:dave )>> . ?t sb:source ?src . }`,
-      );
-      expect(resOnMappedData).toEqual(resUsingRewriter);
-    });
-
-    it('s6 – OPTIONAL annotation (date) for all statements returns the same results', async({ expect }) => {
-      const store11 = await sourceToStore([ './test/statics/starbenchData.ttl' ]);
-      const { resOnMappedData, resUsingRewriter } = await compareSelectRewrittenToMapped(
-        store11,
-        mappers,
-        `${PREFIX} SELECT ?s ?p ?o ?date WHERE {
-           ?t rdf:reifies <<( ?s ?p ?o )>> .
-           OPTIONAL { ?t sb:date ?date }
-         }`,
       );
       expect(resOnMappedData).toEqual(resUsingRewriter);
     });

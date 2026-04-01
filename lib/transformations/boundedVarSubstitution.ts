@@ -231,54 +231,24 @@ function substituteInExpr(
   subs: Record<string, RDF.Term>,
 ): Algebra.Expression {
   const { AF } = c;
-  // TODO: no exists should be handled here?
-  switch (expr.subType) {
-    case Algebra.ExpressionTypes.TERM: {
-      const { term } = expr;
-      if (term.termType === 'Variable' && subs[term.value] !== undefined) {
-        return AF.createTermExpression(subs[term.value]);
-      }
-      return expr;
-    }
-    case Algebra.ExpressionTypes.OPERATOR:
-      return AF.createOperatorExpression(expr.operator, expr.args.map(a => substituteInExpr(c, a, subs)));
-    case Algebra.ExpressionTypes.NAMED:
-      return AF.createNamedExpression(expr.name, expr.args.map(a => substituteInExpr(c, a, subs)));
-    case Algebra.ExpressionTypes.EXISTENCE:
-      return AF.createExistenceExpression(expr.not, applySubstitutions(c, expr.input, subs));
-    case Algebra.ExpressionTypes.AGGREGATE:
-      expr.expression = substituteInExpr(c, expr.expression, subs);
-      return expr;
-    default:
-      return expr;
-  }
-}
-
-/**
- * Traverses a filter-expression tree, applying substitutions only inside
- * EXISTS / NOT EXISTS sub-patterns (which are data-matching patterns, not
- * boolean conditions).  The boolean conditions themselves — comparisons,
- * function calls, literal tests — are left untouched.
- */
-function applySubstitutionsInExistencePatterns(
-  c: TransformContext,
-  expr: Algebra.Expression,
-  subs: Record<string, RDF.Term>,
-): Algebra.Expression {
-  const { AF } = c;
-  switch (expr.subType) {
-    case Algebra.ExpressionTypes.EXISTENCE:
-      return AF.createExistenceExpression(expr.not, applySubstitutions(c, expr.input, subs));
-    case Algebra.ExpressionTypes.OPERATOR:
-      return AF.createOperatorExpression(
-        expr.operator,
-        expr.args.map(a => applySubstitutionsInExistencePatterns(c, a, subs)),
-      );
-    case Algebra.ExpressionTypes.NAMED:
-      return AF.createNamedExpression(expr.name, expr.args.map(a => applySubstitutionsInExistencePatterns(c, a, subs)));
-    default:
-      return expr;
-  }
+  return algebraUtils.mapOperationSub<'unsafe', Algebra.Expression>(expr, {}, {
+    [Algebra.Types.EXPRESSION]: {
+      [Algebra.ExpressionTypes.TERM]: { transform: (term) => {
+        if (term.term.termType === 'Variable' && subs[term.term.value] !== undefined) {
+          return AF.createTermExpression(subs[term.term.value]);
+        }
+        return term;
+      } },
+      [Algebra.ExpressionTypes.EXISTENCE]: {
+        // Don't auto-traverse the input Operation; applySubstitutions handles it.
+        preVisitor: () => ({ ignoreKeys: new Set([ 'input' ]) }),
+        transform: (existence) => {
+          existence.input = applySubstitutions(c, existence.input, subs);
+          return existence;
+        },
+      },
+    },
+  });
 }
 
 /**
@@ -339,8 +309,9 @@ function cleanupValues(
  *     complex     → FILTER(expr = term) (case 2.1)
  * - VALUES: delegated to cleanupValues.
  * - PROJECT: traversal stops; each PROJECT is handled by the outer mapOperation call.
- * - FILTER: the filter expression is excluded from automatic traversal and handled manually —
- *   boolean conditions are left untouched, but EXISTS/NOT EXISTS sub-patterns are substituted.
+ * - FILTER: the filter expression is excluded from automatic traversal and handled via
+ *   substituteInExpr, which substitutes variables in conditions and recurses into EXISTS/NOT EXISTS
+ *   sub-patterns.
  * - EXTEND expression: also excluded from automatic traversal and handled via substituteInExpr.
  * - All other operations: traversal is handled automatically by mapOperation.
  */
@@ -402,8 +373,9 @@ function applySubstitutions(
     [Algebra.Types.PROJECT]: {
       preVisitor: () => ({ continue: false }),
     },
-    // Exclude expression from automatic traversal. Only EXISTS/NOT EXISTS sub-patterns are
-    // substituted; the boolean conditions themselves are left untouched.
+    // Exclude expression from automatic traversal and apply substituteInExpr manually.
+    // substituteInExpr substitutes variables in conditions and recurses into EXISTS/NOT EXISTS
+    // sub-patterns, giving complete and correct substitution of the filter expression.
     [Algebra.Types.FILTER]: {
       preVisitor: () => ({ ignoreKeys: new Set([ 'expression' ]) }),
       transform: (filter) => {

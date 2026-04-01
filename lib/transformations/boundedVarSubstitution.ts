@@ -300,7 +300,11 @@ function cleanupValues(
  *     term differ → FILTER(FALSE)
  *     complex     → FILTER(expr = term) (case 2.1)
  * - VALUES: delegated to cleanupValues.
- * - PROJECT: traversal stops; each PROJECT is handled by the outer mapOperation call.
+ * - PROJECT: substituted variables are removed from the projection list; the inner body
+ *   is recursed into so that outer substitutions propagate into nested subqueries.
+ * - GROUP: substituted variables are removed from the GROUP BY list; aggregate expressions
+ *   are rewritten via substituteInExpr.
+ * - ORDER_BY: ordering expressions are rewritten via substituteInExpr.
  * - FILTER: the filter expression is excluded from automatic traversal and handled via
  *   substituteInExpr, which substitutes variables in conditions and recurses into EXISTS/NOT EXISTS
  *   sub-patterns.
@@ -361,9 +365,14 @@ function applySubstitutions(
     [Algebra.Types.VALUES]: {
       transform: values => cleanupValues(c, values, subs),
     },
-    // Each PROJECT is handled by the outer mapOperation traversal; do not recurse here.
+    // Recurse into the inner body and drop substituted variables from the projection list.
+    // This propagates outer substitutions into nested subqueries.
     [Algebra.Types.PROJECT]: {
-      preVisitor: () => ({ continue: false }),
+      preVisitor: () => ({ ignoreKeys: new Set([ 'variables' ]) }),
+      transform: (project) => {
+        project.variables = project.variables.filter(v => subs[v.value] === undefined);
+        return project;
+      },
     },
     // Exclude expression from automatic traversal and apply substituteInExpr manually.
     // substituteInExpr substitutes variables in conditions and recurses into EXISTS/NOT EXISTS
@@ -375,9 +384,35 @@ function applySubstitutions(
         return filter;
       },
     },
-    [Algebra.Types.GRAPH]: { transform: (graph) => {
-      graph.name = <RDF.Variable | RDF.NamedNode> subTerm(graph.name);
-      return graph;
-    } },
+    // Drop substituted variables from the GROUP BY list and substitute inside aggregates.
+    [Algebra.Types.GROUP]: {
+      preVisitor: () => ({ ignoreKeys: new Set([ 'variables', 'aggregates' ]) }),
+      transform: (group) => {
+        group.variables = group.variables.filter(v => subs[v.value] === undefined);
+        group.aggregates = group.aggregates.map(agg => ({ ...agg, expression: subExpr(agg.expression) }));
+        return group;
+      },
+    },
+    // Substitute variables referenced in ORDER BY expressions.
+    [Algebra.Types.ORDER_BY]: {
+      preVisitor: () => ({ ignoreKeys: new Set([ 'expressions' ]) }),
+      transform: (orderBy) => {
+        orderBy.expressions = orderBy.expressions
+          .map(e => subExpr(e))
+          .filter(expr => !(expr.subType === Algebra.ExpressionTypes.TERM && expr.term.termType !== 'Variable'));
+
+        if (orderBy.expressions.length > 0) {
+          return orderBy;
+        }
+
+        return orderBy.input;
+      },
+    },
+    [Algebra.Types.GRAPH]: {
+      transform: (graph) => {
+        graph.name = <RDF.Variable | RDF.NamedNode> subTerm(graph.name);
+        return graph;
+      },
+    },
   });
 }

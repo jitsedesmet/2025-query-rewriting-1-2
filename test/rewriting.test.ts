@@ -1079,11 +1079,8 @@ describe('dummy', () => {
     {
       SELECT ?m0_o WHERE {
         {
-          BIND( <http://example.org/foo> AS ?m0_s )
-        }
-        {
           ?m0_x <ex://test> ?m0_o .
-          BIND( IRI( CONCAT( "http://example.org/" , STR( ?m0_x ) ) ) AS ?m0_s )
+          FILTER ( ( IRI( CONCAT( "http://example.org/" , STR( ?m0_x ) ) ) = <http://example.org/foo> ) )
         }
       }
     }
@@ -1254,10 +1251,7 @@ describe('dummy', () => {
   {
     {
       SELECT ?m0_o ?m0_s WHERE {
-        {
-          FILTER ( FALSE )
-        }
-        ?m0_s <ex://c> ?m0_o .
+        FILTER ( FALSE )
       }
     }
     BIND( ?m0_s AS ?uq_x )
@@ -1298,10 +1292,7 @@ describe('dummy', () => {
   {
     {
       SELECT ?m0_o ?m0_s WHERE {
-        {
-          FILTER ( FALSE )
-        }
-        ?m0_s <ex://c> ?m0_o .
+        FILTER ( FALSE )
       }
     }
     BIND( ?m0_s AS ?uq_a )

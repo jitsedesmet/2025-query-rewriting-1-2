@@ -43,13 +43,6 @@ interface BranchAnalysis {
    * and should be represented as identity when intersecting across branches.
    */
   varSets: Record<string, VariableSet>;
-  /**
-   * EXTEND operations at the top of the chain whose expression is NOT a simple term.
-   * For each substituted variable in this set,
-   * the BIND is replaced with a FILTER that checks whether the complex expression equals the substituted term.
-   * TODO: I doubt there is any reason to collect this info?
-   */
-  complexBinds: Record<string, Algebra.Expression>;
 }
 
 /**
@@ -64,10 +57,9 @@ function analyzeBranch(
 ): BranchAnalysis {
   const result: BranchAnalysis = {
     varSets: {},
-    complexBinds: {},
   };
 
-  // Walk the top-level EXTEND chain, collecting simple term binds and complex binds.
+  // Walk the top-level EXTEND chain, collecting simple term binds.
   let belowChain: Algebra.Operation = branch;
   while (belowChain.type === Algebra.Types.EXTEND) {
     if (!stillUsedVarNames.has(belowChain.variable.value)) {
@@ -77,9 +69,9 @@ function analyzeBranch(
           // blank nodes cannot appear in bind, and TT is maybe not simple term (may contain vars).
           (expr.term.termType === 'Literal' || expr.term.termType === 'NamedNode')) {
         result.varSets[belowChain.variable.value] = new VariableSet(expr.term);
-      } else {
-        result.complexBinds[belowChain.variable.value] = expr;
       }
+      // Complex-expression binds are not added to varSets; applySubstitutions handles them
+      // in the EXTEND case by emitting FILTER(expr = term) when the variable is substituted.
     }
     belowChain = belowChain.input;
   }

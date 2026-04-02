@@ -67,13 +67,13 @@ interface MappingSpec {
 }
 
 const mappings: MappingSpec[] = [
-  {
-    name: 'mapToGraph',
-    queries: [ 'mapToGraph-Q1.rq', 'mapToGraph-Q2.rq' ],
-    // Q1 places triples inside named graphs; TriG is required to represent them.
-    output: 'BKR-Graph.trig',
-    format: 'application/trig',
-  },
+  // {
+  //   name: 'mapToGraph',
+  //   queries: [ 'mapToGraph-Q1.rq', 'mapToGraph-Q2.rq' ],
+  //   // Q1 places triples inside named graphs; TriG is required to represent them.
+  //   output: 'BKR-Graph.trig',
+  //   format: 'application/trig',
+  // },
   {
     name: 'mapToReification',
     queries: [ 'mapToReification-Q1.rq', 'mapToReification-Q2.rq' ],
@@ -117,12 +117,16 @@ async function executeMapping(spec: MappingSpec): Promise<void> {
       ...context,
     });
 
-    for await (const quad of quadStream) {
+    quadStream.on('data', (quad) => {
       writer.addQuad(quad);
       if (++totalQuads % 100_000 === 0) {
         process.stdout.write(`\r[${name}] ${totalQuads.toLocaleString()} quads written...`);
       }
-    }
+    });
+    await new Promise((resolve, reject) => {
+      quadStream.on('done', resolve);
+      quadStream.on('error', reject);
+    });
   }
 
   if (totalQuads >= 100_000) {

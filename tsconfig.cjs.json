@@ -6,5 +6,10 @@
     "declaration": false,
     "outDir": "dist/cjs",
     "skipLibCheck": true
-  }
+  },
+  "exclude": [
+    "node_modules",
+    "dist/**",
+    "test/statics/**"
+  ]
 }

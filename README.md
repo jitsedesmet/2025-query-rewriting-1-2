@@ -160,13 +160,13 @@ CONSTRUCT {
 ```
 Construct to go to: (Because 2 ways, can do GLAV)
 ```
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+
 CONSTRUCT {
-    ?t rdf:reifies [
-        a rdf:tripleTerm ;
-        rdf:ttSubject ?s ;
-        rdf:ttPredicate ?p ;
-        rdf:ttObject ?o ;
-    ]
+    ?t rdf:type rdf:Statement ;
+       rdf:subject ?s ;
+       rdf:predicate ?p ;
+       rdf:object ?o ;
 } WHERE {
     ?t rdf:reifies <<( ?s ?p ?o )>>
 }
@@ -288,28 +288,28 @@ This means a mapping that doesn't match uses `FILTER(FALSE)` (zero results), not
 
 ### Core Functions
 
-| Function | Description |
-|----------|-------------|
-| `transformContextFromConstructs(mappings)` | Create a context from CONSTRUCT query strings |
+| Function                                          | Description                                    |
+|---------------------------------------------------|------------------------------------------------|
+| `transformContextFromConstructs(mappings)`        | Create a context from CONSTRUCT query strings  |
 | `queryTransform(context, query, transformations)` | Rewrite a query with the given transformations |
-| `operationTransform(context, operation)` | Core BGP rewriting transformation |
+| `operationTransform(context, operation)`          | Core BGP rewriting transformation              |
 
 ### Optimization Transformations
 
-| Transformation | Description |
-|----------------|-------------|
-| `substituteVarsThatArePreBoundToTerms` | Inline known variable values into patterns |
-| `transformFilterFalse` | Remove FILTER(FALSE) branches and simplify |
-| `nullifyJoinOverIncompatibleBounds` | Replace incompatible join branches with FILTER(FALSE) |
-| `pushUpBoundedFromUnion` | Hoist common bindings out of UNION branches |
-| `rewriteNonRecursivePaths` | Expand property paths into BGPs |
+| Transformation                         | Description                                           |
+|----------------------------------------|-------------------------------------------------------|
+| `substituteVarsThatArePreBoundToTerms` | Inline known variable values into patterns            |
+| `transformFilterFalse`                 | Remove FILTER(FALSE) branches and simplify            |
+| `nullifyJoinOverIncompatibleBounds`    | Replace incompatible join branches with FILTER(FALSE) |
+| `pushUpBoundedFromUnion`               | Hoist common bindings out of UNION branches           |
+| `rewriteNonRecursivePaths`             | Expand property paths into BGPs                       |
 
 ### Blank Node Transformations
 
-| Transformation | Description |
-|----------------|-------------|
+| Transformation                  | Description                             |
+|---------------------------------|-----------------------------------------|
 | `internalBnodeAsSpecialLiteral` | Represent blank nodes as typed literals |
-| `internalBnodeAsSpecialIri` | Represent blank nodes as prefixed IRIs |
+| `internalBnodeAsSpecialIri`     | Represent blank nodes as prefixed IRIs  |
 
 ## License
 

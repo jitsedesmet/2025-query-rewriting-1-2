@@ -313,4 +313,6 @@ This means a mapping that doesn't match uses `FILTER(FALSE)` (zero results), not
 
 ## License
 
-See [LICENSE.txt](LICENSE.txt)
+Everything is [MIT licensed](LICENSE.txt) except where noted otherwise, notably,
+the `/test/statics/REF-Benchmark` folder is copied from the [REF-Benchmark](https://github.com/dgraux/RDFStarObservatory) repository,
+and is [Apache licenced](test/statics/REF-Benchmark/LICENSE).

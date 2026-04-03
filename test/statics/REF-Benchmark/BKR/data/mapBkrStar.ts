@@ -11,13 +11,14 @@
  *   npx tsx map-bkr-star.ts
  */
 
-import { createWriteStream } from 'node:fs';
+import { createReadStream, createWriteStream } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
+import { Transform } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { QueryEngine } from '@comunica/query-sparql-file';
 import type * as RDF from '@rdfjs/types';
-import { Writer } from 'n3';
+import { StreamParser, Writer } from 'n3';
 import { DataFactory } from 'rdf-data-factory';
 import { termToString } from 'rdf-string';
 
@@ -26,6 +27,54 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DF = new DataFactory();
 const engine = new QueryEngine();
 const source = resolve(__dirname, 'BKR-star.ttl');
+
+/**
+ * A streaming RDF source that reads a Turtle* file on every `match()` call
+ * without building any in-memory index.  This avoids the out-of-memory failure
+ * that occurs when Comunica's default file actor tries to index a multi-GB file.
+ *
+ * Each call to `match()` opens a fresh read-stream + N3 parser pipeline and
+ * filters quads on-the-fly.  `countQuads()` returns a cheap estimate so that
+ * Comunica's metadata machinery never triggers a second file scan.
+ */
+class StreamingTurtleStarSource {
+  public readonly features = { quotedTripleFiltering: false };
+
+  public constructor(private readonly filePath: string) {}
+
+  public match(
+    subject?: RDF.Term | null,
+    predicate?: RDF.Term | null,
+    object?: RDF.Term | null,
+    graph?: RDF.Term | null,
+  ): ReturnType<RDF.Source['match']> {
+    const parser = new StreamParser({ format: 'text/turtle' });
+    const filter = new Transform({
+      objectMode: true,
+      transform(quad: RDF.Quad, _enc, callback) {
+        if (
+          (!subject || subject.equals(quad.subject)) &&
+          (!predicate || predicate.equals(quad.predicate)) &&
+          (!object || object.equals(quad.object)) &&
+          (!graph || graph.equals(quad.graph))
+        ) {
+          callback(null, quad);
+        } else {
+          callback();
+        }
+      },
+    });
+    createReadStream(this.filePath).pipe(parser).pipe(filter);
+    return filter;
+  }
+
+  /** Cheap cardinality estimate — prevents a second file scan for metadata. */
+  public countQuads(): number {
+    return 10_000_000;
+  }
+}
+
+const streamingSource = new StreamingTurtleStarSource(source);
 
 /**
  * Extension function `<internal://bnode>`.
@@ -113,7 +162,7 @@ async function executeMapping(spec: MappingSpec): Promise<void> {
     process.stdout.write(`[${name}] Executing ${queryFile}...\n`);
 
     const quadStream = await engine.queryQuads(query, {
-      sources: [ source ],
+      sources: [{ type: 'rdfjs', value: streamingSource }],
       ...context,
     });
 
@@ -124,7 +173,7 @@ async function executeMapping(spec: MappingSpec): Promise<void> {
       }
     });
     await new Promise((resolve, reject) => {
-      quadStream.on('done', resolve);
+      quadStream.on('end', resolve);
       quadStream.on('error', reject);
     });
   }
@@ -143,8 +192,14 @@ async function executeMapping(spec: MappingSpec): Promise<void> {
 
 // ---------------------------------------------------------------------------
 
-for (const mapping of mappings) {
-  await executeMapping(mapping);
+async function runAllMappings(): Promise<void> {
+  for (const mapping of mappings) {
+    await executeMapping(mapping);
+  }
+  process.stdout.write('All mappings complete.\n');
 }
 
-process.stdout.write('All mappings complete.\n');
+runAllMappings().catch((err: Error) => {
+  process.stderr.write(`Fatal error: ${err.name}\n${err.message}`);
+  process.exitCode = 1;
+});

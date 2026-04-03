@@ -4,10 +4,7 @@ PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 #   we know the depth is capped to one, and we know the predicate is rdf:reifies
 
 CONSTRUCT {
-    ?t rdf:type rdf:Statement ;
-       rdf:subject ?s ;
-       rdf:predicate ?p ;
-       rdf:object ?o ;
+    ?s ?p ?o .
 } WHERE {
     ?s ?p ?o .
     FILTER (?p != rdf:reifies && !isTriple(?o)) .

@@ -3,11 +3,14 @@ PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 # Since `<< ... >>` is the only construction used in BKR star,
 #   we know the depth is capped to one, and we know the predicate is rdf:reifies
 
+# Q2 passes through all non-rdf:reifies triples whose object is not an embedded
+# triple.  This includes both regular entity triples and the annotation property
+# triples produced by N3's conversion of `<< s p o >> predicate object`
+# (i.e. `_:reifier predicate object`).  Those blank-node triples connect back to
+# the reification structures created by Q1 because both queries use the same
+# DataFactory counter sequence (reset at the start of every match() call).
 CONSTRUCT {
-    ?t rdf:type rdf:Statement ;
-       rdf:subject ?s ;
-       rdf:predicate ?p ;
-       rdf:object ?o ;
+    ?s ?p ?o .
 } WHERE {
     ?s ?p ?o .
     FILTER (?p != rdf:reifies && !isTriple(?o)) .

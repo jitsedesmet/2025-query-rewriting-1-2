@@ -502,7 +502,7 @@ describe('integration tests', () => {
         'a-Q1: finds annotated triples by PUBMED source',
         { timeout: LARGE_TIMEOUT },
         async({ expect }) => {
-          const source = new StreamingTurtleSource(BKR_REIF_PATH, 'bkr_', 'text/turtle', true);
+          const source = new StreamingTurtleSource(BKR_REIF_PATH);
           const starQuery = await readFile(`${BKR_QUERIES}/BKR-star_A-Q1.rq`, 'utf-8');
           const refQuery = await readFile(`${BKR_QUERIES}/BKR-R_A-Q1.rq`, 'utf-8');
           const { resOnMappedData, resUsingRewriter } =
@@ -515,7 +515,7 @@ describe('integration tests', () => {
         'a-Q2: finds PUBMED sources for a specific annotated triple',
         { timeout: LARGE_TIMEOUT },
         async({ expect }) => {
-          const source = new StreamingTurtleSource(BKR_REIF_PATH, 'bkr_', 'text/turtle', true);
+          const source = new StreamingTurtleSource(BKR_REIF_PATH);
           const starQuery = await readFile(`${BKR_QUERIES}/BKR-star_A-Q2.rq`, 'utf-8');
           const refQuery = await readFile(`${BKR_QUERIES}/BKR-R_A-Q2.rq`, 'utf-8');
           const { resOnMappedData, resUsingRewriter } =
@@ -528,7 +528,7 @@ describe('integration tests', () => {
         'b-Q1: finds annotated triples by a different PUBMED source',
         { timeout: LARGE_TIMEOUT },
         async({ expect }) => {
-          const source = new StreamingTurtleSource(BKR_REIF_PATH, 'bkr_', 'text/turtle', true);
+          const source = new StreamingTurtleSource(BKR_REIF_PATH);
           const starQuery = await readFile(`${BKR_QUERIES}/BKR-star_B-Q1.rq`, 'utf-8');
           const refQuery = await readFile(`${BKR_QUERIES}/BKR-R_B-Q1.rq`, 'utf-8');
           const { resOnMappedData, resUsingRewriter } =
@@ -547,8 +547,7 @@ describe('integration tests', () => {
         'a-Q1: finds annotated triples by PUBMED source',
         { timeout: LARGE_TIMEOUT },
         async({ expect }) => {
-          // Format text/n3 needed for existing files with blank-node predicates; skolemize converts them to IRIs.
-          const source = new StreamingTurtleSource(BKR_SING_PATH, 'bkr_', 'text/n3', true);
+          const source = new StreamingTurtleSource(BKR_SING_PATH);
           const starQuery = await readFile(`${BKR_QUERIES}/BKR-star_A-Q1.rq`, 'utf-8');
           // BKR-S_A-Q1 finds ?s ?singleton ?o where ?singleton derives_from X.
           // The rewriter returns ?s, trueProp, ?o (via singletonPropertyOf).
@@ -572,7 +571,7 @@ describe('integration tests', () => {
         'a-Q2: finds PUBMED sources for a specific annotated triple',
         { timeout: LARGE_TIMEOUT },
         async({ expect }) => {
-          const source = new StreamingTurtleSource(BKR_SING_PATH, 'bkr_', 'text/n3', true);
+          const source = new StreamingTurtleSource(BKR_SING_PATH);
           const starQuery = await readFile(`${BKR_QUERIES}/BKR-star_A-Q2.rq`, 'utf-8');
           const refQuery = `
             PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
@@ -594,7 +593,7 @@ describe('integration tests', () => {
         'b-Q1: finds annotated triples by a different PUBMED source',
         { timeout: LARGE_TIMEOUT },
         async({ expect }) => {
-          const source = new StreamingTurtleSource(BKR_SING_PATH, 'bkr_', 'text/n3', true);
+          const source = new StreamingTurtleSource(BKR_SING_PATH);
           const starQuery = await readFile(`${BKR_QUERIES}/BKR-star_B-Q1.rq`, 'utf-8');
           const refQuery = `
             PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
@@ -624,7 +623,7 @@ describe('integration tests', () => {
         'a-Q1: finds annotated triples by PUBMED source (PosIndexed)',
         { timeout: LARGE_TIMEOUT },
         async({ expect }) => {
-          const source = new PosIndexedTurtleSource(BKR_REIF_PATH, 'text/turtle', true);
+          const source = new PosIndexedTurtleSource(BKR_REIF_PATH);
           await source.load();
           const starQuery = await readFile(`${BKR_QUERIES}/BKR-star_A-Q1.rq`, 'utf-8');
           const refQuery = await readFile(`${BKR_QUERIES}/BKR-R_A-Q1.rq`, 'utf-8');

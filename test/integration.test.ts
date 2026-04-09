@@ -18,6 +18,7 @@ import {
   singletonPropertyConstruct,
   tripleTermConstruct,
 } from './queryConsts.js';
+import { PosIndexedTurtleSource } from './statics/REF-Benchmark/BKR/data/PosIndexedTurtleSource.js';
 import { StreamingTurtleSource } from './statics/REF-Benchmark/BKR/data/StreamingTurtleSource.js';
 import './matchers/toBeRdfIsomorphic.js';
 
@@ -462,8 +463,8 @@ describe('integration tests', () => {
      */
     const bkrTestsEnabled = Boolean(process.env.BKR_TESTS);
 
-    /** Run a SELECT query against a StreamingTurtleSource; return sorted binding strings. */
-    async function streamingSelectBindings(source: StreamingTurtleSource, query: string): Promise<string[]> {
+    /** Run a SELECT query against an RDF.js Source; return sorted binding strings. */
+    async function streamingSelectBindings(source: RDF.Source, query: string): Promise<string[]> {
       const bindings: RDF.Bindings[] = await arrayifyStream(
         await engine.queryBindings(query, {
           sources: [{ type: 'rdfjs', value: source }],
@@ -478,7 +479,7 @@ describe('integration tests', () => {
      * (the hand-written RDF 1.1 equivalent) directly against `source`.
      */
     async function compareBkrSelectQueries(
-      source: StreamingTurtleSource,
+      source: RDF.Source,
       mappers: string[],
       starQuery: string,
       mappedQuery: string,
@@ -501,7 +502,7 @@ describe('integration tests', () => {
         'a-Q1: finds annotated triples by PUBMED source',
         { timeout: LARGE_TIMEOUT },
         async({ expect }) => {
-          const source = new StreamingTurtleSource(BKR_REIF_PATH);
+          const source = new StreamingTurtleSource(BKR_REIF_PATH, 'bkr_', 'text/turtle', true);
           const starQuery = await readFile(`${BKR_QUERIES}/BKR-star_A-Q1.rq`, 'utf-8');
           const refQuery = await readFile(`${BKR_QUERIES}/BKR-R_A-Q1.rq`, 'utf-8');
           const { resOnMappedData, resUsingRewriter } =
@@ -514,7 +515,7 @@ describe('integration tests', () => {
         'a-Q2: finds PUBMED sources for a specific annotated triple',
         { timeout: LARGE_TIMEOUT },
         async({ expect }) => {
-          const source = new StreamingTurtleSource(BKR_REIF_PATH);
+          const source = new StreamingTurtleSource(BKR_REIF_PATH, 'bkr_', 'text/turtle', true);
           const starQuery = await readFile(`${BKR_QUERIES}/BKR-star_A-Q2.rq`, 'utf-8');
           const refQuery = await readFile(`${BKR_QUERIES}/BKR-R_A-Q2.rq`, 'utf-8');
           const { resOnMappedData, resUsingRewriter } =
@@ -527,7 +528,7 @@ describe('integration tests', () => {
         'b-Q1: finds annotated triples by a different PUBMED source',
         { timeout: LARGE_TIMEOUT },
         async({ expect }) => {
-          const source = new StreamingTurtleSource(BKR_REIF_PATH);
+          const source = new StreamingTurtleSource(BKR_REIF_PATH, 'bkr_', 'text/turtle', true);
           const starQuery = await readFile(`${BKR_QUERIES}/BKR-star_B-Q1.rq`, 'utf-8');
           const refQuery = await readFile(`${BKR_QUERIES}/BKR-R_B-Q1.rq`, 'utf-8');
           const { resOnMappedData, resUsingRewriter } =
@@ -546,7 +547,8 @@ describe('integration tests', () => {
         'a-Q1: finds annotated triples by PUBMED source',
         { timeout: LARGE_TIMEOUT },
         async({ expect }) => {
-          const source = new StreamingTurtleSource(BKR_SING_PATH);
+          // Format text/n3 needed for existing files with blank-node predicates; skolemize converts them to IRIs.
+          const source = new StreamingTurtleSource(BKR_SING_PATH, 'bkr_', 'text/n3', true);
           const starQuery = await readFile(`${BKR_QUERIES}/BKR-star_A-Q1.rq`, 'utf-8');
           // BKR-S_A-Q1 finds ?s ?singleton ?o where ?singleton derives_from X.
           // The rewriter returns ?s, trueProp, ?o (via singletonPropertyOf).
@@ -570,7 +572,7 @@ describe('integration tests', () => {
         'a-Q2: finds PUBMED sources for a specific annotated triple',
         { timeout: LARGE_TIMEOUT },
         async({ expect }) => {
-          const source = new StreamingTurtleSource(BKR_SING_PATH);
+          const source = new StreamingTurtleSource(BKR_SING_PATH, 'bkr_', 'text/n3', true);
           const starQuery = await readFile(`${BKR_QUERIES}/BKR-star_A-Q2.rq`, 'utf-8');
           const refQuery = `
             PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
@@ -592,7 +594,7 @@ describe('integration tests', () => {
         'b-Q1: finds annotated triples by a different PUBMED source',
         { timeout: LARGE_TIMEOUT },
         async({ expect }) => {
-          const source = new StreamingTurtleSource(BKR_SING_PATH);
+          const source = new StreamingTurtleSource(BKR_SING_PATH, 'bkr_', 'text/n3', true);
           const starQuery = await readFile(`${BKR_QUERIES}/BKR-star_B-Q1.rq`, 'utf-8');
           const refQuery = `
             PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
@@ -603,6 +605,29 @@ describe('integration tests', () => {
               ?singleton rdf:singletonPropertyOf ?p .
               ?singleton provenir:derives_from pubmed:10979521-INST .
             }`;
+          const { resOnMappedData, resUsingRewriter } =
+            await compareBkrSelectQueries(source, mappers, starQuery, refQuery);
+          expect(resUsingRewriter).toEqual(resOnMappedData);
+        },
+      );
+    });
+
+    // -------------------------------------------------------------------------
+    // PosIndexedTurtleSource alternative — single predicate-index in-memory store.
+    // Uses the Reification file (text/turtle) to verify the POS-index approach.
+    // -------------------------------------------------------------------------
+
+    describe('bkr-Reification.ttl — PosIndexedTurtleSource (single-index in-memory)', () => {
+      const mappers = [ bkrReificationConstruct, bkrNonReificationConstruct ];
+
+      it.skipIf(!bkrTestsEnabled || !existsSync(BKR_REIF_PATH))(
+        'a-Q1: finds annotated triples by PUBMED source (PosIndexed)',
+        { timeout: LARGE_TIMEOUT },
+        async({ expect }) => {
+          const source = new PosIndexedTurtleSource(BKR_REIF_PATH, 'text/turtle', true);
+          await source.load();
+          const starQuery = await readFile(`${BKR_QUERIES}/BKR-star_A-Q1.rq`, 'utf-8');
+          const refQuery = await readFile(`${BKR_QUERIES}/BKR-R_A-Q1.rq`, 'utf-8');
           const { resOnMappedData, resUsingRewriter } =
             await compareBkrSelectQueries(source, mappers, starQuery, refQuery);
           expect(resUsingRewriter).toEqual(resOnMappedData);

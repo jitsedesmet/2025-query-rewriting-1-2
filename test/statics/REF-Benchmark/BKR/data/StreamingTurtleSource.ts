@@ -20,6 +20,12 @@
  * `match()` call.  Because each DataFactory starts at counter 0 and uses the same prefix,
  * and because the file is always read in sequential order, every parse generates the same
  * blank-node IDs for the same file positions, even for concurrent match() calls.
+ *
+ * **Skolemization**
+ *
+ * When `skolemize` is `true`, blank nodes in parsed quads are replaced on-the-fly with
+ * Skolem IRIs of the form `<{skolemPrefix}{blankNodeId}>`.  This is required for
+ * datasets consumed by query-rewriting algorithms that assume no blank nodes.
  */
 
 import { createReadStream } from 'node:fs';
@@ -28,6 +34,45 @@ import type * as RDF from '@rdfjs/types';
 import { StreamParser } from 'n3';
 import { DataFactory } from 'rdf-data-factory';
 
+/** Replace every blank node in a term (recursively for quoted triples) with a Skolem IRI. */
+export function skolemizeTerm(term: RDF.Term, prefix: string, df: DataFactory): RDF.Term {
+  if (term.termType === 'BlankNode') {
+    return df.namedNode(`${prefix}${term.value}`);
+  }
+  if (term.termType === 'Quad') {
+    const q = <RDF.Quad><unknown>term;
+    return df.quad(
+      <RDF.Quad_Subject>skolemizeTerm(q.subject, prefix, df),
+      <RDF.Quad_Predicate>skolemizeTerm(q.predicate, prefix, df),
+      <RDF.Quad_Object>skolemizeTerm(q.object, prefix, df),
+      <RDF.Quad_Graph>skolemizeTerm(q.graph, prefix, df),
+    );
+  }
+  return term;
+}
+
+/** Transform stream that Skolemizes blank nodes in every quad it receives. */
+class SkolemTransform extends Transform {
+  private readonly df = new DataFactory({ blankNodePrefix: '' });
+  public constructor(private readonly prefix: string) {
+    super({ objectMode: true });
+  }
+
+  public override _transform(quad: RDF.Quad, _enc: BufferEncoding, cb: () => void): void {
+    const s = skolemizeTerm(quad.subject, this.prefix, this.df);
+    const p = skolemizeTerm(quad.predicate, this.prefix, this.df);
+    const o = skolemizeTerm(quad.object, this.prefix, this.df);
+    const g = skolemizeTerm(quad.graph, this.prefix, this.df);
+    this.push(this.df.quad(
+      <RDF.Quad_Subject>s,
+      <RDF.Quad_Predicate>p,
+      <RDF.Quad_Object>o,
+      <RDF.Quad_Graph>g,
+    ));
+    cb();
+  }
+}
+
 export class StreamingTurtleSource {
   public readonly features = <const>{ quotedTripleFiltering: false };
 
@@ -35,6 +80,19 @@ export class StreamingTurtleSource {
     private readonly filePath: string,
     /** Blank-node prefix used for every fresh DataFactory (default: 'bkr_'). */
     private readonly blankNodePrefix = 'bkr_',
+    /**
+     * N3.js parser format string (default: `'text/turtle'`).
+     * Use `'text/n3'` for files that contain blank-node predicates (e.g. pre-Skolemization
+     * singleton-property files) which strict Turtle forbids.
+     */
+    private readonly format = 'text/turtle',
+    /**
+     * When `true`, every blank node in emitted quads is replaced on-the-fly with a
+     * Skolem IRI `<{skolemPrefix}{blankNodeId}>` before being handed to Comunica.
+     */
+    private readonly skolemize = false,
+    /** IRI prefix used when `skolemize` is `true` (default: `'urn:bkr:blank:'`). */
+    private readonly skolemPrefix = 'urn:bkr:blank:',
   ) {}
 
   public match(
@@ -45,34 +103,43 @@ export class StreamingTurtleSource {
   ): RDF.Stream<RDF.Quad> & NodeJS.EventEmitter {
     const matchDF = new DataFactory({ blankNodePrefix: this.blankNodePrefix });
     // BlankNodePrefix: '' ensures explicit _:name nodes bypass the counter.
-    const parser = new StreamParser({ factory: matchDF, blankNodePrefix: '' });
+    const parser = new StreamParser({ factory: matchDF, blankNodePrefix: '', format: this.format });
 
     const fileStream = createReadStream(this.filePath);
     fileStream.on('error', err => parser.emit('error', err));
     fileStream.pipe(parser);
 
+    // Build the pipeline: parser → [filter] → [skolem], return the last stage.
     const hasConstraint = subject ?? predicate ?? object ?? graph;
-    if (!hasConstraint) {
-      return <RDF.Stream<RDF.Quad> & NodeJS.EventEmitter><unknown>parser;
+    let last: Transform = parser;
+
+    if (hasConstraint) {
+      const filter = new Transform({
+        objectMode: true,
+        transform(quad: RDF.Quad, _enc, cb) {
+          if (
+            (!subject || quad.subject.equals(subject)) &&
+            (!predicate || quad.predicate.equals(predicate)) &&
+            (!object || quad.object.equals(object)) &&
+            (!graph || quad.graph.equals(graph))
+          ) {
+            this.push(quad);
+          }
+          cb();
+        },
+      });
+      last.on('error', (err: Error) => filter.emit('error', err));
+      last.pipe(filter);
+      last = filter;
     }
 
-    const filter = new Transform({
-      objectMode: true,
-      transform(quad: RDF.Quad, _enc, cb) {
-        if (
-          (!subject || quad.subject.equals(subject)) &&
-          (!predicate || quad.predicate.equals(predicate)) &&
-          (!object || quad.object.equals(object)) &&
-          (!graph || quad.graph.equals(graph))
-        ) {
-          this.push(quad);
-        }
-        cb();
-      },
-    });
+    if (this.skolemize) {
+      const skolem = new SkolemTransform(this.skolemPrefix);
+      last.on('error', (err: Error) => skolem.emit('error', err));
+      last.pipe(skolem);
+      last = skolem;
+    }
 
-    parser.on('error', (err: Error) => filter.emit('error', err));
-    parser.pipe(filter);
-    return <RDF.Stream<RDF.Quad> & NodeJS.EventEmitter><unknown>filter;
+    return <RDF.Stream<RDF.Quad> & NodeJS.EventEmitter><unknown>last;
   }
 }

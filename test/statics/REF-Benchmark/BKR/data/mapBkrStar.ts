@@ -29,11 +29,13 @@ import type * as RDF from '@rdfjs/types';
 import { Writer } from 'n3';
 import { DataFactory } from 'rdf-data-factory';
 import { termToString } from 'rdf-string';
-import { StreamingTurtleSource } from './StreamingTurtleSource.js';
+import { StreamingTurtleSource, skolemizeTerm } from './StreamingTurtleSource.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const DF = new DataFactory();
+const skolemDF = new DataFactory({ blankNodePrefix: '' });
+const SKOLEM_PREFIX = 'urn:bkr:blank:';
 const sourcePath = resolve(__dirname, 'BKR-star.ttl');
 
 /**
@@ -93,7 +95,8 @@ const mappings: MappingSpec[] = [
     name: 'mapToSingleton',
     queries: [ 'mapToSingleton-Q1.rq', 'mapToSingleton-Q2.rq' ],
     output: 'BKR-Singleton.ttl',
-    format: 'text/turtle',
+    // Singleton properties are blank nodes used as predicates, which requires N3 format.
+    format: 'text/n3',
   },
   {
     name: 'mapToWikiData',
@@ -136,7 +139,18 @@ async function executeMapping(spec: MappingSpec): Promise<void> {
     await new Promise<void>((res, rej) => {
       quadStream.on('error', rej);
       quadStream.on('data', (quad: RDF.Quad) => {
-        writer.addQuad(quad);
+        // Skolemize blank nodes so the output files contain no blank nodes.
+        // The rewriting algorithm assumes datasets are blank-node free.
+        const s = skolemizeTerm(quad.subject, SKOLEM_PREFIX, skolemDF);
+        const p = skolemizeTerm(quad.predicate, SKOLEM_PREFIX, skolemDF);
+        const o = skolemizeTerm(quad.object, SKOLEM_PREFIX, skolemDF);
+        const g = skolemizeTerm(quad.graph, SKOLEM_PREFIX, skolemDF);
+        writer.addQuad(skolemDF.quad(
+          <RDF.Quad_Subject>s,
+          <RDF.Quad_Predicate>p,
+          <RDF.Quad_Object>o,
+          <RDF.Quad_Graph>g,
+        ));
 
         if (++totalQuads % 100_000 === 0) {
           process.stdout.write(`\r[${name}] ${totalQuads.toLocaleString()} quads written...`);

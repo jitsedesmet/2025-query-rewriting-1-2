@@ -11,10 +11,15 @@
  * in-memory N3.Store (Comunica's default), each SPARQL pattern match call streams the
  * file via N3.StreamParser. This keeps heap usage near-constant regardless of file size.
  *
+ * Each mapping is executed in a **separate child process** (--max-old-space-size=14336)
+ * so that garbage from one mapping cannot accumulate into the heap of the next.
+ *
  * Usage:
- *   npx tsx mapBkrStar.ts
+ *   npx tsx mapBkrStar.ts                   # run all mappings sequentially
+ *   npx tsx mapBkrStar.ts --only <name>     # run one named mapping (used by child processes)
  */
 
+import { spawnSync } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
@@ -29,7 +34,6 @@ import { StreamingTurtleSource } from './StreamingTurtleSource.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const DF = new DataFactory();
-const engine = new QueryEngine();
 const sourcePath = resolve(__dirname, 'BKR-star.ttl');
 
 /**
@@ -108,6 +112,7 @@ async function executeMapping(spec: MappingSpec): Promise<void> {
   const outputPath = resolve(__dirname, output);
   const outStream = createWriteStream(outputPath);
   const writer = new Writer(outStream, { format });
+  const engine = new QueryEngine();
 
   process.stdout.write(`[${name}] Starting → ${output}\n`);
   let totalQuads = 0;
@@ -153,9 +158,42 @@ async function executeMapping(spec: MappingSpec): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Entry point: if --only <name> is provided, run just that mapping (child mode).
+// Otherwise, re-invoke this script once per mapping in a fresh process so that
+// heap garbage from one mapping cannot accumulate into the next.
+// ---------------------------------------------------------------------------
 
-for (const mapping of mappings) {
-  await executeMapping(mapping);
+const onlyArg = process.argv.indexOf('--only');
+const onlyName = onlyArg === -1 ? undefined : process.argv[onlyArg + 1];
+
+if (onlyName === undefined) {
+  // Orchestrator mode: spawn each mapping in its own process with a dedicated heap.
+  const scriptPath = process.argv[1];
+  // 14 GiB for heap; leaves ~2 GiB for OS, stack, and native memory.
+  const heapFlag = '--max-old-space-size=14336';
+  const execArgv = process.execArgv.includes(heapFlag) ?
+    process.execArgv :
+      [ heapFlag, ...process.execArgv ];
+
+  for (const mapping of mappings) {
+    process.stdout.write(`\n=== Spawning child process for ${mapping.name} ===\n`);
+    const result = spawnSync(
+      process.execPath,
+      [ ...execArgv, scriptPath, '--only', mapping.name ],
+      { stdio: 'inherit' },
+    );
+    if (result.status !== 0) {
+      process.stderr.write(`[${mapping.name}] Child process failed with code ${String(result.status)}\n`);
+      throw new Error(`Mapping ${mapping.name} failed with exit code ${String(result.status)}`);
+    }
+  }
+
+  process.stdout.write('\nAll mappings complete.\n');
+} else {
+  // Child mode: run the named mapping in this process.
+  const spec = mappings.find(m => m.name === onlyName);
+  if (!spec) {
+    throw new Error(`Unknown mapping name: ${onlyName}`);
+  }
+  await executeMapping(spec);
 }
-
-process.stdout.write('All mappings complete.\n');

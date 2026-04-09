@@ -7,17 +7,22 @@
  *   BKR-Singleton.ttl     — singleton-property pattern         (mapToSingleton-Q1/Q2)
  *   BKR-WikiData.ttl      — Wikidata-style n-ary pattern       (mapToWikiData-Q1/Q2)
  *
+ * Memory-efficient implementation: instead of loading the entire source file into an
+ * in-memory N3.Store (Comunica's default), each SPARQL pattern match call streams the
+ * file via N3.StreamParser. This keeps heap usage near-constant regardless of file size.
+ *
  * Usage:
- *   npx tsx map-bkr-star.ts
+ *   npx tsx mapBkrStar.ts
  */
 
-import { createWriteStream } from 'node:fs';
+import { createReadStream, createWriteStream } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
+import { Transform } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { QueryEngine } from '@comunica/query-sparql-file';
 import type * as RDF from '@rdfjs/types';
-import { Writer } from 'n3';
+import { StreamParser, Writer } from 'n3';
 import { DataFactory } from 'rdf-data-factory';
 import { termToString } from 'rdf-string';
 
@@ -25,7 +30,77 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const DF = new DataFactory();
 const engine = new QueryEngine();
-const source = resolve(__dirname, 'BKR-star.ttl');
+const sourcePath = resolve(__dirname, 'BKR-star.ttl');
+
+/**
+ * A streaming RDF.js Source backed by an N3.StreamParser.
+ *
+ * Each call to `match()` opens a fresh read stream from the source file, parses it via
+ * N3.StreamParser, and applies lightweight s/p/o/g filtering inline.  No in-memory
+ * quad store is ever built, so heap usage is bounded by the working set of the query
+ * engine's join operators rather than by the full size of BKR-star.ttl.
+ *
+ * Comunica's `ActorQuerySourceIdentifyRdfJs` (type = 'rdfjs') will call `match()` once
+ * per BGP pattern and join / filter results itself.  For the single-pattern queries
+ * (Q2 and Q1 of Reification / Singleton) this means exactly one file scan.  For the
+ * two-pattern WikiData-Q1 join, Comunica builds a hash-table for the smaller side
+ * (the rdf:reifies-filtered scan) and stream-probes with the larger side, keeping
+ * peak memory proportional to the number of reification triples rather than the whole
+ * dataset.
+ */
+class StreamingTurtleSource {
+  public readonly features = <const>{ quotedTripleFiltering: false };
+
+  public constructor(private readonly filePath: string) {}
+
+  public match(
+    subject?: RDF.Term | null,
+    predicate?: RDF.Term | null,
+    object?: RDF.Term | null,
+    graph?: RDF.Term | null,
+  ): RDF.Stream<RDF.Quad> & NodeJS.EventEmitter {
+    const fileStream = createReadStream(this.filePath);
+    // N3.StreamParser without an explicit format string enables the most permissive
+    // parse mode (equivalent to TriG-star), which handles the <<( … )>> RDF 1.2
+    // annotation syntax used in BKR-star.ttl.
+    //
+    // blankNodePrefix: '' ensures that every scan of the same file produces
+    // identical blank-node identifiers (e.g. 'ann1' instead of 'b0_ann1',
+    // 'b1_ann1', …). Without this, each StreamParser instance increments a
+    // module-level counter and the same _:ann1 gets a different ID on each
+    // match() call, breaking cross-query blank-node identity.
+    const parser = new StreamParser({ factory: DF, blankNodePrefix: '' });
+
+    // Propagate file-read errors into the parser stream.
+    fileStream.on('error', err => parser.emit('error', err));
+    fileStream.pipe(parser);
+
+    const hasConstraint = subject ?? predicate ?? object ?? graph;
+    if (!hasConstraint) {
+      return <RDF.Stream<RDF.Quad> & NodeJS.EventEmitter><unknown>parser;
+    }
+
+    // Inline filter: only emit quads that satisfy every non-null constraint.
+    const filter = new Transform({
+      objectMode: true,
+      transform(quad: RDF.Quad, _enc, cb) {
+        if (
+          (!subject || quad.subject.equals(subject)) &&
+          (!predicate || quad.predicate.equals(predicate)) &&
+          (!object || quad.object.equals(object)) &&
+          (!graph || quad.graph.equals(graph))
+        ) {
+          this.push(quad);
+        }
+        cb();
+      },
+    });
+
+    parser.on('error', (err: Error) => filter.emit('error', err));
+    parser.pipe(filter);
+    return <RDF.Stream<RDF.Quad> & NodeJS.EventEmitter><unknown>filter;
+  }
+}
 
 /**
  * Extension function `<internal://bnode>`.
@@ -107,30 +182,36 @@ async function executeMapping(spec: MappingSpec): Promise<void> {
   process.stdout.write(`[${name}] Starting → ${output}\n`);
   let totalQuads = 0;
 
+  // A fresh streaming source is used for every query so each scan gets its own
+  // file handle and parser — Comunica never sees a pre-built store.
+  const rdfjsSource = new StreamingTurtleSource(sourcePath);
+
   for (const queryFile of queries) {
     const queryPath = resolve(__dirname, queryFile);
     const query = await readFile(queryPath, 'utf-8');
     process.stdout.write(`[${name}] Executing ${queryFile}...\n`);
 
     const quadStream = await engine.queryQuads(query, {
-      sources: [ source ],
+      sources: [{ type: 'rdfjs', value: rdfjsSource }],
       ...context,
     });
 
-    quadStream.on('data', (quad) => {
-      writer.addQuad(quad);
-      if (++totalQuads % 100_000 === 0) {
-        process.stdout.write(`\r[${name}] ${totalQuads.toLocaleString()} quads written...`);
-      }
-    });
-    await new Promise((resolve, reject) => {
-      quadStream.on('done', resolve);
-      quadStream.on('error', reject);
+    // Consume the quad stream with backpressure: pause the source while the
+    // underlying file-write stream is draining so quads don't pile up in memory.
+    await new Promise<void>((res, rej) => {
+      quadStream.on('error', rej);
+      quadStream.on('data', (quad: RDF.Quad) => {
+        writer.addQuad(quad);
+
+        if (++totalQuads % 100_000 === 0) {
+          process.stdout.write(`\r[${name}] ${totalQuads.toLocaleString()} quads written...`);
+        }
+      });
+      quadStream.on('end', () => res());
     });
   }
 
   if (totalQuads >= 100_000) {
-    // Overwrite the in-progress line with the final count.
     process.stdout.write('\r');
   }
 

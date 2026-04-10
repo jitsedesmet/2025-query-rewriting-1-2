@@ -4,27 +4,27 @@
  * Unlike `StreamingTurtleSource`, the entire file is loaded into memory once by
  * calling `await source.load()`.  The implementation avoids N3.Store's three
  * nested index structures (subjects / predicates / objects) by keeping only one:
- *   predicate URI → indices into the flat quad array
+ *   predicate URI → array of RDF.Quad objects with that predicate
  *
  * **Term deduplication**: a `CachingDataFactory` wraps `rdf-data-factory` so that
  * every call to `namedNode`, `blankNode`, or `literal` with the same arguments
  * returns the **same JavaScript object**.  This means the per-quad cost is only
- * the RDF.Quad wrapper (~64 B on V8) plus an 8-byte slot in the flat array, rather
- * than fresh string + object allocations for every occurrence of a repeated URI.
+ * the RDF.Quad wrapper (~64 B on V8) plus one 8-byte reference in the predicate
+ * bucket, rather than fresh string + object allocations for every repeated URI.
  *
  * **Estimated memory** (63 M quads, 500 K unique terms):
- *   flat quad array   63 M × 8 B  (references)      ≈  504 MB
  *   Quad objects      63 M × 64 B                   ≈  4.0 GB
- *   predicate index   63 M × 8 B  (index numbers)   ≈  504 MB
+ *   predicate buckets 63 M × 8 B  (quad references) ≈  504 MB
  *   deduplicated terms 500 K × 80 B                 ≈   40 MB
  *   ─────────────────────────────────────────────────────────
- *   total                                            ≈  5.0 GB
+ *   total                                            ≈  4.5 GB
  *
- * This is roughly one-third of N3.Store's three-index memory footprint.
+ * This is roughly one-third of N3.Store's three-index memory footprint, and
+ * saves ~500 MB compared to the earlier flat-array + index-number design.
  *
  * **match() behaviour**
  *   • predicate bound   → O(matchCount) via the POS index
- *   • predicate unbound → O(totalQuads) full scan through the flat array
+ *   • predicate unbound → O(totalQuads) full scan through all predicate buckets
  *
  * Usage:
  *   const src = new PosIndexedTurtleSource(filePath);
@@ -37,7 +37,6 @@ import { Readable } from 'node:stream';
 import type * as RDF from '@rdfjs/types';
 import { StreamParser } from 'n3';
 import { DataFactory } from 'rdf-data-factory';
-import { skolemizeTerm } from './StreamingTurtleSource.js';
 
 // ---------------------------------------------------------------------------
 // CachingDataFactory — deduplicates term objects across all parsed quads.
@@ -121,9 +120,31 @@ class CachingDataFactory {
     return this.inner.defaultGraph();
   }
 
-  /** Skolemize any blank-node term using this factory for IRI construction. */
+  /**
+   * Skolemize a term, routing all newly created named nodes through `this.namedNode()`
+   * so that Skolem IRIs are deduplicated just like any other term.
+   *
+   * Using `this.inner.namedNode()` here would bypass the cache: every occurrence of
+   * the same blank node (e.g. `_:b0` appearing as subject in dozens of annotation
+   * triples) would produce a fresh `NamedNode` object instead of returning the one
+   * already stored in the cache.  The same applies to blank nodes nested inside
+   * quoted-triple terms.
+   */
   public skolemize(term: RDF.Term, prefix: string): RDF.Term {
-    return skolemizeTerm(term, prefix, this.inner);
+    if (term.termType === 'BlankNode') {
+      return this.namedNode(`${prefix}${term.value}`);
+    }
+    if (term.termType === 'Quad') {
+      const q = <RDF.Quad><unknown>term;
+      return this.quad(
+        <RDF.Quad_Subject> this.skolemize(q.subject, prefix),
+        <RDF.Quad_Predicate> this.skolemize(q.predicate, prefix),
+        <RDF.Quad_Object> this.skolemize(q.object, prefix),
+        <RDF.Quad_Graph> this.skolemize(q.graph, prefix),
+      );
+    }
+    // NamedNode, Literal, DefaultGraph — already the cached object, return as-is.
+    return term;
   }
 
   /** Number of deduplicated terms cached. */
@@ -139,11 +160,11 @@ export class PosIndexedTurtleSource {
 
   private readonly df = new CachingDataFactory();
 
-  /** All quads loaded from the file. */
-  private readonly quads: RDF.Quad[] = [];
+  /** Predicate URI → all quads that carry that predicate. */
+  private readonly byPred = new Map<string, RDF.Quad[]>();
 
-  /** Predicate URI → array of indices into `quads`. */
-  private readonly byPred = new Map<string, number[]>();
+  /** Total number of quads stored across all predicate buckets. */
+  private quadCount = 0;
 
   private loaded = false;
 
@@ -180,22 +201,21 @@ export class PosIndexedTurtleSource {
       parser.on('error', reject);
       parser.on('data', (quad: RDF.Quad) => {
         const q = this.skolemize ? this.skolemizeQuad(quad) : quad;
-        const idx = this.quads.length;
-        this.quads.push(q);
 
         const predKey = q.predicate.value;
-        let idxList = this.byPred.get(predKey);
-        if (!idxList) {
-          idxList = [];
-          this.byPred.set(predKey, idxList);
+        let bucket = this.byPred.get(predKey);
+        if (!bucket) {
+          bucket = [];
+          this.byPred.set(predKey, bucket);
         }
-        idxList.push(idx);
+        bucket.push(q);
+        this.quadCount++;
       });
 
       parser.on('end', () => {
         this.loaded = true;
         process.stdout.write(
-          `[PosIndexedTurtleSource] Loaded ${this.quads.length.toLocaleString()} quads, ` +
+          `[PosIndexedTurtleSource] Loaded ${this.quadCount.toLocaleString()} quads, ` +
           `${this.byPred.size} unique predicates, ` +
           `${this.df.cacheSize} deduplicated terms\n`,
         );
@@ -221,9 +241,8 @@ export class PosIndexedTurtleSource {
       try {
         if (predicate) {
           // Fast path: use the predicate index.
-          const indices = this.byPred.get(predicate.value) ?? [];
-          for (const idx of indices) {
-            const q = this.quads[idx];
+          const bucket = this.byPred.get(predicate.value) ?? [];
+          for (const q of bucket) {
             if (
               (!subject || q.subject.equals(subject)) &&
               (!object || q.object.equals(object)) &&
@@ -233,14 +252,16 @@ export class PosIndexedTurtleSource {
             }
           }
         } else {
-          // Full scan: iterate the flat quad array.
-          for (const q of this.quads) {
-            if (
-              (!subject || q.subject.equals(subject)) &&
-              (!object || q.object.equals(object)) &&
-              (!graph || q.graph.equals(graph))
-            ) {
-              readable.push(q);
+          // Full scan: iterate every predicate bucket.
+          for (const bucket of this.byPred.values()) {
+            for (const q of bucket) {
+              if (
+                (!subject || q.subject.equals(subject)) &&
+                (!object || q.object.equals(object)) &&
+                (!graph || q.graph.equals(graph))
+              ) {
+                readable.push(q);
+              }
             }
           }
         }

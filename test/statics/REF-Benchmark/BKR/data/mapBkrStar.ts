@@ -7,16 +7,19 @@
  *   BKR-Singleton.ttl     — singleton-property pattern         (mapToSingleton-Q1/Q2)
  *   BKR-WikiData.ttl      — Wikidata-style n-ary pattern       (mapToWikiData-Q1/Q2)
  *
- * Memory-efficient implementation: instead of loading the entire source file into an
- * in-memory N3.Store (Comunica's default), each SPARQL pattern match call streams the
- * file via N3.StreamParser. This keeps heap usage near-constant regardless of file size.
+ * Performance: instead of re-reading the source file from disk for every SPARQL
+ * pattern-match call, the entire source is loaded into memory once using
+ * `PosIndexedTurtleSource`.  A single predicate-indexed in-memory store is then
+ * shared across all queries and all mappings, running in one process.
  *
- * Each mapping is executed in a **separate child process** (--max-old-space-size=14336)
- * so that garbage from one mapping cannot accumulate into the heap of the next.
+ * Output is written in a streaming fashion: each quad is serialised and flushed to
+ * disk as it arrives from the SPARQL engine — no output is buffered in memory.
+ *
+ * Memory: the script requires ~20 GiB of heap.  It will automatically re-exec
+ * itself with `--max-old-space-size=20480` if that flag is not already present.
  *
  * Usage:
- *   npx tsx mapBkrStar.ts                   # run all mappings sequentially
- *   npx tsx mapBkrStar.ts --only <name>     # run one named mapping (used by child processes)
+ *   npx tsx mapBkrStar.ts
  */
 
 import { spawnSync } from 'node:child_process';
@@ -29,7 +32,8 @@ import type * as RDF from '@rdfjs/types';
 import { Writer } from 'n3';
 import { DataFactory } from 'rdf-data-factory';
 import { termToString } from 'rdf-string';
-import { StreamingTurtleSource, skolemizeTerm } from './StreamingTurtleSource.js';
+import { PosIndexedTurtleSource } from './PosIndexedTurtleSource.js';
+import { skolemizeTerm } from './StreamingTurtleSource.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -110,7 +114,7 @@ const mappings: MappingSpec[] = [
 
 // ---------------------------------------------------------------------------
 
-async function executeMapping(spec: MappingSpec): Promise<void> {
+async function executeMapping(spec: MappingSpec, rdfjsSource: PosIndexedTurtleSource): Promise<void> {
   const { name, queries, output, format, context = {}} = spec;
   const outputPath = resolve(__dirname, output);
   const outStream = createWriteStream(outputPath);
@@ -119,10 +123,6 @@ async function executeMapping(spec: MappingSpec): Promise<void> {
 
   process.stdout.write(`[${name}] Starting → ${output}\n`);
   let totalQuads = 0;
-
-  // A fresh streaming source is used for every query so each scan gets its own
-  // file handle and parser — Comunica never sees a pre-built store.
-  const rdfjsSource = new StreamingTurtleSource(sourcePath);
 
   for (const queryFile of queries) {
     const queryPath = resolve(__dirname, queryFile);
@@ -172,42 +172,31 @@ async function executeMapping(spec: MappingSpec): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Entry point: if --only <name> is provided, run just that mapping (child mode).
-// Otherwise, re-invoke this script once per mapping in a fresh process so that
-// heap garbage from one mapping cannot accumulate into the next.
+// Entry point: re-exec with 20 GiB heap when the flag is absent, then load the
+// source once and run all mappings sequentially in this process.
 // ---------------------------------------------------------------------------
 
-const onlyArg = process.argv.indexOf('--only');
-const onlyName = onlyArg === -1 ? undefined : process.argv[onlyArg + 1];
+const HEAP_MB = 20_480;
+const heapFlag = `--max-old-space-size=${HEAP_MB}`;
 
-if (onlyName === undefined) {
-  // Orchestrator mode: spawn each mapping in its own process with a dedicated heap.
-  const scriptPath = process.argv[1];
-  // 14 GiB for heap; leaves ~2 GiB for OS, stack, and native memory.
-  const heapFlag = '--max-old-space-size=14336';
-  const execArgv = process.execArgv.includes(heapFlag) ?
-    process.execArgv :
-      [ heapFlag, ...process.execArgv ];
-
-  for (const mapping of mappings) {
-    process.stdout.write(`\n=== Spawning child process for ${mapping.name} ===\n`);
-    const result = spawnSync(
-      process.execPath,
-      [ ...execArgv, scriptPath, '--only', mapping.name ],
-      { stdio: 'inherit' },
-    );
-    if (result.status !== 0) {
-      process.stderr.write(`[${mapping.name}] Child process failed with code ${String(result.status)}\n`);
-      throw new Error(`Mapping ${mapping.name} failed with exit code ${String(result.status)}`);
-    }
-  }
-
-  process.stdout.write('\nAll mappings complete.\n');
-} else {
-  // Child mode: run the named mapping in this process.
-  const spec = mappings.find(m => m.name === onlyName);
-  if (!spec) {
-    throw new Error(`Unknown mapping name: ${onlyName}`);
-  }
-  await executeMapping(spec);
+if (!process.execArgv.some(a => a.startsWith('--max-old-space-size='))) {
+  process.stdout.write(`Re-execing with ${heapFlag}...\n`);
+  const result = spawnSync(
+    process.execPath,
+    [ heapFlag, ...process.execArgv, process.argv[1], ...process.argv.slice(2) ],
+    { stdio: 'inherit' },
+  );
+  // eslint-disable-next-line unicorn/no-process-exit
+  process.exit(result.status ?? 1);
 }
+
+// Load the source into memory once; it is shared across all mappings.
+process.stdout.write(`Loading source: ${sourcePath}\n`);
+const rdfjsSource = new PosIndexedTurtleSource(sourcePath, 'text/turtle', true, SKOLEM_PREFIX);
+await rdfjsSource.load();
+
+for (const mapping of mappings) {
+  await executeMapping(mapping, rdfjsSource);
+}
+
+process.stdout.write('\nAll mappings complete.\n');

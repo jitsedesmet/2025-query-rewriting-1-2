@@ -41,7 +41,18 @@ import { skolemizeTerm } from './StreamingTurtleSource.js';
 
 // ---------------------------------------------------------------------------
 // CachingDataFactory — deduplicates term objects across all parsed quads.
+//
+// V8's Map has a hard maximum size of ~16.7 M entries (2^24 − 1).  Large
+// datasets such as BKR-Reification (168 M quads, tens of millions of unique
+// IRIs) would exceed this limit and throw a `RangeError: Map maximum size
+// exceeded`.  We therefore stop inserting into the cache once it reaches
+// MAX_CACHE_SIZE and fall back to fresh object creation for any term beyond
+// that point.  Common terms (rdf:*, xsd:*, shared property/entity IRIs) are
+// loaded first and will always be cached; the long-tail unique statement
+// subjects are where deduplication stops helping anyway.
 // ---------------------------------------------------------------------------
+
+const MAX_CACHE_SIZE = 15_000_000;
 
 class CachingDataFactory {
   private readonly inner = new DataFactory({ blankNodePrefix: '' });
@@ -49,10 +60,12 @@ class CachingDataFactory {
 
   public namedNode(iri: string): RDF.NamedNode {
     const key = `n\0${iri}`;
-    const cached = this.cache.get(key);
-    let t = <RDF.NamedNode | undefined>cached;
-    if (!t) {
-      t = this.inner.namedNode(iri);
+    const cached = <RDF.NamedNode | undefined> this.cache.get(key);
+    if (cached) {
+      return cached;
+    }
+    const t = this.inner.namedNode(iri);
+    if (this.cache.size < MAX_CACHE_SIZE) {
       this.cache.set(key, t);
     }
     return t;
@@ -63,10 +76,12 @@ class CachingDataFactory {
       return this.inner.blankNode();
     }
     const key = `b\0${id}`;
-    const cached = this.cache.get(key);
-    let t = <RDF.BlankNode | undefined>cached;
-    if (!t) {
-      t = this.inner.blankNode(id);
+    const cached = <RDF.BlankNode | undefined> this.cache.get(key);
+    if (cached) {
+      return cached;
+    }
+    const t = this.inner.blankNode(id);
+    if (this.cache.size < MAX_CACHE_SIZE) {
       this.cache.set(key, t);
     }
     return t;
@@ -77,14 +92,16 @@ class CachingDataFactory {
       `@${langOrDatatype}` :
         (langOrDatatype ? `^^${langOrDatatype.value}` : '');
     const key = `l\0${value}${suffix}`;
-    const cached = this.cache.get(key);
-    let t = <RDF.Literal | undefined>cached;
-    if (!t) {
-      t = typeof langOrDatatype === 'string' ?
-        this.inner.literal(value, langOrDatatype) :
-          (langOrDatatype ?
-            this.inner.literal(value, langOrDatatype) :
-            this.inner.literal(value));
+    const cached = <RDF.Literal | undefined> this.cache.get(key);
+    if (cached) {
+      return cached;
+    }
+    const t = typeof langOrDatatype === 'string' ?
+      this.inner.literal(value, langOrDatatype) :
+        (langOrDatatype ?
+          this.inner.literal(value, langOrDatatype) :
+          this.inner.literal(value));
+    if (this.cache.size < MAX_CACHE_SIZE) {
       this.cache.set(key, t);
     }
     return t;

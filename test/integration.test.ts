@@ -460,7 +460,7 @@ describe('integration tests', () => {
      */
     const bkrTestsEnabled = Boolean(process.env.BKR_TESTS);
     /** 20 min: loading 100-170 M quads into PosIndexedTurtleSource takes several minutes. */
-    const LOAD_TIMEOUT = 1_200_000;
+    const LOAD_TIMEOUT = 3_600_000;
     /**
      * 1 hour per query: once data is loaded in-memory, SPARQL queries complete in seconds
      * to a few minutes, but we keep a generous budget for unexpected slowness.

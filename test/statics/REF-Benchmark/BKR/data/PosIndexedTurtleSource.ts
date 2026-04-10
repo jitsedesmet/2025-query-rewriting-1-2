@@ -234,7 +234,10 @@ export class PosIndexedTurtleSource {
       throw new Error('PosIndexedTurtleSource.load() must be awaited before match()');
     }
 
-    const readable = new Readable({ objectMode: true });
+    // No-op read(): all data is pushed from nextTick; without this Node.js would
+    // call the default _read() which emits an error when a consumer attaches a
+    // 'data' listener (or async-iterates) before nextTick has fired.
+    const readable = new Readable({ objectMode: true, read() {} });
 
     // Gather matching quads synchronously, then push asynchronously.
     process.nextTick(() => {

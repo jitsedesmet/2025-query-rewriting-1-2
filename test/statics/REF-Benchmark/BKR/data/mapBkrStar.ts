@@ -124,6 +124,12 @@ async function executeMapping(spec: MappingSpec, rdfjsSource: PosIndexedTurtleSo
   process.stdout.write(`[${name}] Starting → ${output}\n`);
   let totalQuads = 0;
 
+  // Collect write-stream errors so they can be re-thrown at the next await point.
+  let pendingStreamError: Error | undefined;
+  outStream.on('error', (err: Error) => {
+    pendingStreamError = err;
+  });
+
   for (const queryFile of queries) {
     const queryPath = resolve(__dirname, queryFile);
     const query = await readFile(queryPath, 'utf-8');
@@ -134,29 +140,56 @@ async function executeMapping(spec: MappingSpec, rdfjsSource: PosIndexedTurtleSo
       ...context,
     });
 
-    // Consume the quad stream with backpressure: pause the source while the
-    // underlying file-write stream is draining so quads don't pile up in memory.
     await new Promise<void>((res, rej) => {
-      quadStream.on('error', rej);
-      quadStream.on('data', (quad: RDF.Quad) => {
-        // Skolemize blank nodes so the output files contain no blank nodes.
-        // The rewriting algorithm assumes datasets are blank-node free.
-        const s = skolemizeTerm(quad.subject, SKOLEM_PREFIX, skolemDF);
-        const p = skolemizeTerm(quad.predicate, SKOLEM_PREFIX, skolemDF);
-        const o = skolemizeTerm(quad.object, SKOLEM_PREFIX, skolemDF);
-        const g = skolemizeTerm(quad.graph, SKOLEM_PREFIX, skolemDF);
-        writer.addQuad(skolemDF.quad(
-          <RDF.Quad_Subject>s,
-          <RDF.Quad_Predicate>p,
-          <RDF.Quad_Object>o,
-          <RDF.Quad_Graph>g,
-        ));
+      let settled = false;
+      const fail = (err: unknown): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        rej(err instanceof Error ? err : new Error(String(err)));
+      };
 
-        if (++totalQuads % 100_000 === 0) {
-          process.stdout.write(`\r[${name}] ${totalQuads.toLocaleString()} quads written...`);
+      quadStream.on('error', fail);
+      quadStream.on('data', (quad: RDF.Quad) => {
+        if (settled) {
+          return;
+        }
+        if (pendingStreamError) {
+          fail(pendingStreamError);
+          return;
+        }
+        try {
+          // Skolemize blank nodes so the output files contain no blank nodes.
+          // The rewriting algorithm assumes datasets are blank-node free.
+          const s = skolemizeTerm(quad.subject, SKOLEM_PREFIX, skolemDF);
+          const p = skolemizeTerm(quad.predicate, SKOLEM_PREFIX, skolemDF);
+          const o = skolemizeTerm(quad.object, SKOLEM_PREFIX, skolemDF);
+          const g = skolemizeTerm(quad.graph, SKOLEM_PREFIX, skolemDF);
+          writer.addQuad(skolemDF.quad(
+            <RDF.Quad_Subject>s,
+            <RDF.Quad_Predicate>p,
+            <RDF.Quad_Object>o,
+            <RDF.Quad_Graph>g,
+          ));
+
+          if (++totalQuads % 100_000 === 0) {
+            process.stdout.write(`\r[${name}] ${totalQuads.toLocaleString()} quads written...`);
+          }
+        } catch (err) {
+          fail(err);
         }
       });
-      quadStream.on('end', () => res());
+      quadStream.on('end', () => {
+        if (pendingStreamError) {
+          fail(pendingStreamError);
+          return;
+        }
+        if (!settled) {
+          settled = true;
+          res();
+        }
+      });
     });
   }
 
@@ -165,6 +198,10 @@ async function executeMapping(spec: MappingSpec, rdfjsSource: PosIndexedTurtleSo
   }
 
   await new Promise<void>((res, rej) => {
+    if (pendingStreamError) {
+      rej(pendingStreamError);
+      return;
+    }
     writer.end(error => (error ? rej(error) : res()));
   });
 
@@ -195,8 +232,16 @@ process.stdout.write(`Loading source: ${sourcePath}\n`);
 const rdfjsSource = new PosIndexedTurtleSource(sourcePath, 'text/turtle', true, SKOLEM_PREFIX);
 await rdfjsSource.load();
 
-for (const mapping of mappings) {
-  await executeMapping(mapping, rdfjsSource);
+// Run all mappings sequentially; print the full error and exit on failure.
+try {
+  for (const mapping of mappings) {
+    await executeMapping(mapping, rdfjsSource);
+  }
+} catch (err: unknown) {
+  const msg = err instanceof Error ? (err.stack ?? err.message) : String(err);
+  process.stderr.write(`\nFatal: ${msg}\n`);
+  // eslint-disable-next-line unicorn/no-process-exit
+  process.exit(1);
 }
 
 process.stdout.write('\nAll mappings complete.\n');

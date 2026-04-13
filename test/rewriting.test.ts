@@ -673,6 +673,59 @@ describe('dummy', () => {
       }],
     ));
 
+    it('templateLiteral generates STRDT with datatype argument', ({ expect }) => testMappers(
+      expect,
+      'SELECT * { ?s ?p ?o }',
+      `SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) WHERE {
+  {
+    {
+      SELECT ?m0_p ?m0_s WHERE {
+        ?m0_s ?m0_p <ex://b> .
+      }
+    }
+    BIND( STRDT( CONCAT( "ex://" , STR( ?m0_s ) ) , <http://www.w3.org/2001/XMLSchema#string> ) AS ?uq_o )
+    BIND( ?m0_p AS ?uq_p )
+    BIND( ?m0_s AS ?uq_s )
+  }
+}`,
+      [{
+        head: c.AF.createMappingHead(c.DF.variable('s'), c.DF.variable('p'), c.AF.createTemplateLiteral(
+          [ 'ex://', c.DF.variable('s') ],
+          c.DF.namedNode('http://www.w3.org/2001/XMLSchema#string'),
+        )),
+        body: <Algebra.Project>parseQuery(c, 'SELECT * { ?s ?p <ex://b> }'),
+      }],
+    ));
+
+    it('nested TemplateQuad in head matches nested triple term in user query', ({ expect }) => testMappers(
+      expect,
+      'SELECT * { ?x ?y <<( <ex://a> <ex://b> ?z )>> }',
+      `SELECT ( ?uq_x AS ?x ) ( ?uq_y AS ?y ) ( ?uq_z AS ?z ) WHERE {
+  {
+    {
+      SELECT ?m0_p ?m0_s WHERE {
+        ?m0_s ?m0_p <ex://a> .
+      }
+    }
+    BIND( ?m0_s AS ?uq_x )
+    BIND( ?m0_p AS ?uq_y )
+    BIND( IRI( CONCAT( STR( ?m0_s ) ) ) AS ?uq_z )
+  }
+}`,
+      [{
+        head: c.AF.createMappingHead(
+          c.DF.variable('s'),
+          c.DF.variable('p'),
+          c.AF.createMappingHead(
+            c.DF.namedNode('ex://a'),
+            c.DF.namedNode('ex://b'),
+            c.AF.createTemplateIri([ c.DF.variable('s') ]),
+          ),
+        ),
+        body: <Algebra.Project>parseQuery(c, 'SELECT * { ?s ?p <ex://a> }'),
+      }],
+    ));
+
     it('template mapping simple', ({ expect }) => testMappers(
       expect,
       'SELECT * { ?s ?p ?o }',
@@ -981,7 +1034,7 @@ describe('dummy', () => {
     BIND( ?m0_p AS ?uq_p1 )
     BIND( STRDT( CONCAT( IF( ISIRI( ?m0_s ) , CONCAT( ",iri," , REPLACE( REPLACE( STR( ?m0_s ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) , IF( HASLANGDIR( ?m0_s ) , CONCAT( ",literal@D," , REPLACE( REPLACE( STR( ?m0_s ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) , "," , REPLACE( REPLACE( LANG( ?m0_s ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) , "," , REPLACE( REPLACE( LANGDIR( ?m0_s ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) , IF( HASLANG( ?m0_s ) , CONCAT( ",literal@," , REPLACE( REPLACE( STR( ?m0_s ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) , "," , REPLACE( REPLACE( LANG( ?m0_s ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) , CONCAT( ",literal," , REPLACE( REPLACE( STR( ?m0_s ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) , "," , REPLACE( REPLACE( STR( DATATYPE( ?m0_s ) ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) ) ) ) ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?uq_s )
   }
-  FILTER ( ( DATATYPE( ?uq_s ) = "https://sparql-extension.knows.idlab.ugent.be/bnode" ) )
+  FILTER ( ( DATATYPE( ?uq_s ) = <https://sparql-extension.knows.idlab.ugent.be/bnode> ) )
 }`,
       [{
         head: c.AF.createMappingHead(

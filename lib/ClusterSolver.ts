@@ -205,7 +205,7 @@ ${JSON.stringify(to)}`);
     const curTerm = this.groupToTerm[group];
     // TODO: validate in the case of triple term by also registering that some variables present might be the same.
     if (curTerm && !curTerm.equals(term)) {
-      throw new Error(`Cannot match Term ${JSON.stringify(term)} with term ${JSON.stringify(term)}`);
+      throw new Error(`Cannot match Term ${JSON.stringify(curTerm)} with term ${JSON.stringify(term)}`);
     }
     const groupRange = this.groupToRange[group];
     if (!groupRange.has(term.termType)) {
@@ -251,7 +251,7 @@ ${JSON.stringify(to)}`);
     for (const groupVars of Object.values(this.groupToVars)) {
       groupVars.sort((a, b) =>
         // Make sure 'm' (mapping) vars are before 'uq' (user query) vars
-        b.value.localeCompare(a.value));
+        a.value.localeCompare(b.value));
     }
   }
 

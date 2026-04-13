@@ -1259,6 +1259,25 @@ describe('dummy', () => {
         [ `CONSTRUCT { ?s ?p ?o } WHERE { VALUES ?s { <ex://a> <ex://b> } ?s ?p ?o . }` ],
       ));
 
+    it('mapping head same var in two positions, user query uses different vars', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT * { ?a ?p ?b }`,
+        `SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) ( ?uq_p AS ?p ) WHERE {
+  {
+    {
+      SELECT ?m0_p ?m0_s WHERE {
+        ?m0_s ?m0_p ?m0_s .
+      }
+    }
+    BIND( ?m0_s AS ?uq_a )
+    BIND( ?m0_s AS ?uq_b )
+    BIND( ?m0_p AS ?uq_p )
+  }
+}`,
+        [ `CONSTRUCT WHERE { ?s ?p ?s }` ],
+      ));
+
     it('optimize terms substitutes variables that appear only in triple patterns', ({ expect }) =>
       testConstructMappers(
         expect,

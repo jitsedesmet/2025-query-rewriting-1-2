@@ -124,7 +124,10 @@ export function bgpTransform(c: TransformContext, input: Algebra.Bgp): Algebra.J
  * @param pattern - The triple pattern to transform
  * @returns A Union of rewritten patterns (or FILTER(FALSE) for non-matching mappers)
  */
-export function mapPattern(c: TransformContext, pattern: Algebra.Pattern): Algebra.Union | Algebra.Group {
+export function mapPattern(
+  c: TransformContext,
+  pattern: Algebra.Pattern,
+): Algebra.Union | Algebra.Filter | Algebra.Project | Algebra.Extend {
   const mappedPatterns = c.mappers.map((mapper) => {
     try {
       return rewriteSinglePattern(c, pattern, mapper);
@@ -133,5 +136,8 @@ export function mapPattern(c: TransformContext, pattern: Algebra.Pattern): Algeb
       return createFilterFalse(c);
     }
   });
+  if (mappedPatterns.length === 1) {
+    return mappedPatterns[0];
+  }
   return c.AF.createUnion(mappedPatterns, true);
 }

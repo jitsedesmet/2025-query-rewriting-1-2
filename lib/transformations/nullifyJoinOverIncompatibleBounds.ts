@@ -4,6 +4,8 @@ import type { TransformContext } from '../transformContext.js';
 import { createFilterFalse, directExtensions, termIsStaticTerm } from '../utils.js';
 import { VariableSet } from './variableSet.js';
 
+// TODO: implement this check to not only check static bind equality but also static term/iri equality in a filter.
+
 /**
  * Optimization transformation that detects and eliminates incompatible join branches.
  *

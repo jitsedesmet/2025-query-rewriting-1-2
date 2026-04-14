@@ -65,26 +65,59 @@ export function transformServiceCallPushUp(c: TransformContext, op: Algebra.Oper
   }
 
   function valuesDistributionOfJoin(op: Algebra.Join): Algebra.Operation {
-    // TODO: generalize this case
-    if (op.input.length === 2) {
-      const [ values, service ] = op.input;
-      if (values.type === Algebra.Types.VALUES && service.type === Algebra.Types.SERVICE) {
-        service.input = AF.createJoin([ values, service.input ], true);
-        return service;
+    // Partition the join inputs into VALUES clauses and SERVICE calls.
+    // If every non-VALUES input is a SERVICE call, we can push all VALUES
+    // clauses inside each service.  This creates a less complex outer join
+    // (the VALUES are removed from the join level) while letting each service
+    // endpoint apply the bindings as an early filter.
+    const valueClauses: Algebra.Values[] = [];
+    const serviceClauses: Algebra.Service[] = [];
+
+    for (const input of op.input) {
+      if (input.type === Algebra.Types.VALUES) {
+        valueClauses.push(input);
+      } else if (input.type === Algebra.Types.SERVICE) {
+        serviceClauses.push(input);
+      } else {
+        // A non-VALUES, non-SERVICE branch is present: removing VALUES from
+        // the outer join would change semantics, so abort.
+        return op;
       }
     }
-    return op;
+
+    if (valueClauses.length === 0 || serviceClauses.length === 0) {
+      return op;
+    }
+
+    // Push every VALUES clause into each SERVICE branch as an inner join.
+    const newServices = serviceClauses.map((service): Algebra.Service => ({
+      ...service,
+      input: AF.createJoin([ ...valueClauses, service.input ], true),
+    }));
+
+    if (newServices.length === 1) {
+      return newServices[0];
+    }
+    return {
+      ...op,
+      input: newServices,
+    };
   }
 
   return algebraUtils.mapOperation<'unsafe', typeof op>(
     op,
     {
       [Algebra.Types.JOIN]: { transform: (join) => {
-        const pushed = valuesDistributionOfJoin(join);
-        if (pushed !== join) {
+        // Flatten any nested JOINs that are direct children so that VALUES and
+        // SERVICE siblings become visible at the same level.  This normalises
+        // structures produced by bgpTransform, which wraps even a single-pattern
+        // BGP inside a JOIN, before applying the push-down optimisations.
+        const flatJoin = AF.createJoin(join.input, true);
+        const pushed = valuesDistributionOfJoin(flatJoin);
+        if (pushed !== flatJoin) {
           return pushed;
         }
-        return pushUpServiceFromMulti(join);
+        return pushUpServiceFromMulti(flatJoin);
       } },
       [Algebra.Types.UNION]: { transform: pushUpServiceFromMulti },
       [Algebra.Types.FILTER]: { transform: pushOpServiceFromSingle },

@@ -1523,4 +1523,89 @@ describe('dummy', () => {
       [ `CONSTRUCT { ?s ?p ?o } WHERE { SERVICE <ex://a> { ?s ?p ?o } }` ],
       [ operationTransform, transformExtendsToValues, transformServiceCallPushUp ],
     ));
+
+  it('vALUES clause placed before the triple is pushed inside the SERVICE', ({ expect }) =>
+    testConstructMappers(
+      expect,
+      `SELECT * { VALUES ?p { <ex://x> } . ?s ?p ?o }`,
+      `SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) WHERE {
+  SERVICE <ex://a> {
+    VALUES ?uq_p {
+      <ex://x>
+    }
+    {
+      {
+        SELECT ?m0_o ?m0_p ?m0_s WHERE {
+          ?m0_s ?m0_p ?m0_o .
+        }
+      }
+      BIND( ?m0_o AS ?uq_o )
+      BIND( ?m0_p AS ?uq_p )
+      BIND( ?m0_s AS ?uq_s )
+    }
+  }
+}`,
+      [ `CONSTRUCT { ?s ?p ?o } WHERE { SERVICE <ex://a> { ?s ?p ?o } }` ],
+      [ operationTransform, transformExtendsToValues, transformServiceCallPushUp ],
+    ));
+
+  it('vALUES clause placed after the triple is pushed inside the SERVICE', ({ expect }) =>
+    testConstructMappers(
+      expect,
+      `SELECT * { ?s ?p ?o . VALUES ?p { <ex://x> } }`,
+      `SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) WHERE {
+  SERVICE <ex://a> {
+    VALUES ?uq_p {
+      <ex://x>
+    }
+    {
+      {
+        SELECT ?m0_o ?m0_p ?m0_s WHERE {
+          ?m0_s ?m0_p ?m0_o .
+        }
+      }
+      BIND( ?m0_o AS ?uq_o )
+      BIND( ?m0_p AS ?uq_p )
+      BIND( ?m0_s AS ?uq_s )
+    }
+  }
+}`,
+      [ `CONSTRUCT { ?s ?p ?o } WHERE { SERVICE <ex://a> { ?s ?p ?o } }` ],
+      [ operationTransform, transformExtendsToValues, transformServiceCallPushUp ],
+    ));
+
+  it('vALUES clause is pushed into a SERVICE that covers multiple joined patterns', ({ expect }) =>
+    testConstructMappers(
+      expect,
+      `SELECT * { VALUES ?p { <ex://x> } . ?a ?p ?c . ?a ?b ?d }`,
+      `SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) ( ?uq_c AS ?c ) ( ?uq_d AS ?d ) ( ?uq_p AS ?p ) WHERE {
+  SERVICE <ex://a> {
+    VALUES ?uq_p {
+      <ex://x>
+    }
+    {
+      {
+        SELECT ?m0_o ?m0_p ?m0_s WHERE {
+          ?m0_s ?m0_p ?m0_o .
+        }
+      }
+      BIND( ?m0_s AS ?uq_a )
+      BIND( ?m0_o AS ?uq_c )
+      BIND( ?m0_p AS ?uq_p )
+    }
+    {
+      {
+        SELECT ?m0_o ?m0_p ?m0_s WHERE {
+          ?m0_s ?m0_p ?m0_o .
+        }
+      }
+      BIND( ?m0_s AS ?uq_a )
+      BIND( ?m0_p AS ?uq_b )
+      BIND( ?m0_o AS ?uq_d )
+    }
+  }
+}`,
+      [ `CONSTRUCT { ?s ?p ?o } WHERE { SERVICE <ex://a> { ?s ?p ?o } }` ],
+      [ operationTransform, transformExtendsToValues, transformServiceCallPushUp ],
+    ));
 });

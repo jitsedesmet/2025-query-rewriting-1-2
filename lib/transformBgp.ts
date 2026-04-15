@@ -3,7 +3,8 @@ import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { rewriteSinglePattern } from './transformations/index.js';
 import type { TransformContext } from './transformContext.js';
 import { prefixVarsInOperation, parseQuery } from './transformContext.js';
-import { createFilterFalse } from './utils.js';
+import type { Mapping } from './types.js';
+import { createFilterFalse, isRdfVar } from './utils.js';
 
 /**
  * Transforms a SPARQL query by applying the configured mappings and transformations.
@@ -70,25 +71,28 @@ export function queryTransform(
 }
 
 /**
- * Core transformation that rewrites BGPs (Basic Graph Patterns) into unions of subselects.
+ * Core transformation that rewrites BGPs (Basic Graph Patterns) into unions of joins.
  *
- * For each triple pattern in a BGP, this creates a UNION of alternatives where
- * each alternative corresponds to one of the configured mappings. This is the
- * key operation that enables query rewriting from SPARQL 1.2 to SPARQL 1.1.
+ * For each BGP, this enumerates all possible mapper assignments across the triple
+ * patterns and produces a UNION of JOINs. Each UNION branch corresponds to one
+ * assignment of mappers to patterns; branches where any pattern is incompatible
+ * with its assigned mapper are represented by FILTER(FALSE).
  *
- * A BGP of `n` triple patterns with `m` mappers results in:
- * - A JOIN of `n` unions
- * - Each union has `m` alternatives (one per mapper)
+ * A BGP of `n` triple patterns with `m` mappers produces at most `m^n` UNION branches.
+ * Early pruning means incompatible top-level mapper choices collapse into a single
+ * FILTER(FALSE) rather than propagating into the subtree.
  *
  * @param c - The transformation context
  * @param input - The algebra operation to transform
- * @returns The transformed operation with BGPs rewritten to unions
+ * @returns The transformed operation with BGPs rewritten to unions of joins
  *
  * @example
- * // Input: BGP { ?s ?p ?o . ?a ?b ?c }
- * // Output: JOIN [
- * //   UNION [ mapper1(?s ?p ?o), mapper2(?s ?p ?o) ],
- * //   UNION [ mapper1(?a ?b ?c), mapper2(?a ?b ?c) ]
+ * // Input: BGP { ?s ?p ?o . ?a ?b ?c }  (2 mappers)
+ * // Output: UNION [
+ * //   JOIN [ mapper0_p0(?s ?p ?o), mapper0_p1(?a ?b ?c) ],
+ * //   JOIN [ mapper0_p0(?s ?p ?o), mapper1_p1(?a ?b ?c) ],
+ * //   JOIN [ mapper1_p0(?s ?p ?o), mapper0_p1(?a ?b ?c) ],
+ * //   JOIN [ mapper1_p0(?s ?p ?o), mapper1_p1(?a ?b ?c) ],
  * // ]
  */
 export function operationTransform(c: TransformContext, input: Algebra.Operation): Algebra.Operation {
@@ -102,42 +106,113 @@ export function operationTransform(c: TransformContext, input: Algebra.Operation
 }
 
 /**
- * Transforms a BGP (Basic Graph Pattern) into a join of unions.
- * Each triple pattern becomes a union of subselects (one per mapper).
+ * Transforms a BGP (Basic Graph Pattern) into a union of joins.
+ *
+ * For each possible assignment of mappers to triple patterns, this creates a JOIN of
+ * the rewrites for each pattern. All such joins are collected into a UNION.
+ *
+ * A BGP of `n` triple patterns with `m` mappers results in at most `m^n` UNION branches.
+ * Branches where any pattern cannot be matched by its assigned mapper are pruned with
+ * a single FILTER(FALSE) (identity for UNION, absorbing for JOIN).
+ *
+ * Variables within each branch are uniquely named `m{mapperIndex}_{patternIndex}_…`
+ * so that the same mapper applied to two different patterns in the same JOIN never
+ * produces variable-name collisions.
  *
  * @param c - The transformation context
  * @param input - The BGP to transform
- * @returns A Join containing one Union per triple pattern
+ * @returns A UNION of JOINs, or a single JOIN if only one branch exists
  */
-export function bgpTransform(c: TransformContext, input: Algebra.Bgp): Algebra.Join {
-  return c.AF.createJoin(input.patterns.map(pattern => mapPattern(c, pattern)), true);
+export function bgpTransform(c: TransformContext, input: Algebra.Bgp): Algebra.Operation {
+  if (input.patterns.length === 0) {
+    return input;
+  }
+
+  const savedState = c.clusterSolver.saveState();
+  const branches = buildMappingBranches(c, input.patterns, 0, []);
+  c.clusterSolver.restoreState(savedState);
+
+  if (branches.length === 1) {
+    return branches[0];
+  }
+  return c.AF.createUnion(branches, true);
 }
 
 /**
- * Transforms a single triple pattern into a union of alternatives.
+ * Recursively builds all mapper-assignment branches for the given patterns.
  *
- * For each configured mapper, attempts to rewrite the pattern using that mapper.
- * If rewriting fails (e.g., incompatible patterns), a FILTER(FALSE) placeholder
- * is used to maintain the union structure.
+ * For each mapper choice for the current pattern, attempts to rewrite that pattern.
+ * On success, recurses for the remaining patterns. On failure, emits FILTER(FALSE)
+ * for that branch (pruning the entire subtree).
  *
  * @param c - The transformation context
- * @param pattern - The triple pattern to transform
- * @returns A Union of rewritten patterns (or FILTER(FALSE) for non-matching mappers)
+ * @param patterns - The full list of triple patterns in the BGP
+ * @param patternIndex - Index of the current pattern being assigned
+ * @param accumulated - Subqueries accumulated so far for the current branch
+ * @returns Array of operations (JOINs or FILTER-FALSEs) for all branches
  */
-export function mapPattern(
+function buildMappingBranches(
   c: TransformContext,
-  pattern: Algebra.Pattern,
-): Algebra.Union | Algebra.Filter | Algebra.Project | Algebra.Extend {
-  const mappedPatterns = c.mappers.map((mapper) => {
-    try {
-      return rewriteSinglePattern(c, pattern, mapper);
-    } catch {
-      // Console.error(e);
-      return createFilterFalse(c);
-    }
-  });
-  if (mappedPatterns.length === 1) {
-    return mappedPatterns[0];
+  patterns: readonly Algebra.Pattern[],
+  patternIndex: number,
+  accumulated: Algebra.Operation[],
+): Algebra.Operation[] {
+  if (patternIndex === patterns.length) {
+    return [ c.AF.createJoin(accumulated, true) ];
   }
-  return c.AF.createUnion(mappedPatterns, true);
+
+  const pattern = patterns[patternIndex];
+  const allBranches: Algebra.Operation[] = [];
+
+  for (const [ mapperIndex, mapper ] of c.mappers.entries()) {
+    const savedState = c.clusterSolver.saveState();
+    try {
+      const rePrefixed = rePrefixMapperForPattern(c, mapper, mapperIndex, patternIndex);
+      const subquery = rewriteSinglePattern(c, pattern, rePrefixed);
+      const subBranches = buildMappingBranches(c, patterns, patternIndex + 1, [ ...accumulated, subquery ]);
+      allBranches.push(...subBranches);
+    } catch {
+      allBranches.push(createFilterFalse(c));
+    } finally {
+      c.clusterSolver.restoreState(savedState);
+    }
+  }
+
+  return allBranches;
+}
+
+/**
+ * Creates a copy of `mapper` with its variables re-prefixed from `m{i}_` to `m{i}_{j}_`.
+ *
+ * This ensures that applying the same mapper to two different triple patterns in the
+ * same JOIN produces disjoint variable names, preventing unintended equi-joins.
+ *
+ * @param c - The transformation context
+ * @param mapper - The mapper to re-prefix
+ * @param mapperIndex - Index of the mapper (i in m{i}_)
+ * @param patternIndex - Index of the current triple pattern (j in m{i}_{j}_)
+ * @returns A new Mapping with updated variable names
+ */
+function rePrefixMapperForPattern(
+  c: TransformContext,
+  mapper: Mapping,
+  mapperIndex: number,
+  patternIndex: number,
+): Mapping {
+  const oldPrefix = `m${mapperIndex}_`;
+  const newPrefix = `m${mapperIndex}_${patternIndex}_`;
+  return <Mapping> c.astTransformer.transformObject(mapper, (obj: object) => {
+    if (isRdfVar(obj) && obj.value.startsWith(oldPrefix)) {
+      return c.DF.variable(newPrefix + obj.value.slice(oldPrefix.length));
+    }
+    if ('type' in obj && (<Record<string, unknown>> obj).type === 'values' && 'bindings' in obj) {
+      const valuesOp = <Algebra.Values> obj;
+      valuesOp.bindings = valuesOp.bindings.map(binding =>
+        Object.fromEntries(Object.entries(binding).map(([ key, value ]) => [
+          key.startsWith(oldPrefix) ? newPrefix + key.slice(oldPrefix.length) : key,
+          value,
+        ])));
+    }
+    return obj;
+  });
 }

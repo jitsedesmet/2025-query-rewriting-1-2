@@ -17,3 +17,4 @@ dist
 *.ttl
 *.nt
 !test/statics/*.ttl
+.devcontainer/devcontainer.json

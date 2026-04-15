@@ -1668,6 +1668,234 @@ describe('dummy', () => {
       ));
   });
 
+  describe('user query with GROUP BY aggregation in subquery', () => {
+    const spoConstruct = `CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o . FILTER(!isTriple(?o)) }`;
+
+    it('inner subquery with GROUP BY projecting aggregate is correctly rewritten', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT ?s ?c WHERE { { SELECT ?s (COUNT(?o) AS ?c) WHERE { ?s ?p ?o } GROUP BY ?s } }`,
+        `SELECT ( ?uq_s AS ?s ) ( ?uq_c AS ?c ) WHERE {
+  SELECT ?uq_s ( COUNT( ?uq_o ) AS ?uq_c ) WHERE {
+    {
+      SELECT ?m0_o ?m0_p ?m0_s WHERE {
+        ?m0_s ?m0_p ?m0_o .
+        FILTER ( ! ISTRIPLE( ?m0_o ) )
+      }
+    }
+    BIND( ?m0_o AS ?uq_o )
+    BIND( ?m0_p AS ?uq_p )
+    BIND( ?m0_s AS ?uq_s )
+  }
+  GROUP BY ?uq_s
+}`,
+        [ spoConstruct ],
+        [ operationTransform ],
+      ));
+
+    it('inner subquery with GROUP BY and HAVING is correctly rewritten', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT ?s ?c WHERE { { SELECT ?s (COUNT(?o) AS ?c) WHERE { ?s ?p ?o } GROUP BY ?s HAVING (COUNT(?o) > 3) } }`,
+        `SELECT ( ?uq_s AS ?s ) ( ?uq_c AS ?c ) WHERE {
+  SELECT ?uq_s ( COUNT( ?uq_o ) AS ?uq_c ) WHERE {
+    {
+      {
+        SELECT ?m0_o ?m0_p ?m0_s WHERE {
+          ?m0_s ?m0_p ?m0_o .
+          FILTER ( ! ISTRIPLE( ?m0_o ) )
+        }
+      }
+      BIND( ?m0_o AS ?uq_o )
+      BIND( ?m0_p AS ?uq_p )
+      BIND( ?m0_s AS ?uq_s )
+    }
+  }
+  GROUP BY ?uq_s
+  HAVING ( COUNT( ?uq_o ) > "3"^^<http://www.w3.org/2001/XMLSchema#integer> )
+}`,
+        [ spoConstruct ],
+        [ operationTransform ],
+      ));
+
+    it('inner subquery with GROUP BY HAVING that does not project the aggregate', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT ?s ?p WHERE { ?s ?p ?o . { SELECT ?o WHERE { ?s ?p ?o } GROUP BY ?s ?p HAVING (COUNT(?o) > 10) } }`,
+        `SELECT ( ?uq_s AS ?s ) ( ?uq_p AS ?p ) WHERE {
+  {
+    {
+      SELECT ?m0_o ?m0_p ?m0_s WHERE {
+        ?m0_s ?m0_p ?m0_o .
+        FILTER ( ! ISTRIPLE( ?m0_o ) )
+      }
+    }
+    BIND( ?m0_o AS ?uq_o )
+    BIND( ?m0_p AS ?uq_p )
+    BIND( ?m0_s AS ?uq_s )
+  }
+  {
+    SELECT ?uq_o WHERE {
+      {
+        {
+          SELECT ?m0_o ?m0_p ?m0_s WHERE {
+            ?m0_s ?m0_p ?m0_o .
+            FILTER ( ! ISTRIPLE( ?m0_o ) )
+          }
+        }
+        BIND( ?m0_o AS ?uq_o )
+        BIND( ?m0_p AS ?uq_p )
+        BIND( ?m0_s AS ?uq_s )
+      }
+    }
+    GROUP BY ?uq_s?uq_p
+    HAVING ( COUNT( ?uq_o ) > "10"^^<http://www.w3.org/2001/XMLSchema#integer> )
+  }
+}`,
+        [ spoConstruct ],
+        [ operationTransform ],
+      ));
+
+    it('inner and outer GROUP BY are both rewritten correctly (user example)', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT ?s ?p WHERE { ?s ?p ?o . { SELECT ?o WHERE { ?s ?p ?o } GROUP BY ?s ?p HAVING (COUNT(?o) > 10) } } GROUP BY ?s ?p HAVING (COUNT(?o) > 5)`,
+        `SELECT ( ?uq_s AS ?s ) ( ?uq_p AS ?p ) WHERE {
+  SELECT ?uq_s ?uq_p WHERE {
+    {
+      {
+        SELECT ?m0_o ?m0_p ?m0_s WHERE {
+          ?m0_s ?m0_p ?m0_o .
+          FILTER ( ! ISTRIPLE( ?m0_o ) )
+        }
+      }
+      BIND( ?m0_o AS ?uq_o )
+      BIND( ?m0_p AS ?uq_p )
+      BIND( ?m0_s AS ?uq_s )
+    }
+    {
+      SELECT ?uq_o WHERE {
+        {
+          {
+            SELECT ?m0_o ?m0_p ?m0_s WHERE {
+              ?m0_s ?m0_p ?m0_o .
+              FILTER ( ! ISTRIPLE( ?m0_o ) )
+            }
+          }
+          BIND( ?m0_o AS ?uq_o )
+          BIND( ?m0_p AS ?uq_p )
+          BIND( ?m0_s AS ?uq_s )
+        }
+      }
+      GROUP BY ?uq_s?uq_p
+      HAVING ( COUNT( ?uq_o ) > "10"^^<http://www.w3.org/2001/XMLSchema#integer> )
+    }
+  }
+  GROUP BY ?uq_s?uq_p
+  HAVING ( COUNT( ?uq_o ) > "5"^^<http://www.w3.org/2001/XMLSchema#integer> )
+}`,
+        [ spoConstruct ],
+        [ operationTransform ],
+      ));
+
+    it('outer aggregate over inner subquery aggregate is correctly rewritten', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT ?s (SUM(?c) AS ?total) WHERE { { SELECT ?s (COUNT(?o) AS ?c) WHERE { ?s ?p ?o } GROUP BY ?s } } GROUP BY ?s`,
+        `SELECT ( ?uq_s AS ?s ) ( ?uq_total AS ?total ) WHERE {
+  SELECT ?uq_s ( SUM( ?uq_c ) AS ?uq_total ) WHERE {
+    SELECT ?uq_s ( COUNT( ?uq_o ) AS ?uq_c ) WHERE {
+      {
+        SELECT ?m0_o ?m0_p ?m0_s WHERE {
+          ?m0_s ?m0_p ?m0_o .
+          FILTER ( ! ISTRIPLE( ?m0_o ) )
+        }
+      }
+      BIND( ?m0_o AS ?uq_o )
+      BIND( ?m0_p AS ?uq_p )
+      BIND( ?m0_s AS ?uq_s )
+    }
+    GROUP BY ?uq_s
+  }
+  GROUP BY ?uq_s
+}`,
+        [ spoConstruct ],
+        [ operationTransform ],
+      ));
+
+    it('inner subquery aggregate is joined with outer BGP (no outer GROUP BY)', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT ?s ?c WHERE { ?s ?p ?o . { SELECT ?s (COUNT(?o) AS ?c) WHERE { ?s ?p ?o } GROUP BY ?s } }`,
+        `SELECT ( ?uq_s AS ?s ) ( ?uq_c AS ?c ) WHERE {
+  {
+    {
+      SELECT ?m0_o ?m0_p ?m0_s WHERE {
+        ?m0_s ?m0_p ?m0_o .
+        FILTER ( ! ISTRIPLE( ?m0_o ) )
+      }
+    }
+    BIND( ?m0_o AS ?uq_o )
+    BIND( ?m0_p AS ?uq_p )
+    BIND( ?m0_s AS ?uq_s )
+  }
+  {
+    SELECT ?uq_s ( COUNT( ?uq_o ) AS ?uq_c ) WHERE {
+      {
+        SELECT ?m0_o ?m0_p ?m0_s WHERE {
+          ?m0_s ?m0_p ?m0_o .
+          FILTER ( ! ISTRIPLE( ?m0_o ) )
+        }
+      }
+      BIND( ?m0_o AS ?uq_o )
+      BIND( ?m0_p AS ?uq_p )
+      BIND( ?m0_s AS ?uq_s )
+    }
+    GROUP BY ?uq_s
+  }
+}`,
+        [ spoConstruct ],
+        [ operationTransform ],
+      ));
+
+    // eslint-disable-next-line max-len
+    it('substituteVarsThatArePreBoundToTerms applies to outer BGP; inner GROUP BY subquery is rewritten independently', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT ?c WHERE { ?s <ex://p> ?o . { SELECT ?s (COUNT(?o) AS ?c) WHERE { ?s ?p ?o } GROUP BY ?s } }`,
+        `SELECT ( ?uq_c AS ?c ) WHERE {
+  {
+    {
+      SELECT ?m0_o ?m0_s WHERE {
+        {
+          ?m0_s <ex://p> ?m0_o .
+          FILTER ( ! ISTRIPLE( ?m0_o ) )
+        }
+      }
+    }
+    BIND( ?m0_o AS ?uq_o )
+    BIND( ?m0_s AS ?uq_s )
+  }
+  {
+    SELECT ?uq_s ( COUNT( ?uq_o ) AS ?uq_c ) WHERE {
+      {
+        SELECT ?m0_o ?m0_p ?m0_s WHERE {
+          ?m0_s ?m0_p ?m0_o .
+          FILTER ( ! ISTRIPLE( ?m0_o ) )
+        }
+      }
+      BIND( ?m0_o AS ?uq_o )
+      BIND( ?m0_p AS ?uq_p )
+      BIND( ?m0_s AS ?uq_s )
+    }
+    GROUP BY ?uq_s
+  }
+}`,
+        [ spoConstruct ],
+        [ operationTransform, substituteVarsThatArePreBoundToTerms, transformFilterFalse ],
+      ));
+  });
+
   it('service calls can be pushed up on the same service', ({ expect }) =>
     testConstructMappers(
       expect,

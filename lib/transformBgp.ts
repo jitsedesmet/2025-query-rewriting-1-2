@@ -83,7 +83,8 @@ export function queryTransform(
   }
 
   if (innerAlgebra.type === 'project') {
-    // Because of the variable renaming, when we group, we need to group as part of a subquery and then rename afterwards.
+    // Because of the variable renaming, when we group,
+    // we need to group as part of a subquery and then rename afterwards.
     if (hasGroupInTopLevelChain(transformedAlgebra)) {
       const uqVariables = innerAlgebra.variables.map(v => c.DF.variable(`uq_${v.value}`));
       transformedAlgebra = c.AF.createProject(transformedAlgebra, uqVariables);

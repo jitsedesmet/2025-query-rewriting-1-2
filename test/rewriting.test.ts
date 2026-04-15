@@ -548,7 +548,12 @@ describe('dummy', () => {
   UNION {
     {
       SELECT DISTINCT ?uq_s6 WHERE {
-        ?uq_s6 ?p_uq_s6 ?o_uq_s6 .
+        {
+          ?uq_s6 ?p_uq_s6 ?o_uq_s6 .
+        }
+        UNION {
+          ?o_uq_s6 ?p_uq_s6 ?uq_s6 .
+        }
       }
     }
     BIND( ?uq_s6 AS ?uq_o6 )

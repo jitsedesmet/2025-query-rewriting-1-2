@@ -1,6 +1,5 @@
 import type * as RDF from '@rdfjs/types';
-import type { Algebra } from '@traqula/algebra-transformations-1-2';
-import { algebraUtils } from '@traqula/algebra-transformations-1-2';
+import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformContext } from '../transformContext.js';
 import { createFilterFalse, isRdfVar } from '../utils.js';
 
@@ -46,13 +45,13 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
 
   function resolvePathOp(pathOp: Algebra.PropertyPathSymbol, path: Algebra.Path): Algebra.Operation {
     const { subject, object } = path;
-    if (pathOp.type === 'alt') {
+    if (pathOp.type === Algebra.Types.ALT) {
       return AF.createUnion(pathOp.input.map(x => resolvePathOp(x, path)));
     }
-    if (pathOp.type === 'link') {
+    if (pathOp.type === Algebra.Types.LINK) {
       return AF.createBgp([ AF.createPattern(subject, pathOp.iri, object, path.graph) ]);
     }
-    if (pathOp.type === 'inv') {
+    if (pathOp.type === Algebra.Types.INV) {
       const switchPath = {
         ...path,
         subject: object,
@@ -60,7 +59,7 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
       };
       return resolvePathOp(pathOp.path, switchPath);
     }
-    if (pathOp.type === 'seq') {
+    if (pathOp.type === Algebra.Types.SEQ) {
       if (pathOp.input.length === 0) {
         return createFilterFalse(c);
       }
@@ -78,7 +77,7 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
       // Create a join of operations with n - 2 new variables to introduce
       return AF.createJoin(operations);
     }
-    if (pathOp.type === 'nps') {
+    if (pathOp.type === Algebra.Types.NPS) {
       // https://www.w3.org/TR/sparql12-query/#eval_negatedPropertySet
       const predicate = DF.variable(`rewrite_${counter++}`);
       return AF.createFilter(
@@ -90,7 +89,7 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
       );
     }
     // https://www.w3.org/TR/sparql12-query/#defn_evalPP_ZeroOrOnePath
-    if (pathOp.type === 'ZeroOrOnePath') {
+    if (pathOp.type === Algebra.Types.ZERO_OR_ONE_PATH) {
       if (isRdfVar(subject) && isRdfVar(object)) {
         // Both are var
         return AF.createUnion([
@@ -98,12 +97,20 @@ export function rewriteNonRecursivePaths<T extends Algebra.Operation>(c: Transfo
           AF.createExtend(
             // Nodes implementation: https://www.w3.org/TR/sparql12-query/#defn_nodeSet
             AF.createDistinct(AF.createProject(
-              AF.createBgp([ AF.createPattern(
-                subject,
-                DF.variable(`p_${subject.value}`),
-                DF.variable(`o_${subject.value}`),
-                path.graph,
-              ) ]),
+              AF.createUnion([
+                AF.createBgp([ AF.createPattern(
+                  subject,
+                  DF.variable(`p_${subject.value}`),
+                  DF.variable(`o_${subject.value}`),
+                  path.graph,
+                ) ]),
+                AF.createBgp([ AF.createPattern(
+                  DF.variable(`o_${subject.value}`),
+                  DF.variable(`p_${subject.value}`),
+                  subject,
+                  path.graph,
+                ) ]),
+              ]),
               [ subject ],
             )),
             object,

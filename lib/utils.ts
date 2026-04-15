@@ -8,6 +8,16 @@ import type { RangedVar } from './RangeSet.js';
 import type { TransformContext } from './transformContext.js';
 import type { MappingHead, Template, TemplateBlank, TemplateIri, TemplateLiteral, TemplateQuad } from './types.js';
 
+/**
+ * Thrown when a triple pattern cannot be matched to a mapper — i.e. a normal,
+ * expected "no-match" outcome.  Only this error class is caught during the
+ * UNION-of-JOINs DFS; all other exceptions (TypeError, etc.) propagate so
+ * genuine bugs are never silently swallowed.
+ */
+export class RewriteNoMatchError extends Error {
+  public override name = 'RewriteNoMatchError';
+}
+
 /** Shared DataFactory instance for creating RDF terms */
 export const DF = new DataFactory();
 

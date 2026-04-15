@@ -4,7 +4,7 @@ import { rewriteSinglePattern } from './transformations/index.js';
 import type { TransformContext } from './transformContext.js';
 import { prefixVarsInOperation, parseQuery } from './transformContext.js';
 import type { Mapping } from './types.js';
-import { createFilterFalse, isRdfVar } from './utils.js';
+import { createFilterFalse, isRdfVar, RewriteNoMatchError } from './utils.js';
 
 /**
  * Transforms a SPARQL query by applying the configured mappings and transformations.
@@ -128,8 +128,15 @@ export function bgpTransform(c: TransformContext, input: Algebra.Bgp): Algebra.O
     return input;
   }
 
+  // Pre-compute re-prefixed mappers for all (mapperIndex × patternIndex) pairs.
+  // rePrefixMapperForPattern traverses the whole mapper AST, so doing it here
+  // once costs O(m·n·|mapper|) instead of O(m^n·|mapper|) if done inside the DFS.
+  const rePrefixedMappers = c.mappers.map((mapper, mapperIndex) =>
+    input.patterns.map((_, patternIndex) =>
+      rePrefixMapperForPattern(c, mapper, mapperIndex, patternIndex)));
+
   const savedState = c.clusterSolver.saveState();
-  const branches = buildMappingBranches(c, input.patterns, 0, []);
+  const branches = buildMappingBranches(c, input.patterns, 0, [], rePrefixedMappers);
   c.clusterSolver.restoreState(savedState);
 
   if (branches.length === 1) {
@@ -142,13 +149,20 @@ export function bgpTransform(c: TransformContext, input: Algebra.Bgp): Algebra.O
  * Recursively builds all mapper-assignment branches for the given patterns.
  *
  * For each mapper choice for the current pattern, attempts to rewrite that pattern.
- * On success, recurses for the remaining patterns. On failure, emits FILTER(FALSE)
- * for that branch (pruning the entire subtree).
+ * On a `RewriteNoMatchError`, emits FILTER(FALSE) for that branch (pruning the entire
+ * subtree rooted at this mapper×pattern choice).  All other errors propagate so
+ * genuine bugs are never silently swallowed.
+ *
+ * The inner `saveState`/`restoreState` is intentionally absent: `rewriteSinglePattern`
+ * always begins with `clusterSolver.clear()`, so solver state from one mapper attempt
+ * never bleeds into the next.  The outer save/restore in `bgpTransform` is still
+ * needed to preserve any pre-BGP solver context.
  *
  * @param c - The transformation context
  * @param patterns - The full list of triple patterns in the BGP
  * @param patternIndex - Index of the current pattern being assigned
  * @param accumulated - Subqueries accumulated so far for the current branch
+ * @param rePrefixedMappers - Pre-computed re-prefixed mappers[mapperIndex][patternIndex]
  * @returns Array of operations (JOINs or FILTER-FALSEs) for all branches
  */
 function buildMappingBranches(
@@ -156,6 +170,7 @@ function buildMappingBranches(
   patterns: readonly Algebra.Pattern[],
   patternIndex: number,
   accumulated: Algebra.Operation[],
+  rePrefixedMappers: Mapping[][],
 ): Algebra.Operation[] {
   if (patternIndex === patterns.length) {
     return [ c.AF.createJoin(accumulated, true) ];
@@ -164,17 +179,16 @@ function buildMappingBranches(
   const pattern = patterns[patternIndex];
   const allBranches: Algebra.Operation[] = [];
 
-  for (const [ mapperIndex, mapper ] of c.mappers.entries()) {
-    const savedState = c.clusterSolver.saveState();
+  for (const [ mapperIndex ] of c.mappers.entries()) {
     try {
-      const rePrefixed = rePrefixMapperForPattern(c, mapper, mapperIndex, patternIndex);
-      const subquery = rewriteSinglePattern(c, pattern, rePrefixed);
-      const subBranches = buildMappingBranches(c, patterns, patternIndex + 1, [ ...accumulated, subquery ]);
+      const subquery = rewriteSinglePattern(c, pattern, rePrefixedMappers[mapperIndex][patternIndex]);
+      const subBranches = buildMappingBranches(c, patterns, patternIndex + 1, [ ...accumulated, subquery ], rePrefixedMappers);
       allBranches.push(...subBranches);
-    } catch {
+    } catch (e) {
+      if (!(e instanceof RewriteNoMatchError)) {
+        throw e;
+      }
       allBranches.push(createFilterFalse(c));
-    } finally {
-      c.clusterSolver.restoreState(savedState);
     }
   }
 

@@ -77,24 +77,107 @@ console.log(rewrittenQuery);
 
 ## How It Works
 
-The rewriter transforms each triple pattern in your BGP (Basic Graph Pattern) into a UNION of subselects, one for each mapping:
+The rewriter transforms each BGP (Basic Graph Pattern) in your query into a **UNION of JOINs**,
+where every branch of the UNION represents one consistent assignment of mappers to triple patterns.
 
-![Query rewriting visualization](assets/query-rewritten.jpg)
+### BGP-level UNION-of-JOINs rewriting
 
-### Key Architecture Points
+For a BGP with **n** triple patterns and **m** mappers, the rewriter enumerates all **mⁿ**
+possible mapper assignments and produces one UNION branch per assignment:
 
-1. **Mapping Structure**: Each mapping is a SPARQL CONSTRUCT with:
-   - **Head** (template): The RDF 1.2 pattern (can contain triple terms)
-   - **Body** (WHERE): The equivalent RDF 1.1 pattern (must be SPARQL 1.1 compatible)
+```
+UNION [
+  JOIN [ mapper₀(pattern₀),  mapper₀(pattern₁) ],   ← both patterns use mapper 0
+  JOIN [ mapper₀(pattern₀),  mapper₁(pattern₁) ],   ← pattern 0 → mapper 0, pattern 1 → mapper 1
+  JOIN [ mapper₁(pattern₀),  mapper₀(pattern₁) ],
+  JOIN [ mapper₁(pattern₀),  mapper₁(pattern₁) ],   ← both patterns use mapper 1
+]
+```
 
-2. **Variable Clustering**: When a user query matches a mapping, variables are unified using a ClusterSolver that determines which variables must be equal and what values they're bound to.
+Branches where any pattern is incompatible with its assigned mapper emit `FILTER(FALSE)`.
+Downstream optimisation passes (`transformFilterFalse`, `nullifyJoinOverIncompatibleBounds`)
+prune those empty branches from the final query.
 
-3. **Transformation Pipeline**: Multiple optimization passes can be applied:
-   - `operationTransform`: Core BGP-to-UNION rewriting
+### Key architecture points
+
+1. **Mapping structure**: Each mapping is a SPARQL CONSTRUCT with:
+   - **Head** (template): The RDF 1.2 pattern (may contain triple terms and template IRIs/literals)
+   - **Body** (WHERE clause): The equivalent RDF 1.1 pattern (must be SPARQL 1.1 compatible)
+
+2. **Variable clustering**: When matching a triple pattern against a mapping head, the
+   `ClusterSolver` unifies variables from both sides, determining which variables must be equal
+   and what concrete values they may be bound to.
+
+3. **Transformation pipeline**: Multiple optimisation passes can be composed:
+   - `operationTransform`: Core BGP-to-UNION-of-JOINs rewriting
    - `substituteVarsThatArePreBoundToTerms`: Inline known variable bindings
    - `transformFilterFalse`: Remove impossible branches (FILTER FALSE)
    - `nullifyJoinOverIncompatibleBounds`: Detect incompatible join conditions
    - `pushUpBoundedFromUnion`: Hoist common bindings out of UNIONs
+
+### Theoretical complexity
+
+| Dimension | Cost |
+|-----------|------|
+| UNION branches | O(mⁿ) worst case (all mapper×pattern pairs compatible) |
+| Early pruning | A failed assignment at depth *j* emits **1** FILTER(FALSE) instead of mⁿ⁻ʲ branches |
+| `rePrefixMapperForPattern` | Pre-computed once: **O(m·n·\|mapper\|)** total |
+| `rewriteSinglePattern` per branch node | O(\|mapper\|) — cluster analysis + query build |
+| ClusterSolver save/restore | One save+restore per BGP (O(\|state\|)); none inside the DFS |
+
+**Practical guideline**: with **m = 2** mappers (the typical reification use-case) the branch count
+is **2ⁿ**.  For most real-world queries n ≤ 5–10 so the generated UNION has at most a few hundred
+branches, all pruned to a handful of meaningful results by `transformFilterFalse`.
+Queries with very large BGPs (n ≫ 10) and many mappers may produce large intermediate algebra
+trees; consider splitting such queries or adding selective `FILTER`s to reduce n.
+
+### Decision-tree DFS and early pruning
+
+Internally, `buildMappingBranches` performs a depth-first search over the mⁿ decision tree:
+
+```
+pattern₀:  try mapper₀ ──success──▶  pattern₁:  try mapper₀ ──success──▶  JOIN([sub₀₀, sub₁₀])
+                         │                        try mapper₁ ──fail──────▶  FILTER(FALSE)
+           try mapper₁ ──fail──────▶  FILTER(FALSE)   ← entire sub-tree pruned to 1 node
+```
+
+Key design decisions:
+
+* **No cross-pattern solver state**: `rewriteSinglePattern` resets the `ClusterSolver` at the
+  start of each call, so each pattern is matched independently against its assigned mapper.
+  Cross-pattern variable equality (e.g. `?x` in two patterns) is enforced by SPARQL JOIN
+  semantics via the `?uq_x` user-query variable that both `BIND` expressions write to.
+
+* **`RewriteNoMatchError`**: The only exception class caught during the DFS.  Any other
+  exception (e.g. `TypeError`) propagates immediately so genuine bugs are never silently
+  converted into `FILTER(FALSE)` branches.
+
+* **Pre-computed re-prefixed mappers**: `rePrefixMapperForPattern(mapper, i, j)` transforms
+  mapper-variable names from `m{i}_` to `m{i}_{j}_`, ensuring the same mapper applied to two
+  different patterns in the same JOIN branch uses disjoint variable names (preventing
+  unintended equi-joins).  These re-prefixed copies are computed once — O(m·n) copies —
+  before the DFS begins.
+
+### ClusterSolver save/restore
+
+`ClusterSolver.saveState()` and `restoreState()` snapshot the six internal maps that track
+variable groups, range constraints, term bindings, and template equalities.  They are used in
+exactly two places:
+
+1. **`bgpTransform`** (outer, around the whole DFS): preserves any solver state that was
+   accumulated by an outer BGP or surrounding operation *before* this BGP was entered.
+   The full mⁿ DFS runs, then state is restored so the enclosing rewrite sees no side-effects.
+
+2. *(formerly also inside `buildMappingBranches`)*: previously saved/restored state around
+   each mapper attempt, which was a no-op because `rewriteSinglePattern` calls `clear()`
+   anyway.  This redundant inner save/restore has been removed.
+
+Each snapshot clones arrays shallowly (`[...v]`) and recreates `RangeSet` objects from their
+entries (`new RangeSet(v)`); plain-object maps are spread-copied (`{ ...map }`).  The cloned
+state objects are independent of the live maps, so save/restore is O(G + V) where G = number
+of active variable groups and V = total variables — effectively O(1) immediately before any
+`rewriteSinglePattern` call because `clear()` is about to empty the solver.
+
 
 ## Mapping Constraints
 

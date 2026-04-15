@@ -2,7 +2,7 @@ import type * as RDF from '@rdfjs/types';
 import type { RangedVar } from './RangeSet.js';
 import { objectRange, RangeSet } from './RangeSet.js';
 import type { Template } from './types.js';
-import { isRdfTerm, isRdfVar } from './utils.js';
+import { isRdfTerm, isRdfVar, RewriteNoMatchError } from './utils.js';
 
 /**
  * A snapshot of the ClusterSolver's internal state, used for save/restore.
@@ -104,7 +104,7 @@ export class ClusterSolver {
       this.groupToRange[group] = groupRange;
       const groupTerm = this.groupToTerm[group];
       if (groupTerm && !groupRange.has(groupTerm.termType)) {
-        throw new Error(`The range of the current group no longer matches the term type ${groupTerm.termType} of term: ${JSON.stringify(groupTerm.termType)}`);
+        throw new RewriteNoMatchError(`The range of the current group no longer matches the term type ${groupTerm.termType} of term: ${JSON.stringify(groupTerm.termType)}`);
       }
     }
   }
@@ -130,7 +130,7 @@ export class ClusterSolver {
       if (from.equals(to)) {
         return;
       }
-      throw new Error(`Cannot match Term ${JSON.stringify(from)} with term ${JSON.stringify(to)}`);
+      throw new RewriteNoMatchError(`Cannot match Term ${JSON.stringify(from)} with term ${JSON.stringify(to)}`);
     } else if (isRdfVar(from) && isRdfVar(to)) {
       // Two vars
       this.mergeVars(from, to);
@@ -152,7 +152,7 @@ export class ClusterSolver {
       // Check term types match:
       const template = <Exclude<typeof from, RDF.Term>> from;
       if (template.subType !== to.termType) {
-        throw new Error(`Cannot match template of type ${template.subType} with term of type ${to.termType}. Matching
+        throw new RewriteNoMatchError(`Cannot match template of type ${template.subType} with term of type ${to.termType}. Matching
 ${JSON.stringify(template)}
 with
 ${JSON.stringify(to)}`);
@@ -195,12 +195,12 @@ ${JSON.stringify(to)}`);
   private registerTemplateToGroup(group: number, template: Template): void {
     const curTerm = this.groupToTerm[group];
     if (curTerm && curTerm.termType !== template.subType) {
-      throw new Error(`Cannot match Template ${JSON.stringify(template)} with term ${JSON.stringify(curTerm)}`);
+      throw new RewriteNoMatchError(`Cannot match Template ${JSON.stringify(template)} with term ${JSON.stringify(curTerm)}`);
     }
     const groupRange = this.groupToRange[group];
     const newRange = groupRange.disjunct(new RangeSet([ template.subType ]));
     if (newRange.size === 0) {
-      throw new Error(`Cannot assign template ${JSON.stringify(template)} to a group with range [${[ ...groupRange.values() ].join(', ')}]`);
+      throw new RewriteNoMatchError(`Cannot assign template ${JSON.stringify(template)} to a group with range [${[ ...groupRange.values() ].join(', ')}]`);
     }
     // Narrow the groupRange
     this.groupToRange[group] = newRange;
@@ -218,11 +218,11 @@ ${JSON.stringify(to)}`);
     const curTerm = this.groupToTerm[group];
     // TODO: validate in the case of triple term by also registering that some variables present might be the same.
     if (curTerm && !curTerm.equals(term)) {
-      throw new Error(`Cannot match Term ${JSON.stringify(curTerm)} with term ${JSON.stringify(term)}`);
+      throw new RewriteNoMatchError(`Cannot match Term ${JSON.stringify(curTerm)} with term ${JSON.stringify(term)}`);
     }
     const groupRange = this.groupToRange[group];
     if (!groupRange.has(term.termType)) {
-      throw new Error(`Cannot assign Term ${JSON.stringify(term)} to a group with range [${[ ...groupRange.values() ].join(', ')}]`);
+      throw new RewriteNoMatchError(`Cannot assign Term ${JSON.stringify(term)} to a group with range [${[ ...groupRange.values() ].join(', ')}]`);
     }
     this.groupToTerm[group] = curTerm ?? term;
   }

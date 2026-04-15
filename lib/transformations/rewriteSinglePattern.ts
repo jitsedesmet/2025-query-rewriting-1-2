@@ -5,7 +5,7 @@ import type { ClusterSolver } from '../ClusterSolver.js';
 import { objectRange, predicateRange, subjectRange } from '../RangeSet.js';
 import type { TransformContext } from '../transformContext.js';
 import type { Mapping, MappingHead, Template } from '../types.js';
-import { isMappingHead, isRdfDefaultGraph, isRdfQuad, isRdfVar, templateToExpr } from '../utils.js';
+import { isMappingHead, isRdfDefaultGraph, isRdfQuad, isRdfVar, RewriteNoMatchError, templateToExpr } from '../utils.js';
 
 /**
  * @fileoverview Core pattern rewriting logic.
@@ -72,7 +72,7 @@ function iterateMappingHead(
     } else if (isRdfQuad(patternTerm)) {
       // UQ looks for tripleTerm but MappingHead does not provide:
       // TODO: Shortcutting, pattern term is quad but head is not. - will not match IF mapping where is SPARQL 1.1.
-      throw new Error(
+      throw new RewriteNoMatchError(
           `The user query contain quad ${JSON.stringify(patternTerm)} and cannot be matched to mapping head ${JSON.stringify(headTerm)}`,
       );
     } else {
@@ -214,7 +214,7 @@ function collectMappingHeadBindsAndFilters({ clusterSolver, mappingHeadVars, DF 
     if (cluster.term) {
       if (cluster.term.termType === 'BlankNode') {
         // TODO: when does this happen?
-        throw new Error('mapping variable being bound to a blank node will result in empty result');
+        throw new RewriteNoMatchError('mapping variable being bound to a blank node will result in empty result');
       }
       mappingHeadBinds[iterHeadVar.value] = cluster.term;
     }

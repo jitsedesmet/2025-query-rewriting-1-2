@@ -6,6 +6,35 @@ import { prefixVarsInOperation, parseQuery } from './transformContext.js';
 import { createFilterFalse } from './utils.js';
 
 /**
+ * Returns true when a GROUP node exists at the top of the operation's
+ * Extend / Filter / OrderBy chain.
+ *
+ * This matters for `queryTransform`: when the user query contains a GROUP BY,
+ * extra outer EXTEND nodes added for variable renaming must not be visible to
+ * `toAst`'s `translateAlgProject`. That function flattens all Extend nodes and
+ * replaces intermediate aggregate variables (e.g. `var0`) with their aggregate
+ * expressions. Any unused flattened Extend gets pushed into the WHERE clause via
+ * `putExtensionsInGroup`, producing invalid SPARQL such as
+ * `BIND(COUNT(?o) AS ?count)`.
+ *
+ * Wrapping the grouped sub-tree in a subSELECT (Project) before adding the outer
+ * EXTEND renames isolates the aggregate from the outer scope and avoids the issue.
+ */
+function hasGroupInTopLevelChain(op: Algebra.Operation): boolean {
+  if (op.type === Algebra.Types.GROUP) {
+    return true;
+  }
+  if (
+    op.type === Algebra.Types.EXTEND ||
+    op.type === Algebra.Types.FILTER ||
+    op.type === Algebra.Types.ORDER_BY
+  ) {
+    return hasGroupInTopLevelChain((<{ input: Algebra.Operation }>op).input);
+  }
+  return false;
+}
+
+/**
  * Transforms a SPARQL query by applying the configured mappings and transformations.
  *
  * This is the main entry point for query rewriting. It:
@@ -16,6 +45,12 @@ import { createFilterFalse } from './utils.js';
  * 5. Wraps the result with EXTEND operations to map back to original variable names
  * 6. Re-applies the Project and any stripped DISTINCT/REDUCED modifier
  * 7. Generates the output SPARQL string
+ *
+ * **GROUP BY queries**: when the user query contains a GROUP BY (detected by
+ * `hasGroupInTopLevelChain`), the transformed algebra is first wrapped in a
+ * subSELECT projecting the `uq_`-prefixed result variables. This prevents
+ * `toAst` from incorrectly serialising aggregate alias Extend nodes as
+ * `BIND(aggregate AS var)` in the WHERE clause.
  *
  * @param c - The transformation context containing mappings and factories
  * @param input - The SPARQL query string to transform
@@ -48,6 +83,18 @@ export function queryTransform(
   }
 
   if (innerAlgebra.type === 'project') {
+    // When the user query has GROUP BY, a chain of Extend nodes sits above the Group
+    // node in the algebra. toAst's translateAlgProject flattens all visible Extend
+    // nodes and replaces intermediate aggregate variables with their expressions.
+    // Any Extend that does not end up in the SELECT list or GROUP BY is then dumped
+    // into the WHERE clause by putExtensionsInGroup, producing invalid SPARQL like
+    // BIND(COUNT(?o) AS ?count). Wrapping the grouped sub-tree in a Project
+    // (subSELECT) isolates it from the outer renaming Extends.
+    if (hasGroupInTopLevelChain(transformedAlgebra)) {
+      const uqVariables = innerAlgebra.variables.map(v => c.DF.variable(`uq_${v.value}`));
+      transformedAlgebra = c.AF.createProject(transformedAlgebra, uqVariables);
+    }
+
     // Wrap the transformedAlgebra in extends to the originalVar names and project those
     for (const variable of innerAlgebra.variables) {
       transformedAlgebra = c.AF.createExtend(

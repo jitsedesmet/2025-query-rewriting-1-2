@@ -315,12 +315,9 @@ describe('integration tests', () => {
       expect(resOnMappedData).toEqual(resUsingRewriter);
     });
 
-    it.skip(
+    it(
       'selecting by joining two reified triples (StarBench P22-style) returns the same results',
       async({ expect }) => {
-        // Known rewriter limitation: when two rdf:reifies triple term patterns appear in the same
-        // JOIN, the rewriter maps both to the same mapper (m0_) and the shared internal variable
-        // names (?m0_o, ?m0_t) collide at the outer JOIN level, causing incorrect results.
         const store11 = await sourceToStore([ './test/statics/multipleRdfReifiedTriples.ttl' ]);
         const { resOnMappedData, resUsingRewriter } = await compareSelectRewrittenToMapped(
           store11,

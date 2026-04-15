@@ -5,6 +5,19 @@ import type { Template } from './types.js';
 import { isRdfTerm, isRdfVar } from './utils.js';
 
 /**
+ * A snapshot of the ClusterSolver's internal state, used for save/restore.
+ */
+export type ClusterState = {
+  groupToVars: Record<number, RangedVar[]>;
+  groupToRange: Record<number, RangeSet>;
+  groupToTemplates: Record<number, Template[]>;
+  groupToTerm: Record<number, RawBasicTerm | undefined>;
+  varToGroup: Record<string, number | undefined>;
+  staticTemplateValidation: { template: Template; term: RawBasicTerm }[];
+  cleanNumber: number;
+};
+
+/**
  * A raw term that is either a concrete term (not a variable) or a ranged variable.
  */
 export type RawTerm = Exclude<RDF.Term, RDF.Variable> | RangedVar;
@@ -234,13 +247,69 @@ ${JSON.stringify(to)}`);
     if (oldTerm) {
       this.registerTermToGroup(newGroup, oldTerm);
     }
-    // Merge vars:
+    // Merge templates
+    this.groupToTemplates[newGroup].push(...this.groupToTemplates[oldGroup]);
+    // Merge vars and clean up old group
     const oldVars = this.groupToVars[oldGroup];
     delete this.groupToVars[oldGroup];
+    delete this.groupToTemplates[oldGroup];
+    delete this.groupToTerm[oldGroup];
+    delete this.groupToRange[oldGroup];
     this.groupToVars[newGroup].push(...oldVars);
     for (const variable of oldVars) {
       this.varToGroup[variable.value] = newGroup;
     }
+  }
+
+  /**
+   * Saves a deep-enough snapshot of the solver state for later restoration.
+   * Arrays are shallow-copied; RangeSets are recreated from their entries.
+   * @returns A snapshot that can be passed to restoreState
+   */
+  public saveState(): ClusterState {
+    const snap: ClusterState = {
+      groupToVars: {},
+      groupToRange: {},
+      groupToTemplates: {},
+      groupToTerm: { ...this.groupToTerm },
+      varToGroup: { ...this.varToGroup },
+      staticTemplateValidation: this.staticTemplateValidation.map(x => ({ ...x })),
+      cleanNumber: this.cleanNumber,
+    };
+    for (const [ k, v ] of Object.entries(this.groupToVars)) {
+      snap.groupToVars[Number(k)] = [ ...v ];
+    }
+    for (const [ k, v ] of Object.entries(this.groupToRange)) {
+      snap.groupToRange[Number(k)] = new RangeSet(v);
+    }
+    for (const [ k, v ] of Object.entries(this.groupToTemplates)) {
+      snap.groupToTemplates[Number(k)] = [ ...v ];
+    }
+    return snap;
+  }
+
+  /**
+   * Restores the solver to a previously saved state.
+   * Reassigns all internal maps from the snapshot.
+   * @param state - A snapshot returned by saveState
+   */
+  public restoreState(state: ClusterState): void {
+    this.groupToVars = {};
+    this.groupToRange = {};
+    this.groupToTemplates = {};
+    for (const [ k, v ] of Object.entries(state.groupToVars)) {
+      this.groupToVars[Number(k)] = [ ...v ];
+    }
+    for (const [ k, v ] of Object.entries(state.groupToRange)) {
+      this.groupToRange[Number(k)] = new RangeSet(v);
+    }
+    for (const [ k, v ] of Object.entries(state.groupToTemplates)) {
+      this.groupToTemplates[Number(k)] = [ ...v ];
+    }
+    this.groupToTerm = { ...state.groupToTerm };
+    this.varToGroup = { ...state.varToGroup };
+    this.staticTemplateValidation = state.staticTemplateValidation.map(x => ({ ...x }));
+    this.cleanNumber = state.cleanNumber;
   }
 
   /**

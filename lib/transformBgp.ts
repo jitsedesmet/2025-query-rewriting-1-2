@@ -83,13 +83,7 @@ export function queryTransform(
   }
 
   if (innerAlgebra.type === 'project') {
-    // When the user query has GROUP BY, a chain of Extend nodes sits above the Group
-    // node in the algebra. toAst's translateAlgProject flattens all visible Extend
-    // nodes and replaces intermediate aggregate variables with their expressions.
-    // Any Extend that does not end up in the SELECT list or GROUP BY is then dumped
-    // into the WHERE clause by putExtensionsInGroup, producing invalid SPARQL like
-    // BIND(COUNT(?o) AS ?count). Wrapping the grouped sub-tree in a Project
-    // (subSELECT) isolates it from the outer renaming Extends.
+    // Because of the variable renaming, when we group, we need to group as part of a subquery and then rename afterwards.
     if (hasGroupInTopLevelChain(transformedAlgebra)) {
       const uqVariables = innerAlgebra.variables.map(v => c.DF.variable(`uq_${v.value}`));
       transformedAlgebra = c.AF.createProject(transformedAlgebra, uqVariables);

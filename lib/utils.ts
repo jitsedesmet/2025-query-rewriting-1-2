@@ -100,7 +100,7 @@ export function isTyped(obj: object): obj is Typed {
  * @returns True if the object is a mapping head template
  */
 export function isMappingHead(obj: object): obj is MappingHead {
-  return isTyped(obj) && obj.type === 'mappingHead';
+  return isTyped(obj) && obj.type === 'template' && 'subType' in obj && obj.subType === 'Quad';
 }
 
 /**
@@ -223,7 +223,7 @@ export function templateIriToExpr(AF: AlgebraFactory, DF: DataFactory, template:
  */
 export function templateLiteralToExpr(AF: AlgebraFactory, DF: DataFactory, template: TemplateLiteral):
 Algebra.Expression {
-  return AF.createOperatorExpression('stdt', [
+  return AF.createOperatorExpression('strdt', [
     AF.createOperatorExpression(
       'concat',
       template.value.map((val) => {
@@ -233,6 +233,7 @@ Algebra.Expression {
         return AF.createOperatorExpression('str', [ AF.createTermExpression(val) ]);
       }),
     ),
+    AF.createTermExpression(template.datatype),
   ]);
 }
 

@@ -3,10 +3,12 @@ import { describe, it } from 'vitest';
 import type { expect as Expect } from 'vitest';
 import { internalBnodeAsSpecialIri, internalBnodeAsSpecialLiteral } from '../lib/transformations/bnodeMapAsLiteral.js';
 import { substituteVarsThatArePreBoundToTerms } from '../lib/transformations/boundedVarSubstitution.js';
+import { transformExtendsToValues } from '../lib/transformations/extendsToValues.js';
 import { transformFilterFalse } from '../lib/transformations/filterFalse.js';
 import { nullifyJoinOverIncompatibleBounds } from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
 import { rewriteNonRecursivePaths } from '../lib/transformations/pathTransformation.js';
 import { pushUpBoundedFromUnion } from '../lib/transformations/pushUpBoundedFromUnion.js';
+import { transformServiceCallPushUp } from '../lib/transformations/serviceCallMerge.js';
 import { operationTransform, queryTransform } from '../lib/transformBgp.js';
 import type { TransformContext } from '../lib/transformContext.js';
 import {
@@ -546,7 +548,12 @@ describe('dummy', () => {
   UNION {
     {
       SELECT DISTINCT ?uq_s6 WHERE {
-        ?uq_s6 ?p_uq_s6 ?o_uq_s6 .
+        {
+          ?uq_s6 ?p_uq_s6 ?o_uq_s6 .
+        }
+        UNION {
+          ?o_uq_s6 ?p_uq_s6 ?uq_s6 .
+        }
       }
     }
     BIND( ?uq_s6 AS ?uq_o6 )
@@ -581,9 +588,7 @@ describe('dummy', () => {
     expect,
     `SELECT * { ?s ?p ?s }`,
     `SELECT ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) WHERE {
-  {
-    FILTER ( FALSE )
-  }
+  FILTER ( FALSE )
 }`,
     [ `CONSTRUCT { ?s ?p <<( ?s ?x ?y )>> } WHERE { ?s ?p ?x , ?y . }` ],
   ));
@@ -673,20 +678,67 @@ describe('dummy', () => {
       }],
     ));
 
+    it('templateLiteral generates STRDT with datatype argument', ({ expect }) => testMappers(
+      expect,
+      'SELECT * { ?s ?p ?o }',
+      `SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) WHERE {
+  {
+    SELECT ?m0_p ?m0_s WHERE {
+      ?m0_s ?m0_p <ex://b> .
+    }
+  }
+  BIND( STRDT( CONCAT( "ex://" , STR( ?m0_s ) ) , <http://www.w3.org/2001/XMLSchema#string> ) AS ?uq_o )
+  BIND( ?m0_p AS ?uq_p )
+  BIND( ?m0_s AS ?uq_s )
+}`,
+      [{
+        head: c.AF.createMappingHead(c.DF.variable('s'), c.DF.variable('p'), c.AF.createTemplateLiteral(
+          [ 'ex://', c.DF.variable('s') ],
+          c.DF.namedNode('http://www.w3.org/2001/XMLSchema#string'),
+        )),
+        body: <Algebra.Project>parseQuery(c, 'SELECT * { ?s ?p <ex://b> }'),
+      }],
+    ));
+
+    it('nested TemplateQuad in head matches nested triple term in user query', ({ expect }) => testMappers(
+      expect,
+      'SELECT * { ?x ?y <<( <ex://a> <ex://b> ?z )>> }',
+      `SELECT ( ?uq_x AS ?x ) ( ?uq_y AS ?y ) ( ?uq_z AS ?z ) WHERE {
+  {
+    SELECT ?m0_p ?m0_s WHERE {
+      ?m0_s ?m0_p <ex://a> .
+    }
+  }
+  BIND( ?m0_s AS ?uq_x )
+  BIND( ?m0_p AS ?uq_y )
+  BIND( IRI( CONCAT( STR( ?m0_s ) ) ) AS ?uq_z )
+}`,
+      [{
+        head: c.AF.createMappingHead(
+          c.DF.variable('s'),
+          c.DF.variable('p'),
+          c.AF.createMappingHead(
+            c.DF.namedNode('ex://a'),
+            c.DF.namedNode('ex://b'),
+            c.AF.createTemplateIri([ c.DF.variable('s') ]),
+          ),
+        ),
+        body: <Algebra.Project>parseQuery(c, 'SELECT * { ?s ?p <ex://a> }'),
+      }],
+    ));
+
     it('template mapping simple', ({ expect }) => testMappers(
       expect,
       'SELECT * { ?s ?p ?o }',
       `SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) WHERE {
   {
-    {
-      SELECT ?m0_p ?m0_s WHERE {
-        ?m0_s ?m0_p <ex://b> .
-      }
+    SELECT ?m0_p ?m0_s WHERE {
+      ?m0_s ?m0_p <ex://b> .
     }
-    BIND( IRI( CONCAT( "ex://" , STR( ?m0_s ) ) ) AS ?uq_o )
-    BIND( ?m0_p AS ?uq_p )
-    BIND( ?m0_s AS ?uq_s )
   }
+  BIND( IRI( CONCAT( "ex://" , STR( ?m0_s ) ) ) AS ?uq_o )
+  BIND( ?m0_p AS ?uq_p )
+  BIND( ?m0_s AS ?uq_s )
 }`,
       [{
         head: c.AF.createMappingHead(c.DF.variable('s'), c.DF.variable('p'), c.AF.createTemplateIri(
@@ -701,15 +753,13 @@ describe('dummy', () => {
       'SELECT * { ?s  ?p ?s }',
       `SELECT ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) WHERE {
   {
-    {
-      SELECT ?m0_p ?m0_s WHERE {
-        ?m0_s ?m0_p <ex://b> .
-        FILTER ( ( ?m0_s = IRI( CONCAT( "ex://" , STR( ?m0_s ) ) ) ) )
-      }
+    SELECT ?m0_p ?m0_s WHERE {
+      ?m0_s ?m0_p <ex://b> .
+      FILTER ( ( ?m0_s = IRI( CONCAT( "ex://" , STR( ?m0_s ) ) ) ) )
     }
-    BIND( ?m0_p AS ?uq_p )
-    BIND( ?m0_s AS ?uq_s )
   }
+  BIND( ?m0_p AS ?uq_p )
+  BIND( ?m0_s AS ?uq_s )
 }`,
       [{
         head: c.AF.createMappingHead(c.DF.variable('s'), c.DF.variable('p'), c.AF.createTemplateIri(
@@ -724,17 +774,15 @@ describe('dummy', () => {
       'SELECT * { ?x ?x ?x }',
       `SELECT ( ?uq_x AS ?x ) WHERE {
   {
-    {
-      SELECT ?m0_p WHERE {
-        {
-          ?m0_s ?m0_p ?m0_o .
-          FILTER ( ( ?m0_p = IRI( CONCAT( STR( ?m0_s ) , STR( ?m0_p ) ) ) ) )
-        }
-        FILTER ( ( ?m0_p = IRI( CONCAT( STR( ?m0_o ) , STR( ?m0_p ) ) ) ) )
+    SELECT ?m0_p WHERE {
+      {
+        ?m0_s ?m0_p ?m0_o .
+        FILTER ( ( ?m0_p = IRI( CONCAT( STR( ?m0_s ) , STR( ?m0_p ) ) ) ) )
       }
+      FILTER ( ( ?m0_p = IRI( CONCAT( STR( ?m0_o ) , STR( ?m0_p ) ) ) ) )
     }
-    BIND( ?m0_p AS ?uq_x )
   }
+  BIND( ?m0_p AS ?uq_x )
 }`,
       [{
         head: c.AF.createMappingHead(
@@ -751,17 +799,15 @@ describe('dummy', () => {
       'SELECT * { ?x <ex://a> ?y }',
       `SELECT ( ?uq_x AS ?x ) ( ?uq_y AS ?y ) WHERE {
   {
-    {
-      SELECT ?m0_o ?m0_p ?m0_s WHERE {
-        {
-          BIND( <ex://a> AS ?m0_p )
-        }
-        ?m0_s ?m0_p ?m0_o .
+    SELECT ?m0_o ?m0_p ?m0_s WHERE {
+      {
+        BIND( <ex://a> AS ?m0_p )
       }
+      ?m0_s ?m0_p ?m0_o .
     }
-    BIND( IRI( CONCAT( STR( ?m0_s ) , STR( ?m0_p ) ) ) AS ?uq_x )
-    BIND( ?m0_o AS ?uq_y )
   }
+  BIND( IRI( CONCAT( STR( ?m0_s ) , STR( ?m0_p ) ) ) AS ?uq_x )
+  BIND( ?m0_o AS ?uq_y )
 }`,
       [{
         head: c.AF.createMappingHead(
@@ -778,15 +824,13 @@ describe('dummy', () => {
       'SELECT * { ?x ?y ?y }',
       `SELECT ( ?uq_x AS ?x ) ( ?uq_y AS ?y ) WHERE {
   {
-    {
-      SELECT ?m0_p ?m0_s WHERE {
-        ?m0_s ?m0_p ?m0_o .
-        FILTER ( ( ?m0_p = IRI( CONCAT( STR( ?m0_o ) ) ) ) )
-      }
+    SELECT ?m0_p ?m0_s WHERE {
+      ?m0_s ?m0_p ?m0_o .
+      FILTER ( ( ?m0_p = IRI( CONCAT( STR( ?m0_o ) ) ) ) )
     }
-    BIND( IRI( CONCAT( STR( ?m0_s ) , STR( ?m0_p ) ) ) AS ?uq_x )
-    BIND( ?m0_p AS ?uq_y )
   }
+  BIND( IRI( CONCAT( STR( ?m0_s ) , STR( ?m0_p ) ) ) AS ?uq_x )
+  BIND( ?m0_p AS ?uq_y )
 }`,
       [{
         head: c.AF.createMappingHead(
@@ -803,15 +847,13 @@ describe('dummy', () => {
       'SELECT * { ?x ?y ?z }',
       `SELECT ( ?uq_x AS ?x ) ( ?uq_y AS ?y ) ( ?uq_z AS ?z ) WHERE {
   {
-    {
-      SELECT ?m0_p ?m0_s WHERE {
-        ?m0_s ?m0_p <ex://a> .
-      }
+    SELECT ?m0_p ?m0_s WHERE {
+      ?m0_s ?m0_p <ex://a> .
     }
-    BIND( ?m0_s AS ?uq_x )
-    BIND( ?m0_p AS ?uq_y )
-    BIND( TRIPLE( <ex://a> , <ex://b> , IRI( CONCAT( STR( ?m0_s ) ) ) ) AS ?uq_z )
   }
+  BIND( ?m0_s AS ?uq_x )
+  BIND( ?m0_p AS ?uq_y )
+  BIND( TRIPLE( <ex://a> , <ex://b> , IRI( CONCAT( STR( ?m0_s ) ) ) ) AS ?uq_z )
 }`,
       [{
         head: c.AF.createMappingHead(
@@ -832,15 +874,13 @@ describe('dummy', () => {
       'SELECT * { ?x ?p ?x }',
       `SELECT ( ?uq_p AS ?p ) ( ?uq_x AS ?x ) WHERE {
   {
-    {
-      SELECT ?m0_p WHERE {
-        ?m0_s ?m0_p <ex://a> .
-        FILTER ( ( <ex://apple> = IRI( CONCAT( STR( ?m0_s ) ) ) ) )
-      }
+    SELECT ?m0_p WHERE {
+      ?m0_s ?m0_p <ex://a> .
+      FILTER ( ( <ex://apple> = IRI( CONCAT( STR( ?m0_s ) ) ) ) )
     }
-    BIND( ?m0_p AS ?uq_p )
-    BIND( <ex://apple> AS ?uq_x )
   }
+  BIND( ?m0_p AS ?uq_p )
+  BIND( <ex://apple> AS ?uq_x )
 }`,
       [{
         head: c.AF.createMappingHead(
@@ -857,17 +897,15 @@ describe('dummy', () => {
       'SELECT * { ?x ?x ?x }',
       `SELECT ( ?uq_x AS ?x ) WHERE {
   {
-    {
-      SELECT ( "dummy" AS ?dummy ) WHERE {
-        {
-          BIND( <ex://apple> AS ?m0_p )
-        }
-        ?m0_s ?m0_p <ex://a> .
-        FILTER ( ( <ex://apple> = IRI( CONCAT( STR( ?m0_s ) ) ) ) )
+    SELECT ( "dummy" AS ?dummy ) WHERE {
+      {
+        BIND( <ex://apple> AS ?m0_p )
       }
+      ?m0_s ?m0_p <ex://a> .
+      FILTER ( ( <ex://apple> = IRI( CONCAT( STR( ?m0_s ) ) ) ) )
     }
-    BIND( <ex://apple> AS ?uq_x )
   }
+  BIND( <ex://apple> AS ?uq_x )
 }`,
       [{
         head: c.AF.createMappingHead(
@@ -981,7 +1019,7 @@ describe('dummy', () => {
     BIND( ?m0_p AS ?uq_p1 )
     BIND( STRDT( CONCAT( IF( ISIRI( ?m0_s ) , CONCAT( ",iri," , REPLACE( REPLACE( STR( ?m0_s ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) , IF( HASLANGDIR( ?m0_s ) , CONCAT( ",literal@D," , REPLACE( REPLACE( STR( ?m0_s ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) , "," , REPLACE( REPLACE( LANG( ?m0_s ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) , "," , REPLACE( REPLACE( LANGDIR( ?m0_s ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) , IF( HASLANG( ?m0_s ) , CONCAT( ",literal@," , REPLACE( REPLACE( STR( ?m0_s ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) , "," , REPLACE( REPLACE( LANG( ?m0_s ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) , CONCAT( ",literal," , REPLACE( REPLACE( STR( ?m0_s ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) , "," , REPLACE( REPLACE( STR( DATATYPE( ?m0_s ) ) , "\\\\" , "\\\\\\\\" ) , "," , "\\\\," ) ) ) ) ) ) , <https://sparql-extension.knows.idlab.ugent.be/bnode> ) AS ?uq_s )
   }
-  FILTER ( ( DATATYPE( ?uq_s ) = "https://sparql-extension.knows.idlab.ugent.be/bnode" ) )
+  FILTER ( ( DATATYPE( ?uq_s ) = <https://sparql-extension.knows.idlab.ugent.be/bnode> ) )
 }`,
       [{
         head: c.AF.createMappingHead(
@@ -1028,20 +1066,18 @@ describe('dummy', () => {
       `SELECT * { ?a <ex://test> ?b }`,
       `SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
   {
-    {
-      SELECT ?m0_o ?m0_s WHERE {
-        {
-          BIND( <ex://test> AS ?m0_p )
-        }
-        {
-          ?m0_x ?m0_p ?m0_o .
-          BIND( IRI( CONCAT( "http://example.org/" , STR( ?m0_x ) ) ) AS ?m0_s )
-        }
+    SELECT ?m0_o ?m0_s WHERE {
+      {
+        BIND( <ex://test> AS ?m0_p )
+      }
+      {
+        ?m0_x ?m0_p ?m0_o .
+        BIND( IRI( CONCAT( "http://example.org/" , STR( ?m0_x ) ) ) AS ?m0_s )
       }
     }
-    BIND( ?m0_s AS ?uq_a )
-    BIND( ?m0_o AS ?uq_b )
   }
+  BIND( ?m0_s AS ?uq_a )
+  BIND( ?m0_o AS ?uq_b )
 }`,
       [ `CONSTRUCT { ?s ?p ?o } WHERE { ?x ?p ?o . BIND(IRI(CONCAT("http://example.org/", STR(?x))) AS ?s) }` ],
     ));
@@ -1051,20 +1087,18 @@ describe('dummy', () => {
       `SELECT * { <http://example.org/foo> <ex://test> ?b }`,
       `SELECT ( ?uq_b AS ?b ) WHERE {
   {
-    {
-      SELECT ?m0_o WHERE {
-        {
-          BIND( <ex://test> AS ?m0_p )
-          BIND( <http://example.org/foo> AS ?m0_s )
-        }
-        {
-          ?m0_x ?m0_p ?m0_o .
-          BIND( IRI( CONCAT( "http://example.org/" , STR( ?m0_x ) ) ) AS ?m0_s )
-        }
+    SELECT ?m0_o WHERE {
+      {
+        BIND( <ex://test> AS ?m0_p )
+        BIND( <http://example.org/foo> AS ?m0_s )
+      }
+      {
+        ?m0_x ?m0_p ?m0_o .
+        BIND( IRI( CONCAT( "http://example.org/" , STR( ?m0_x ) ) ) AS ?m0_s )
       }
     }
-    BIND( ?m0_o AS ?uq_b )
   }
+  BIND( ?m0_o AS ?uq_b )
 }`,
       [ `CONSTRUCT { ?s ?p ?o } WHERE { ?x ?p ?o . BIND(IRI(CONCAT("http://example.org/", STR(?x))) AS ?s) }` ],
       [ operationTransform ],
@@ -1076,16 +1110,14 @@ describe('dummy', () => {
       `SELECT * { <http://example.org/foo> <ex://test> ?b }`,
       `SELECT ( ?uq_b AS ?b ) WHERE {
   {
-    {
-      SELECT ?m0_o WHERE {
-        {
-          ?m0_x <ex://test> ?m0_o .
-          FILTER ( ( IRI( CONCAT( "http://example.org/" , STR( ?m0_x ) ) ) = <http://example.org/foo> ) )
-        }
+    SELECT ?m0_o WHERE {
+      {
+        ?m0_x <ex://test> ?m0_o .
+        FILTER ( ( IRI( CONCAT( "http://example.org/" , STR( ?m0_x ) ) ) = <http://example.org/foo> ) )
       }
     }
-    BIND( ?m0_o AS ?uq_b )
   }
+  BIND( ?m0_o AS ?uq_b )
 }`,
       [ `CONSTRUCT { ?s ?p ?o } WHERE { ?x ?p ?o . BIND(IRI(CONCAT("http://example.org/", STR(?x))) AS ?s) }` ],
       [ operationTransform, substituteVarsThatArePreBoundToTerms ],
@@ -1096,19 +1128,17 @@ describe('dummy', () => {
       `SELECT * { ?x ?p ?y }`,
       `SELECT ( ?uq_p AS ?p ) ( ?uq_x AS ?x ) ( ?uq_y AS ?y ) WHERE {
   {
-    {
-      SELECT ?m0_o ?m0_p ?m0_s WHERE {
-        VALUES ?m0_p {
-          <ex://a>
-          <ex://b>
-        }
-        ?m0_s ?m0_p ?m0_o .
+    SELECT ?m0_o ?m0_p ?m0_s WHERE {
+      VALUES ?m0_p {
+        <ex://a>
+        <ex://b>
       }
+      ?m0_s ?m0_p ?m0_o .
     }
-    BIND( ?m0_p AS ?uq_p )
-    BIND( ?m0_s AS ?uq_x )
-    BIND( ?m0_o AS ?uq_y )
   }
+  BIND( ?m0_p AS ?uq_p )
+  BIND( ?m0_s AS ?uq_x )
+  BIND( ?m0_o AS ?uq_y )
 }`,
       [ `CONSTRUCT { ?s ?p ?o } WHERE { VALUES ?p { <ex://a> <ex://b> } ?s ?p ?o . }` ],
     ));
@@ -1118,21 +1148,19 @@ describe('dummy', () => {
       `SELECT * { ?x <ex://a> ?y }`,
       `SELECT ( ?uq_x AS ?x ) ( ?uq_y AS ?y ) WHERE {
   {
-    {
-      SELECT ?m0_o ?m0_s WHERE {
-        {
-          BIND( <ex://a> AS ?m0_p )
-        }
-        VALUES ?m0_p {
-          <ex://a>
-          <ex://b>
-        }
-        ?m0_s ?m0_p ?m0_o .
+    SELECT ?m0_o ?m0_s WHERE {
+      {
+        BIND( <ex://a> AS ?m0_p )
       }
+      VALUES ?m0_p {
+        <ex://a>
+        <ex://b>
+      }
+      ?m0_s ?m0_p ?m0_o .
     }
-    BIND( ?m0_s AS ?uq_x )
-    BIND( ?m0_o AS ?uq_y )
   }
+  BIND( ?m0_s AS ?uq_x )
+  BIND( ?m0_o AS ?uq_y )
 }`,
       [ `CONSTRUCT { ?s ?p ?o } WHERE { VALUES ?p { <ex://a> <ex://b> } ?s ?p ?o . }` ],
     ));
@@ -1142,21 +1170,19 @@ describe('dummy', () => {
       `SELECT * { ?x <ex://c> ?y }`,
       `SELECT ( ?uq_x AS ?x ) ( ?uq_y AS ?y ) WHERE {
   {
-    {
-      SELECT ?m0_o ?m0_s WHERE {
-        {
-          BIND( <ex://c> AS ?m0_p )
-        }
-        VALUES ?m0_p {
-          <ex://a>
-          <ex://b>
-        }
-        ?m0_s ?m0_p ?m0_o .
+    SELECT ?m0_o ?m0_s WHERE {
+      {
+        BIND( <ex://c> AS ?m0_p )
       }
+      VALUES ?m0_p {
+        <ex://a>
+        <ex://b>
+      }
+      ?m0_s ?m0_p ?m0_o .
     }
-    BIND( ?m0_s AS ?uq_x )
-    BIND( ?m0_o AS ?uq_y )
   }
+  BIND( ?m0_s AS ?uq_x )
+  BIND( ?m0_o AS ?uq_y )
 }`,
       [ `CONSTRUCT { ?s ?p ?o } WHERE { VALUES ?p { <ex://a> <ex://b> } ?s ?p ?o . }` ],
     ));
@@ -1166,20 +1192,18 @@ describe('dummy', () => {
       `SELECT * { <ex://differentValue> <ex://p> ?b }`,
       `SELECT ( ?uq_b AS ?b ) WHERE {
   {
-    {
-      SELECT ?m0_o WHERE {
-        {
-          BIND( <ex://p> AS ?m0_p )
-          BIND( <ex://differentValue> AS ?m0_s )
-        }
-        {
-          ?m0_x ?m0_p ?m0_o .
-          BIND( <ex://computedValue> AS ?m0_s )
-        }
+    SELECT ?m0_o WHERE {
+      {
+        BIND( <ex://p> AS ?m0_p )
+        BIND( <ex://differentValue> AS ?m0_s )
+      }
+      {
+        ?m0_x ?m0_p ?m0_o .
+        BIND( <ex://computedValue> AS ?m0_s )
       }
     }
-    BIND( ?m0_o AS ?uq_b )
   }
+  BIND( ?m0_o AS ?uq_b )
 }`,
       [ `CONSTRUCT { ?s ?p ?o } WHERE { ?x ?p ?o . BIND(<ex://computedValue> AS ?s) }` ],
     ));
@@ -1190,20 +1214,35 @@ describe('dummy', () => {
         `SELECT * { ?x ?x ?y }`,
         `SELECT ( ?uq_x AS ?x ) ( ?uq_y AS ?y ) WHERE {
   {
-    {
-      SELECT ?m0_o ?rm0_s_AND_p WHERE {
-        VALUES ?rm0_s_AND_p {
-          <ex://a>
-          <ex://b>
-        }
-        ?rm0_s_AND_p ?rm0_s_AND_p ?m0_o .
+    SELECT ?m0_o ?rm0_s_AND_p WHERE {
+      VALUES ?rm0_s_AND_p {
+        <ex://a>
+        <ex://b>
       }
+      ?rm0_s_AND_p ?rm0_s_AND_p ?m0_o .
     }
-    BIND( ?rm0_s_AND_p AS ?uq_x )
-    BIND( ?m0_o AS ?uq_y )
   }
+  BIND( ?rm0_s_AND_p AS ?uq_x )
+  BIND( ?m0_o AS ?uq_y )
 }`,
         [ `CONSTRUCT { ?s ?p ?o } WHERE { VALUES ?s { <ex://a> <ex://b> } ?s ?p ?o . }` ],
+      ));
+
+    it('mapping head same var in two positions, user query uses different vars', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT * { ?a ?p ?b }`,
+        `SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) ( ?uq_p AS ?p ) WHERE {
+  {
+    SELECT ?m0_p ?m0_s WHERE {
+      ?m0_s ?m0_p ?m0_s .
+    }
+  }
+  BIND( ?m0_s AS ?uq_a )
+  BIND( ?m0_s AS ?uq_b )
+  BIND( ?m0_p AS ?uq_p )
+}`,
+        [ `CONSTRUCT WHERE { ?s ?p ?s }` ],
       ));
 
     it('optimize terms substitutes variables that appear only in triple patterns', ({ expect }) =>
@@ -1212,13 +1251,11 @@ describe('dummy', () => {
         `SELECT * { <ex://foo> <ex://p> ?o }`,
         `SELECT ( ?uq_o AS ?o ) WHERE {
   {
-    {
-      SELECT ?m0_o WHERE {
-        <ex://foo> <ex://p> ?m0_o .
-      }
+    SELECT ?m0_o WHERE {
+      <ex://foo> <ex://p> ?m0_o .
     }
-    BIND( ?m0_o AS ?uq_o )
   }
+  BIND( ?m0_o AS ?uq_o )
 }`,
         [ `CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }` ],
         [ operationTransform, substituteVarsThatArePreBoundToTerms ],
@@ -1230,14 +1267,12 @@ describe('dummy', () => {
         `SELECT * { ?x <ex://a> ?y }`,
         `SELECT ( ?uq_x AS ?x ) ( ?uq_y AS ?y ) WHERE {
   {
-    {
-      SELECT ?m0_o ?m0_s WHERE {
-        ?m0_s <ex://a> ?m0_o .
-      }
+    SELECT ?m0_o ?m0_s WHERE {
+      ?m0_s <ex://a> ?m0_o .
     }
-    BIND( ?m0_s AS ?uq_x )
-    BIND( ?m0_o AS ?uq_y )
   }
+  BIND( ?m0_s AS ?uq_x )
+  BIND( ?m0_o AS ?uq_y )
 }`,
         [ `CONSTRUCT { ?s ?p ?o } WHERE { VALUES ?p { <ex://a> <ex://b> } ?s ?p ?o . }` ],
         [ operationTransform, substituteVarsThatArePreBoundToTerms ],
@@ -1249,14 +1284,12 @@ describe('dummy', () => {
         `SELECT * { ?x <ex://c> ?y }`,
         `SELECT ( ?uq_x AS ?x ) ( ?uq_y AS ?y ) WHERE {
   {
-    {
-      SELECT ?m0_o ?m0_s WHERE {
-        FILTER ( FALSE )
-      }
+    SELECT ?m0_o ?m0_s WHERE {
+      FILTER ( FALSE )
     }
-    BIND( ?m0_s AS ?uq_x )
-    BIND( ?m0_o AS ?uq_y )
   }
+  BIND( ?m0_s AS ?uq_x )
+  BIND( ?m0_o AS ?uq_y )
 }`,
         [ `CONSTRUCT { ?s ?p ?o } WHERE { VALUES ?p { <ex://a> <ex://b> } ?s ?p ?o . }` ],
         [ operationTransform, substituteVarsThatArePreBoundToTerms ],
@@ -1268,17 +1301,15 @@ describe('dummy', () => {
         `SELECT * { ?a <ex://a> ?b }`,
         `SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
   {
-    {
-      SELECT ?m0_o ?m0_s WHERE {
-        VALUES ?m0_s {
-          <ex://x>
-        }
-        ?m0_s <ex://a> ?m0_o .
+    SELECT ?m0_o ?m0_s WHERE {
+      VALUES ?m0_s {
+        <ex://x>
       }
+      ?m0_s <ex://a> ?m0_o .
     }
-    BIND( ?m0_s AS ?uq_a )
-    BIND( ?m0_o AS ?uq_b )
   }
+  BIND( ?m0_s AS ?uq_a )
+  BIND( ?m0_o AS ?uq_b )
 }`,
         [ `CONSTRUCT { ?s ?p ?o } WHERE { VALUES (?p ?s) { (<ex://a> <ex://x>) (<ex://b> <ex://y>) } ?s ?p ?o . }` ],
         [ operationTransform, substituteVarsThatArePreBoundToTerms ],
@@ -1290,14 +1321,12 @@ describe('dummy', () => {
         `SELECT * { ?a <ex://c> ?b }`,
         `SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
   {
-    {
-      SELECT ?m0_o ?m0_s WHERE {
-        FILTER ( FALSE )
-      }
+    SELECT ?m0_o ?m0_s WHERE {
+      FILTER ( FALSE )
     }
-    BIND( ?m0_s AS ?uq_a )
-    BIND( ?m0_o AS ?uq_b )
   }
+  BIND( ?m0_s AS ?uq_a )
+  BIND( ?m0_o AS ?uq_b )
 }`,
         [ `CONSTRUCT { ?s ?p ?o } WHERE { VALUES (?p ?s) { (<ex://a> <ex://x>) (<ex://b> <ex://y>) } ?s ?p ?o . }` ],
         [ operationTransform, substituteVarsThatArePreBoundToTerms ],
@@ -1309,22 +1338,20 @@ describe('dummy', () => {
         `SELECT * { ?a <ex://c> ?b }`,
         `SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
   {
-    {
-      SELECT ?m0_count ?m0_s WHERE {
-        {
-          BIND( <ex://c> AS ?m0_p )
+    SELECT ?m0_count ?m0_s WHERE {
+      {
+        BIND( <ex://c> AS ?m0_p )
+      }
+      {
+        SELECT ?m0_s ?m0_p ( COUNT( ?m0_o ) AS ?m0_count ) WHERE {
+          ?m0_s ?m0_p ?m0_o .
         }
-        {
-          SELECT ?m0_s ?m0_p ( COUNT( ?m0_o ) AS ?m0_count ) WHERE {
-            ?m0_s ?m0_p ?m0_o .
-          }
-          GROUP BY ?m0_s?m0_p
-        }
+        GROUP BY ?m0_s?m0_p
       }
     }
-    BIND( ?m0_s AS ?uq_a )
-    BIND( ?m0_count AS ?uq_b )
   }
+  BIND( ?m0_s AS ?uq_a )
+  BIND( ?m0_count AS ?uq_b )
 }`,
         [ `CONSTRUCT { ?s ?p ?count } WHERE {
   { SELECT ?s ?p (COUNT(?o) AS ?count) { ?s ?p ?o } GROUP BY ?s ?p }
@@ -1339,19 +1366,17 @@ describe('dummy', () => {
         `SELECT * { ?a <ex://c> ?b }`,
         `SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
   {
-    {
-      SELECT ?m0_count ?m0_s WHERE {
-        {
-          SELECT ?m0_s ( COUNT( ?m0_o ) AS ?m0_count ) WHERE {
-            ?m0_s <ex://c> ?m0_o .
-          }
-          GROUP BY ?m0_s
+    SELECT ?m0_count ?m0_s WHERE {
+      {
+        SELECT ?m0_s ( COUNT( ?m0_o ) AS ?m0_count ) WHERE {
+          ?m0_s <ex://c> ?m0_o .
         }
+        GROUP BY ?m0_s
       }
     }
-    BIND( ?m0_s AS ?uq_a )
-    BIND( ?m0_count AS ?uq_b )
   }
+  BIND( ?m0_s AS ?uq_a )
+  BIND( ?m0_count AS ?uq_b )
 }`,
         [ `CONSTRUCT { ?s ?p ?count } WHERE {
   { SELECT ?s ?p (COUNT(?o) AS ?count) { ?s ?p ?o } GROUP BY ?s ?p }
@@ -1365,18 +1390,16 @@ describe('dummy', () => {
       `SELECT * { ?a <ex://c> ?b }`,
       `SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
   {
-    {
-      SELECT ?m0_o ?m0_s WHERE {
-        {
-          SELECT ?m0_s ?m0_o WHERE {
-            ?m0_s <ex://c> ?m0_o .
-          }
+    SELECT ?m0_o ?m0_s WHERE {
+      {
+        SELECT ?m0_s ?m0_o WHERE {
+          ?m0_s <ex://c> ?m0_o .
         }
       }
     }
-    BIND( ?m0_s AS ?uq_a )
-    BIND( ?m0_o AS ?uq_b )
   }
+  BIND( ?m0_s AS ?uq_a )
+  BIND( ?m0_o AS ?uq_b )
 }`,
       [ `CONSTRUCT { ?s ?p ?o } WHERE { SELECT ?s ?p ?o WHERE { ?s ?p ?o } ORDER BY ?p }` ],
       [ operationTransform, substituteVarsThatArePreBoundToTerms ],
@@ -1388,20 +1411,18 @@ describe('dummy', () => {
       `SELECT * { ?a <ex://c> ?b }`,
       `SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
   {
-    {
-      SELECT ?m0_o ?m0_s WHERE {
-        {
+    SELECT ?m0_o ?m0_s WHERE {
+      {
+        SELECT ?m0_s ?m0_o WHERE {
           SELECT ?m0_s ?m0_o WHERE {
-            SELECT ?m0_s ?m0_o WHERE {
-              ?m0_s <ex://c> ?m0_o .
-            }
+            ?m0_s <ex://c> ?m0_o .
           }
         }
       }
     }
-    BIND( ?m0_s AS ?uq_a )
-    BIND( ?m0_o AS ?uq_b )
   }
+  BIND( ?m0_s AS ?uq_a )
+  BIND( ?m0_o AS ?uq_b )
 }`,
       [ `CONSTRUCT { ?s ?p ?o } WHERE { { SELECT ?s ?p ?o WHERE { { SELECT ?s ?p ?o WHERE { ?s ?p ?o } } } } }` ],
       [ operationTransform, substituteVarsThatArePreBoundToTerms ],
@@ -1413,17 +1434,15 @@ describe('dummy', () => {
       `SELECT * { ?a <ex://c> ?b }`,
       `SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
   {
-    {
-      SELECT ?m0_o ?m0_s WHERE {
-        ?m0_s <ex://x> ?m0_o .
-        OPTIONAL {
-          ?m0_s <ex://c> ?m0_o .
-        }
+    SELECT ?m0_o ?m0_s WHERE {
+      ?m0_s <ex://x> ?m0_o .
+      OPTIONAL {
+        ?m0_s <ex://c> ?m0_o .
       }
     }
-    BIND( ?m0_s AS ?uq_a )
-    BIND( ?m0_o AS ?uq_b )
   }
+  BIND( ?m0_s AS ?uq_a )
+  BIND( ?m0_o AS ?uq_b )
 }`,
       [ `CONSTRUCT { ?s ?p ?o } WHERE { ?s <ex://x> ?o . OPTIONAL { ?s ?p ?o } }` ],
       [ operationTransform, substituteVarsThatArePreBoundToTerms ],
@@ -1435,19 +1454,17 @@ describe('dummy', () => {
       `SELECT * { ?a <ex://c> ?b }`,
       `SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
   {
-    {
-      SELECT ?m0_o ?m0_s WHERE {
-        {
-          SELECT ?m0_s ?m0_o WHERE {
-            ?m0_s <ex://c> ?m0_o .
-            FILTER ( ( <ex://c> = <ex://c> ) )
-          }
+    SELECT ?m0_o ?m0_s WHERE {
+      {
+        SELECT ?m0_s ?m0_o WHERE {
+          ?m0_s <ex://c> ?m0_o .
+          FILTER ( ( <ex://c> = <ex://c> ) )
         }
       }
     }
-    BIND( ?m0_s AS ?uq_a )
-    BIND( ?m0_o AS ?uq_b )
   }
+  BIND( ?m0_s AS ?uq_a )
+  BIND( ?m0_o AS ?uq_b )
 }`,
       [ `CONSTRUCT { ?s ?p ?o } WHERE { SELECT ?s ?p ?o WHERE { ?s ?p ?o . FILTER(?p = <ex://c>) } }` ],
       [ operationTransform, substituteVarsThatArePreBoundToTerms ],
@@ -1459,24 +1476,542 @@ describe('dummy', () => {
       `SELECT * { ?a <ex://c> ?b }`,
       `SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) WHERE {
   {
-    {
-      SELECT ?m0_count ?m0_s WHERE {
-        {
-          SELECT ?m0_s ( COUNT( ?m0_o ) AS ?m0_count ) WHERE {
-            ?m0_s <ex://c> ?m0_o .
-          }
-          GROUP BY ?m0_s
-          HAVING ( COUNT( ?m0_o ) > "5"^^<http://www.w3.org/2001/XMLSchema#integer> )
+    SELECT ?m0_count ?m0_s WHERE {
+      {
+        SELECT ?m0_s ( COUNT( ?m0_o ) AS ?m0_count ) WHERE {
+          ?m0_s <ex://c> ?m0_o .
         }
+        GROUP BY ?m0_s
+        HAVING ( COUNT( ?m0_o ) > "5"^^<http://www.w3.org/2001/XMLSchema#integer> )
       }
     }
-    BIND( ?m0_s AS ?uq_a )
-    BIND( ?m0_count AS ?uq_b )
   }
+  BIND( ?m0_s AS ?uq_a )
+  BIND( ?m0_count AS ?uq_b )
 }`,
       [ `CONSTRUCT { ?s ?p ?count } WHERE {
   { SELECT ?s ?p (COUNT(?o) AS ?count) { ?s ?p ?o } GROUP BY ?s ?p HAVING(COUNT(?o) > 5) }
 }` ],
       [ operationTransform, substituteVarsThatArePreBoundToTerms ],
+    ));
+
+  describe('user query with GROUP BY aggregation', () => {
+    const spoConstruct = `CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o . FILTER(!isTriple(?o)) }`;
+
+    it('basic group by in user query produces valid subSELECT', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT ?s (COUNT(?o) AS ?count) WHERE { ?s ?p ?o } GROUP BY ?s`,
+        `SELECT ( ?uq_s AS ?s ) ( ?uq_count AS ?count ) WHERE {
+  SELECT ?uq_s ( COUNT( ?uq_o ) AS ?uq_count ) WHERE {
+    {
+      SELECT ?m0_o ?m0_p ?m0_s WHERE {
+        ?m0_s ?m0_p ?m0_o .
+        FILTER ( ! ISTRIPLE( ?m0_o ) )
+      }
+    }
+    BIND( ?m0_o AS ?uq_o )
+    BIND( ?m0_p AS ?uq_p )
+    BIND( ?m0_s AS ?uq_s )
+  }
+  GROUP BY ?uq_s
+}`,
+        [ spoConstruct ],
+      ));
+
+    it('group by with multiple projected vars', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT ?s ?p (COUNT(?o) AS ?count) WHERE { ?s ?p ?o } GROUP BY ?s ?p`,
+        `SELECT ( ?uq_s AS ?s ) ( ?uq_p AS ?p ) ( ?uq_count AS ?count ) WHERE {
+  SELECT ?uq_s ?uq_p ( COUNT( ?uq_o ) AS ?uq_count ) WHERE {
+    {
+      SELECT ?m0_o ?m0_p ?m0_s WHERE {
+        ?m0_s ?m0_p ?m0_o .
+        FILTER ( ! ISTRIPLE( ?m0_o ) )
+      }
+    }
+    BIND( ?m0_o AS ?uq_o )
+    BIND( ?m0_p AS ?uq_p )
+    BIND( ?m0_s AS ?uq_s )
+  }
+  GROUP BY ?uq_s?uq_p
+}`,
+        [ spoConstruct ],
+      ));
+
+    it('group by with HAVING', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT ?s (COUNT(?o) AS ?count) WHERE { ?s ?p ?o } GROUP BY ?s HAVING (COUNT(?o) > 5)`,
+        `SELECT ( ?uq_s AS ?s ) ( ?uq_count AS ?count ) WHERE {
+  SELECT ?uq_s ( COUNT( ?uq_o ) AS ?uq_count ) WHERE {
+    {
+      {
+        SELECT ?m0_o ?m0_p ?m0_s WHERE {
+          ?m0_s ?m0_p ?m0_o .
+          FILTER ( ! ISTRIPLE( ?m0_o ) )
+        }
+      }
+      BIND( ?m0_o AS ?uq_o )
+      BIND( ?m0_p AS ?uq_p )
+      BIND( ?m0_s AS ?uq_s )
+    }
+  }
+  GROUP BY ?uq_s
+  HAVING ( COUNT( ?uq_o ) > "5"^^<http://www.w3.org/2001/XMLSchema#integer> )
+}`,
+        [ spoConstruct ],
+      ));
+
+    it('group by with ORDER BY', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT ?s (COUNT(?o) AS ?count) WHERE { ?s ?p ?o } GROUP BY ?s ORDER BY DESC(?count)`,
+        `SELECT ( ?uq_s AS ?s ) ( ?uq_count AS ?count ) WHERE {
+  SELECT ?uq_s ( COUNT( ?uq_o ) AS ?uq_count ) WHERE {
+    {
+      SELECT ?m0_o ?m0_p ?m0_s WHERE {
+        ?m0_s ?m0_p ?m0_o .
+        FILTER ( ! ISTRIPLE( ?m0_o ) )
+      }
+    }
+    BIND( ?m0_o AS ?uq_o )
+    BIND( ?m0_p AS ?uq_p )
+    BIND( ?m0_s AS ?uq_s )
+  }
+  GROUP BY ?uq_s
+  ORDER BY DESC ( ?uq_count )
+}`,
+        [ spoConstruct ],
+      ));
+
+    it('select DISTINCT with GROUP BY', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT DISTINCT ?s (COUNT(?o) AS ?count) WHERE { ?s ?p ?o } GROUP BY ?s`,
+        `SELECT DISTINCT ( ?uq_s AS ?s ) ( ?uq_count AS ?count ) WHERE {
+  SELECT ?uq_s ( COUNT( ?uq_o ) AS ?uq_count ) WHERE {
+    {
+      SELECT ?m0_o ?m0_p ?m0_s WHERE {
+        ?m0_s ?m0_p ?m0_o .
+        FILTER ( ! ISTRIPLE( ?m0_o ) )
+      }
+    }
+    BIND( ?m0_o AS ?uq_o )
+    BIND( ?m0_p AS ?uq_p )
+    BIND( ?m0_s AS ?uq_s )
+  }
+  GROUP BY ?uq_s
+}`,
+        [ spoConstruct ],
+      ));
+
+    it('group by with unprojected group variable', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT (COUNT(?o) AS ?count) WHERE { ?s ?p ?o } GROUP BY ?s`,
+        `SELECT ( ?uq_count AS ?count ) WHERE {
+  SELECT ( COUNT( ?uq_o ) AS ?uq_count ) WHERE {
+    {
+      SELECT ?m0_o ?m0_p ?m0_s WHERE {
+        ?m0_s ?m0_p ?m0_o .
+        FILTER ( ! ISTRIPLE( ?m0_o ) )
+      }
+    }
+    BIND( ?m0_o AS ?uq_o )
+    BIND( ?m0_p AS ?uq_p )
+    BIND( ?m0_s AS ?uq_s )
+  }
+  GROUP BY ?uq_s
+}`,
+        [ spoConstruct ],
+      ));
+
+    it('group by with multiple aggregates', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT ?s (COUNT(?o) AS ?cnt) (SUM(?o) AS ?sm) WHERE { ?s ?p ?o } GROUP BY ?s`,
+        `SELECT ( ?uq_s AS ?s ) ( ?uq_cnt AS ?cnt ) ( ?uq_sm AS ?sm ) WHERE {
+  SELECT ?uq_s ( COUNT( ?uq_o ) AS ?uq_cnt ) ( SUM( ?uq_o ) AS ?uq_sm ) WHERE {
+    {
+      SELECT ?m0_o ?m0_p ?m0_s WHERE {
+        ?m0_s ?m0_p ?m0_o .
+        FILTER ( ! ISTRIPLE( ?m0_o ) )
+      }
+    }
+    BIND( ?m0_o AS ?uq_o )
+    BIND( ?m0_p AS ?uq_p )
+    BIND( ?m0_s AS ?uq_s )
+  }
+  GROUP BY ?uq_s
+}`,
+        [ spoConstruct ],
+      ));
+
+    it('group by with substituteVarsThatArePreBoundToTerms optimization', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT ?s (COUNT(?o) AS ?count) WHERE { ?s <ex://p> ?o } GROUP BY ?s`,
+        `SELECT ( ?uq_s AS ?s ) ( ?uq_count AS ?count ) WHERE {
+  SELECT ?uq_s ( COUNT( ?uq_o ) AS ?uq_count ) WHERE {
+    {
+      SELECT ?m0_o ?m0_s WHERE {
+        {
+          ?m0_s <ex://p> ?m0_o .
+          FILTER ( ! ISTRIPLE( ?m0_o ) )
+        }
+      }
+    }
+    BIND( ?m0_o AS ?uq_o )
+    BIND( ?m0_s AS ?uq_s )
+  }
+  GROUP BY ?uq_s
+}`,
+        [ spoConstruct ],
+        [ operationTransform, substituteVarsThatArePreBoundToTerms, transformFilterFalse ],
+      ));
+  });
+
+  describe('user query with GROUP BY aggregation in subquery', () => {
+    const spoConstruct = `CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o . FILTER(!isTriple(?o)) }`;
+
+    it('inner subquery with GROUP BY projecting aggregate is correctly rewritten', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT ?s ?c WHERE { { SELECT ?s (COUNT(?o) AS ?c) WHERE { ?s ?p ?o } GROUP BY ?s } }`,
+        `SELECT ( ?uq_s AS ?s ) ( ?uq_c AS ?c ) WHERE {
+  SELECT ?uq_s ( COUNT( ?uq_o ) AS ?uq_c ) WHERE {
+    {
+      SELECT ?m0_o ?m0_p ?m0_s WHERE {
+        ?m0_s ?m0_p ?m0_o .
+        FILTER ( ! ISTRIPLE( ?m0_o ) )
+      }
+    }
+    BIND( ?m0_o AS ?uq_o )
+    BIND( ?m0_p AS ?uq_p )
+    BIND( ?m0_s AS ?uq_s )
+  }
+  GROUP BY ?uq_s
+}`,
+        [ spoConstruct ],
+      ));
+
+    it('inner subquery with GROUP BY and HAVING is correctly rewritten', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT ?s ?c WHERE { { SELECT ?s (COUNT(?o) AS ?c) WHERE { ?s ?p ?o } GROUP BY ?s HAVING (COUNT(?o) > 3) } }`,
+        `SELECT ( ?uq_s AS ?s ) ( ?uq_c AS ?c ) WHERE {
+  SELECT ?uq_s ( COUNT( ?uq_o ) AS ?uq_c ) WHERE {
+    {
+      {
+        SELECT ?m0_o ?m0_p ?m0_s WHERE {
+          ?m0_s ?m0_p ?m0_o .
+          FILTER ( ! ISTRIPLE( ?m0_o ) )
+        }
+      }
+      BIND( ?m0_o AS ?uq_o )
+      BIND( ?m0_p AS ?uq_p )
+      BIND( ?m0_s AS ?uq_s )
+    }
+  }
+  GROUP BY ?uq_s
+  HAVING ( COUNT( ?uq_o ) > "3"^^<http://www.w3.org/2001/XMLSchema#integer> )
+}`,
+        [ spoConstruct ],
+      ));
+
+    it('inner subquery with GROUP BY HAVING that does not project the aggregate', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT ?s ?p WHERE { ?s ?p ?o . { SELECT ?o WHERE { ?s ?p ?o } GROUP BY ?s ?p HAVING (COUNT(?o) > 10) } }`,
+        `SELECT ( ?uq_s AS ?s ) ( ?uq_p AS ?p ) WHERE {
+  {
+    {
+      SELECT ?m0_o ?m0_p ?m0_s WHERE {
+        ?m0_s ?m0_p ?m0_o .
+        FILTER ( ! ISTRIPLE( ?m0_o ) )
+      }
+    }
+    BIND( ?m0_o AS ?uq_o )
+    BIND( ?m0_p AS ?uq_p )
+    BIND( ?m0_s AS ?uq_s )
+  }
+  {
+    SELECT ?uq_o WHERE {
+      {
+        {
+          SELECT ?m0_o ?m0_p ?m0_s WHERE {
+            ?m0_s ?m0_p ?m0_o .
+            FILTER ( ! ISTRIPLE( ?m0_o ) )
+          }
+        }
+        BIND( ?m0_o AS ?uq_o )
+        BIND( ?m0_p AS ?uq_p )
+        BIND( ?m0_s AS ?uq_s )
+      }
+    }
+    GROUP BY ?uq_s?uq_p
+    HAVING ( COUNT( ?uq_o ) > "10"^^<http://www.w3.org/2001/XMLSchema#integer> )
+  }
+}`,
+        [ spoConstruct ],
+      ));
+
+    it('inner and outer GROUP BY are both rewritten correctly (user example)', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT ?s ?p WHERE { ?s ?p ?o . { SELECT ?o WHERE { ?s ?p ?o } GROUP BY ?s ?p HAVING (COUNT(?o) > 10) } } GROUP BY ?s ?p HAVING (COUNT(?o) > 5)`,
+        `SELECT ( ?uq_s AS ?s ) ( ?uq_p AS ?p ) WHERE {
+  SELECT ?uq_s ?uq_p WHERE {
+    {
+      {
+        SELECT ?m0_o ?m0_p ?m0_s WHERE {
+          ?m0_s ?m0_p ?m0_o .
+          FILTER ( ! ISTRIPLE( ?m0_o ) )
+        }
+      }
+      BIND( ?m0_o AS ?uq_o )
+      BIND( ?m0_p AS ?uq_p )
+      BIND( ?m0_s AS ?uq_s )
+    }
+    {
+      SELECT ?uq_o WHERE {
+        {
+          {
+            SELECT ?m0_o ?m0_p ?m0_s WHERE {
+              ?m0_s ?m0_p ?m0_o .
+              FILTER ( ! ISTRIPLE( ?m0_o ) )
+            }
+          }
+          BIND( ?m0_o AS ?uq_o )
+          BIND( ?m0_p AS ?uq_p )
+          BIND( ?m0_s AS ?uq_s )
+        }
+      }
+      GROUP BY ?uq_s?uq_p
+      HAVING ( COUNT( ?uq_o ) > "10"^^<http://www.w3.org/2001/XMLSchema#integer> )
+    }
+  }
+  GROUP BY ?uq_s?uq_p
+  HAVING ( COUNT( ?uq_o ) > "5"^^<http://www.w3.org/2001/XMLSchema#integer> )
+}`,
+        [ spoConstruct ],
+      ));
+
+    it('outer aggregate over inner subquery aggregate is correctly rewritten', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT ?s (SUM(?c) AS ?total) WHERE { { SELECT ?s (COUNT(?o) AS ?c) WHERE { ?s ?p ?o } GROUP BY ?s } } GROUP BY ?s`,
+        `SELECT ( ?uq_s AS ?s ) ( ?uq_total AS ?total ) WHERE {
+  SELECT ?uq_s ( SUM( ?uq_c ) AS ?uq_total ) WHERE {
+    SELECT ?uq_s ( COUNT( ?uq_o ) AS ?uq_c ) WHERE {
+      {
+        SELECT ?m0_o ?m0_p ?m0_s WHERE {
+          ?m0_s ?m0_p ?m0_o .
+          FILTER ( ! ISTRIPLE( ?m0_o ) )
+        }
+      }
+      BIND( ?m0_o AS ?uq_o )
+      BIND( ?m0_p AS ?uq_p )
+      BIND( ?m0_s AS ?uq_s )
+    }
+    GROUP BY ?uq_s
+  }
+  GROUP BY ?uq_s
+}`,
+        [ spoConstruct ],
+      ));
+
+    it('inner subquery aggregate is joined with outer BGP (no outer GROUP BY)', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        `SELECT ?s ?c WHERE { ?s ?p ?o . { SELECT ?s (COUNT(?o) AS ?c) WHERE { ?s ?p ?o } GROUP BY ?s } }`,
+        `SELECT ( ?uq_s AS ?s ) ( ?uq_c AS ?c ) WHERE {
+  {
+    {
+      SELECT ?m0_o ?m0_p ?m0_s WHERE {
+        ?m0_s ?m0_p ?m0_o .
+        FILTER ( ! ISTRIPLE( ?m0_o ) )
+      }
+    }
+    BIND( ?m0_o AS ?uq_o )
+    BIND( ?m0_p AS ?uq_p )
+    BIND( ?m0_s AS ?uq_s )
+  }
+  {
+    SELECT ?uq_s ( COUNT( ?uq_o ) AS ?uq_c ) WHERE {
+      {
+        SELECT ?m0_o ?m0_p ?m0_s WHERE {
+          ?m0_s ?m0_p ?m0_o .
+          FILTER ( ! ISTRIPLE( ?m0_o ) )
+        }
+      }
+      BIND( ?m0_o AS ?uq_o )
+      BIND( ?m0_p AS ?uq_p )
+      BIND( ?m0_s AS ?uq_s )
+    }
+    GROUP BY ?uq_s
+  }
+}`,
+        [ spoConstruct ],
+      ));
+
+    it(
+      'substituteVarsThatArePreBoundToTerms applies to outer BGP; inner GROUP BY subquery is rewritten independently',
+      ({ expect }) => testConstructMappers(
+        expect,
+        `SELECT ?c WHERE { ?s <ex://p> ?o . { SELECT ?s (COUNT(?o) AS ?c) WHERE { ?s ?p ?o } GROUP BY ?s } }`,
+        `SELECT ( ?uq_c AS ?c ) WHERE {
+  {
+    {
+      SELECT ?m0_o ?m0_s WHERE {
+        {
+          ?m0_s <ex://p> ?m0_o .
+          FILTER ( ! ISTRIPLE( ?m0_o ) )
+        }
+      }
+    }
+    BIND( ?m0_o AS ?uq_o )
+    BIND( ?m0_s AS ?uq_s )
+  }
+  {
+    SELECT ?uq_s ( COUNT( ?uq_o ) AS ?uq_c ) WHERE {
+      {
+        SELECT ?m0_o ?m0_p ?m0_s WHERE {
+          ?m0_s ?m0_p ?m0_o .
+          FILTER ( ! ISTRIPLE( ?m0_o ) )
+        }
+      }
+      BIND( ?m0_o AS ?uq_o )
+      BIND( ?m0_p AS ?uq_p )
+      BIND( ?m0_s AS ?uq_s )
+    }
+    GROUP BY ?uq_s
+  }
+}`,
+        [ spoConstruct ],
+        [ operationTransform, substituteVarsThatArePreBoundToTerms, transformFilterFalse ],
+      ),
+    );
+  });
+
+  it('service calls can be pushed up on the same service', ({ expect }) =>
+    testConstructMappers(
+      expect,
+      `SELECT * { ?a ?b ?c ; <ex://x> ?y . }`,
+      `SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) ( ?uq_c AS ?c ) ( ?uq_y AS ?y ) WHERE {
+  SERVICE <ex://a> {
+    {
+      {
+        SELECT ?m0_o ?m0_p ?m0_s WHERE {
+          ?m0_s ?m0_p ?m0_o .
+        }
+      }
+      BIND( ?m0_s AS ?uq_a )
+      BIND( ?m0_p AS ?uq_b )
+      BIND( ?m0_o AS ?uq_c )
+    }
+    {
+      {
+        SELECT ?m0_o ?m0_s WHERE {
+          VALUES ?m0_p {
+            <ex://x>
+          }
+          ?m0_s ?m0_p ?m0_o .
+        }
+      }
+      BIND( ?m0_s AS ?uq_a )
+      BIND( ?m0_o AS ?uq_y )
+    }
+  }
+}`,
+      [ `CONSTRUCT { ?s ?p ?o } WHERE { SERVICE <ex://a> { ?s ?p ?o } }` ],
+      [ operationTransform, transformExtendsToValues, transformServiceCallPushUp ],
+    ));
+
+  it('vALUES clause placed before the triple is pushed inside the SERVICE', ({ expect }) =>
+    testConstructMappers(
+      expect,
+      `SELECT * { VALUES ?p { <ex://x> } . ?s ?p ?o }`,
+      `SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) WHERE {
+  SERVICE <ex://a> {
+    VALUES ?uq_p {
+      <ex://x>
+    }
+    {
+      {
+        SELECT ?m0_o ?m0_p ?m0_s WHERE {
+          ?m0_s ?m0_p ?m0_o .
+        }
+      }
+      BIND( ?m0_o AS ?uq_o )
+      BIND( ?m0_p AS ?uq_p )
+      BIND( ?m0_s AS ?uq_s )
+    }
+  }
+}`,
+      [ `CONSTRUCT { ?s ?p ?o } WHERE { SERVICE <ex://a> { ?s ?p ?o } }` ],
+      [ operationTransform, transformExtendsToValues, transformServiceCallPushUp ],
+    ));
+
+  it('vALUES clause placed after the triple is pushed inside the SERVICE', ({ expect }) =>
+    testConstructMappers(
+      expect,
+      `SELECT * { ?s ?p ?o . VALUES ?p { <ex://x> } }`,
+      `SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) WHERE {
+  SERVICE <ex://a> {
+    VALUES ?uq_p {
+      <ex://x>
+    }
+    {
+      {
+        SELECT ?m0_o ?m0_p ?m0_s WHERE {
+          ?m0_s ?m0_p ?m0_o .
+        }
+      }
+      BIND( ?m0_o AS ?uq_o )
+      BIND( ?m0_p AS ?uq_p )
+      BIND( ?m0_s AS ?uq_s )
+    }
+  }
+}`,
+      [ `CONSTRUCT { ?s ?p ?o } WHERE { SERVICE <ex://a> { ?s ?p ?o } }` ],
+      [ operationTransform, transformExtendsToValues, transformServiceCallPushUp ],
+    ));
+
+  it('vALUES clause is pushed into a SERVICE that covers multiple joined patterns', ({ expect }) =>
+    testConstructMappers(
+      expect,
+      `SELECT * { VALUES ?p { <ex://x> } . ?a ?p ?c . ?a ?b ?d }`,
+      `SELECT ( ?uq_a AS ?a ) ( ?uq_b AS ?b ) ( ?uq_c AS ?c ) ( ?uq_d AS ?d ) ( ?uq_p AS ?p ) WHERE {
+  SERVICE <ex://a> {
+    VALUES ?uq_p {
+      <ex://x>
+    }
+    {
+      {
+        SELECT ?m0_o ?m0_p ?m0_s WHERE {
+          ?m0_s ?m0_p ?m0_o .
+        }
+      }
+      BIND( ?m0_s AS ?uq_a )
+      BIND( ?m0_o AS ?uq_c )
+      BIND( ?m0_p AS ?uq_p )
+    }
+    {
+      {
+        SELECT ?m0_o ?m0_p ?m0_s WHERE {
+          ?m0_s ?m0_p ?m0_o .
+        }
+      }
+      BIND( ?m0_s AS ?uq_a )
+      BIND( ?m0_p AS ?uq_b )
+      BIND( ?m0_o AS ?uq_d )
+    }
+  }
+}`,
+      [ `CONSTRUCT { ?s ?p ?o } WHERE { SERVICE <ex://a> { ?s ?p ?o } }` ],
+      [ operationTransform, transformExtendsToValues, transformServiceCallPushUp ],
     ));
 });

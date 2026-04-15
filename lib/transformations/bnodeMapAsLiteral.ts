@@ -171,7 +171,7 @@ export function internalBnodeAsSpecialLiteral<T extends Algebra.Operation>(c: Tr
 
         return AF.createOperatorExpression('=', [
           AF.createOperatorExpression('datatype', expression.args),
-          AF.createTermExpression(DF.literal(DT_INTERNAL_BNODE)),
+          AF.createTermExpression(DF.namedNode(DT_INTERNAL_BNODE)),
         ]);
       },
     }}},

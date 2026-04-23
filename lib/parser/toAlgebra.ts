@@ -14,7 +14,7 @@ import { IndirBuilder } from '@traqula/core';
 import type { TermLiteral } from '@traqula/rules-sparql-1-1';
 import type { PatternBgp, TermIri, TermVariable, TripleNesting } from '@traqula/rules-sparql-1-2';
 import { ViewAstFactory } from './astFactory.js';
-import type { ViewDefinition, ViewPair } from './types.js';
+import type { ContextDefinitionView, ViewPair } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Extended context
@@ -25,7 +25,7 @@ type BaseAlgebraContext = ReturnType<typeof createAlgebraContext>;
 export type ViewAlgebraContext = BaseAlgebraContext & {
   astFactory: ViewAstFactory;
   /** Registered views keyed by fully-resolved IRI */
-  views: Map<string, ViewDefinition>;
+  views: Map<string, ContextDefinitionView>;
   /** IRIs of views currently being expanded (cycle detection) */
   expandingViews: Set<string>;
 };

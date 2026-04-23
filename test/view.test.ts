@@ -3,9 +3,6 @@ import { describe, it, expect } from 'vitest';
 import { ViewParser } from '../lib/parser/parser.js';
 import { toAlgebra } from '../lib/parser/toAlgebra.js';
 
-/**
- * Integration tests for VIEW definitions and OVER query operations.
- */
 describe('vIEW parser and toAlgebra', () => {
   const parser = new ViewParser();
 

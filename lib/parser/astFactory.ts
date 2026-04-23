@@ -1,7 +1,7 @@
 import type { SourceLocation } from '@traqula/core';
 import { AstFactory as Sparql12AstFactory } from '@traqula/rules-sparql-1-2';
 import type { TermIri, PatternBgp, PatternGroup } from '@traqula/rules-sparql-1-2';
-import type { ViewDefinition, ViewPair, PatternOver } from './types.js';
+import type { ContextDefinitionView, ViewPair, PatternOver } from './types.js';
 
 /**
  * Extended AstFactory that adds support for VIEW definitions and OVER patterns.
@@ -12,11 +12,11 @@ export class ViewAstFactory extends Sparql12AstFactory {
     monotone: boolean,
     pairs: ViewPair[],
     loc: SourceLocation,
-  ): ViewDefinition {
+  ): ContextDefinitionView {
     return { type: 'contextDef', subType: 'view', name, monotone, pairs, loc };
   }
 
-  public isViewDefinition(obj: object): obj is ViewDefinition {
+  public isViewDefinition(obj: object): obj is ContextDefinitionView {
     return this.isOfSubType(obj, 'contextDef', 'view');
   }
 

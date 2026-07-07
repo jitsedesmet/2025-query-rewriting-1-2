@@ -32,8 +32,8 @@ export interface TransformContext {
   astTransformer: AstTransformer;
   /** Solver for variable clustering and unification during rewriting */
   clusterSolver: ClusterSolver;
-  /** The active mappings to apply during transformation */
-  mappers: Mapping[];
+  /** The active mapping to apply during transformation */
+  mapper: Mapping;
 }
 
 /**
@@ -157,11 +157,11 @@ ${JSON.stringify(construct.template, null, 2)}`);
 }
 
 /**
- * Creates a partial TransformContext without mappers.
- * Used as a base for creating full contexts with different mapper configurations.
- * @returns A context object with all components except mappers
+ * Creates a partial TransformContext without a mapper.
+ * Used as a base for creating full contexts with a specific mapper configuration.
+ * @returns A context object with all components except the mapper
  */
-export function createPartialContext(): Omit<TransformContext, 'mappers'> {
+export function createPartialContext(): Omit<TransformContext, 'mapper'> {
   return {
     parser: new Parser(),
     generator: new MyGenerator(),
@@ -190,9 +190,10 @@ export function transformContextFromConstructs(mappers: readonly string[]): Tran
   const algebraMappers = mappers
     .map(constructQuery => constructToMapper(partialContext, constructQuery))
     .map((mapping, index) => prefixMappingVars(partialContext, mapping, `m${index}_`));
+  const mapper = mergeMappingsIntoSingle(partialContext, algebraMappers);
   return {
-    mappers: algebraMappers,
     ...partialContext,
+    mapper,
   };
 }
 

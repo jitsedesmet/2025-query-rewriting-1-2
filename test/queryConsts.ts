@@ -68,270 +68,241 @@ SELECT * WHERE {
   ?s1 ?s1 ?o1 .
 }`;
 
-export const expectedQuery = `
-SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) ( ?uq_s1 AS ?s1 ) WHERE {
-  {
-    {
-      SELECT ?m0_o WHERE {
-        {
-          BIND( <https://example.com/name> AS ?m0_p )
-          BIND( <https://example.com/me> AS ?m0_s )
-          BIND( <https://example.com/t> AS ?m0_t )
-        }
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> ?m0_s .
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> ?m0_p .
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
-        ?m0_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m0_g_0 .
-      }
-    }
-    BIND( ?m0_o AS ?uq_name )
-  }
-  UNION {
-    FILTER ( FALSE )
-  }
+export const expectedQuery = `SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) ( ?uq_s1 AS ?s1 ) WHERE {
   {
     FILTER ( FALSE )
   }
-  UNION {
+  {
     SELECT ( "dummy" AS ?dummy ) WHERE {
       {
-        BIND( <https://example.com/govBE> AS ?m1_o )
-        BIND( <https://example.com/statedBy> AS ?m1_p )
-        BIND( <https://example.com/t> AS ?m1_s )
+        BIND( <https://example.com/govBE> AS ?ms_o )
+        BIND( <https://example.com/statedBy> AS ?ms_p )
+        BIND( <https://example.com/t> AS ?ms_s )
       }
       {
-        ?m1_s ?m1_p ?m1_o .
-        FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?m1_p != "rdf:reifies" ) && NOT EXISTS {
-          ?m1_sRoot <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m1_s .
-        }
-        ) ) )
-      }
-    }
-  }
-  {
-    {
-      SELECT ?m0_o ?m0_p ?m0_s ?m0_t WHERE {
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> ?m0_s .
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> ?m0_p .
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
-        ?m0_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m0_g_0 .
-      }
-    }
-    BIND( <<( ?m0_s ?m0_p ?m0_o )>> AS ?uq_o )
-    BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?uq_p )
-    BIND( ?m0_t AS ?uq_s )
-  }
-  UNION {
-    {
-      SELECT ?m1_o ?m1_p ?m1_s WHERE {
-        ?m1_s ?m1_p ?m1_o .
-        FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?m1_p != "rdf:reifies" ) && NOT EXISTS {
-          ?m1_sRoot <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m1_s .
-        }
-        ) ) )
-      }
-    }
-    BIND( ?m1_o AS ?uq_o )
-    BIND( ?m1_p AS ?uq_p )
-    BIND( ?m1_s AS ?uq_s )
-  }
-  {
-    {
-      SELECT ?m0_o ?m0_p ?m0_s WHERE {
         {
-          BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?m0_t )
+          SELECT ?m0_t WHERE {
+            ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
+            ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> ?m0_s .
+            ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> ?m0_p .
+            ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
+            ?m0_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m0_g_0 .
+          }
         }
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> ?m0_s .
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> ?m0_p .
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
-        ?m0_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m0_g_0 .
+        BIND( <<( ?m0_s ?m0_p ?m0_o )>> AS ?ms_o )
+        BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?ms_p )
+        BIND( ?m0_t AS ?ms_s )
+      }
+      UNION {
+        {
+          SELECT ?m1_s ?m1_o ?m1_p WHERE {
+            ?m1_s ?m1_p ?m1_o .
+            FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?m1_p != "rdf:reifies" ) && NOT EXISTS {
+              ?m1_sRoot <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m1_s .
+            }
+            ) ) )
+          }
+        }
+        BIND( ?m1_o AS ?ms_o )
+        BIND( ?m1_p AS ?ms_p )
+        BIND( ?m1_s AS ?ms_s )
       }
     }
-    BIND( <<( ?m0_s ?m0_p ?m0_o )>> AS ?uq_o1 )
-    BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?uq_s1 )
   }
-  UNION {
+  {
     {
-      SELECT ?m1_o ?rm1_s_AND_p WHERE {
-        ?rm1_s_AND_p ?rm1_s_AND_p ?m1_o .
-        FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?rm1_s_AND_p != "rdf:reifies" ) && NOT EXISTS {
-          ?m1_sRoot <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?rm1_s_AND_p .
+      SELECT ?ms_o ?ms_p ?ms_s WHERE {
+        {
+          {
+            SELECT ?m0_t WHERE {
+              ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
+              ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> ?m0_s .
+              ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> ?m0_p .
+              ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
+              ?m0_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m0_g_0 .
+            }
+          }
+          BIND( <<( ?m0_s ?m0_p ?m0_o )>> AS ?ms_o )
+          BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?ms_p )
+          BIND( ?m0_t AS ?ms_s )
         }
-        ) ) )
+        UNION {
+          {
+            SELECT ?m1_s ?m1_o ?m1_p WHERE {
+              ?m1_s ?m1_p ?m1_o .
+              FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?m1_p != "rdf:reifies" ) && NOT EXISTS {
+                ?m1_sRoot <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m1_s .
+              }
+              ) ) )
+            }
+          }
+          BIND( ?m1_o AS ?ms_o )
+          BIND( ?m1_p AS ?ms_p )
+          BIND( ?m1_s AS ?ms_s )
+        }
       }
     }
-    BIND( ?m1_o AS ?uq_o1 )
-    BIND( ?rm1_s_AND_p AS ?uq_s1 )
+    BIND( ?ms_o AS ?uq_o )
+    BIND( ?ms_p AS ?uq_p )
+    BIND( ?ms_s AS ?uq_s )
+  }
+  {
+    {
+      SELECT ?ms_o ?rms_s_AND_p WHERE {
+        {
+          {
+            SELECT ?m0_t WHERE {
+              ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
+              ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> ?m0_s .
+              ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> ?m0_p .
+              ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
+              ?m0_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m0_g_0 .
+            }
+          }
+          BIND( <<( ?m0_s ?m0_p ?m0_o )>> AS ?ms_o )
+          BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?rms_s_AND_p )
+          BIND( ?m0_t AS ?rms_s_AND_p )
+        }
+        UNION {
+          {
+            SELECT ?m1_s ?m1_o ?m1_p WHERE {
+              ?m1_s ?m1_p ?m1_o .
+              FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?m1_p != "rdf:reifies" ) && NOT EXISTS {
+                ?m1_sRoot <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m1_s .
+              }
+              ) ) )
+            }
+          }
+          BIND( ?m1_o AS ?ms_o )
+          BIND( ?m1_p AS ?rms_s_AND_p )
+          BIND( ?m1_s AS ?rms_s_AND_p )
+        }
+      }
+    }
+    BIND( ?ms_o AS ?uq_o1 )
+    BIND( ?rms_s_AND_p AS ?uq_s1 )
   }
 }`;
 
-export const expectedQueryOptimizedBounds = `
-SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) ( ?uq_s1 AS ?s1 ) WHERE {
-  {
-    {
-      SELECT ?m0_o WHERE {
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> <https://example.com/me> .
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> <https://example.com/name> .
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
-        <https://example.com/t> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m0_g_0 .
-      }
-    }
-    BIND( ?m0_o AS ?uq_name )
-  }
-  UNION {
-    FILTER ( FALSE )
-  }
+export const expectedQueryOptimizedBounds = `SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) ( ?uq_s1 AS ?s1 ) WHERE {
   {
     FILTER ( FALSE )
   }
-  UNION {
+  {
     SELECT ( "dummy" AS ?dummy ) WHERE {
       {
-        <https://example.com/t> <https://example.com/statedBy> <https://example.com/govBE> .
-        FILTER ( ( ! ISTRIPLE( <https://example.com/govBE> ) && ( ( <https://example.com/statedBy> != "rdf:reifies" ) && NOT EXISTS {
-          ?m1_sRoot <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <https://example.com/t> .
+        {
+          {
+            {
+              SELECT ?m0_t WHERE {
+                ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
+                ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> ?m0_s .
+                ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> ?m0_p .
+                ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
+                ?m0_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m0_g_0 .
+              }
+            }
+            FILTER ( FALSE )
+          }
+          FILTER ( FALSE )
         }
-        ) ) )
+        FILTER ( ( ?m0_t = <https://example.com/t> ) )
+      }
+      UNION {
+        {
+          {
+            {
+              SELECT ?m1_s ?m1_o ?m1_p WHERE {
+                ?m1_s ?m1_p ?m1_o .
+                FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?m1_p != "rdf:reifies" ) && NOT EXISTS {
+                  ?m1_sRoot <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m1_s .
+                }
+                ) ) )
+              }
+            }
+            FILTER ( ( ?m1_o = <https://example.com/govBE> ) )
+          }
+          FILTER ( ( ?m1_p = <https://example.com/statedBy> ) )
+        }
+        FILTER ( ( ?m1_s = <https://example.com/t> ) )
       }
     }
   }
   {
     {
-      SELECT ?m0_o ?m0_p ?m0_s ?m0_t WHERE {
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> ?m0_s .
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> ?m0_p .
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
-        ?m0_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m0_g_0 .
-      }
-    }
-    BIND( <<( ?m0_s ?m0_p ?m0_o )>> AS ?uq_o )
-    BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?uq_p )
-    BIND( ?m0_t AS ?uq_s )
-  }
-  UNION {
-    {
-      SELECT ?m1_o ?m1_p ?m1_s WHERE {
-        ?m1_s ?m1_p ?m1_o .
-        FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?m1_p != "rdf:reifies" ) && NOT EXISTS {
-          ?m1_sRoot <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m1_s .
+      SELECT ?ms_o ?ms_p ?ms_s WHERE {
+        {
+          {
+            SELECT ?m0_t WHERE {
+              ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
+              ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> ?m0_s .
+              ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> ?m0_p .
+              ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
+              ?m0_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m0_g_0 .
+            }
+          }
+          BIND( <<( ?m0_s ?m0_p ?m0_o )>> AS ?ms_o )
+          BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?ms_p )
+          BIND( ?m0_t AS ?ms_s )
         }
-        ) ) )
+        UNION {
+          {
+            SELECT ?m1_s ?m1_o ?m1_p WHERE {
+              ?m1_s ?m1_p ?m1_o .
+              FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?m1_p != "rdf:reifies" ) && NOT EXISTS {
+                ?m1_sRoot <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m1_s .
+              }
+              ) ) )
+            }
+          }
+          BIND( ?m1_o AS ?ms_o )
+          BIND( ?m1_p AS ?ms_p )
+          BIND( ?m1_s AS ?ms_s )
+        }
       }
     }
-    BIND( ?m1_o AS ?uq_o )
-    BIND( ?m1_p AS ?uq_p )
-    BIND( ?m1_s AS ?uq_s )
+    BIND( ?ms_o AS ?uq_o )
+    BIND( ?ms_p AS ?uq_p )
+    BIND( ?ms_s AS ?uq_s )
   }
   {
     {
-      SELECT ?m0_o ?m0_p ?m0_s WHERE {
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> ?m0_s .
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> ?m0_p .
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
-        <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m0_g_0 .
-      }
-    }
-    BIND( <<( ?m0_s ?m0_p ?m0_o )>> AS ?uq_o1 )
-    BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?uq_s1 )
-  }
-  UNION {
-    {
-      SELECT ?m1_o ?rm1_s_AND_p WHERE {
-        ?rm1_s_AND_p ?rm1_s_AND_p ?m1_o .
-        FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?rm1_s_AND_p != "rdf:reifies" ) && NOT EXISTS {
-          ?m1_sRoot <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?rm1_s_AND_p .
+      SELECT ?ms_o ?rms_s_AND_p WHERE {
+        {
+          {
+            SELECT ?m0_t WHERE {
+              ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
+              ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> ?m0_s .
+              ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> ?m0_p .
+              ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
+              ?m0_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m0_g_0 .
+            }
+          }
+          BIND( <<( ?m0_s ?m0_p ?m0_o )>> AS ?ms_o )
+          BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?rms_s_AND_p )
+          BIND( ?m0_t AS ?rms_s_AND_p )
         }
-        ) ) )
+        UNION {
+          {
+            SELECT ?m1_s ?m1_o ?m1_p WHERE {
+              ?m1_s ?m1_p ?m1_o .
+              FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?m1_p != "rdf:reifies" ) && NOT EXISTS {
+                ?m1_sRoot <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m1_s .
+              }
+              ) ) )
+            }
+          }
+          BIND( ?m1_o AS ?ms_o )
+          BIND( ?m1_p AS ?rms_s_AND_p )
+          BIND( ?m1_s AS ?rms_s_AND_p )
+        }
       }
     }
-    BIND( ?m1_o AS ?uq_o1 )
-    BIND( ?rm1_s_AND_p AS ?uq_s1 )
+    BIND( ?ms_o AS ?uq_o1 )
+    BIND( ?rms_s_AND_p AS ?uq_s1 )
   }
 }`;
 
-export const expectedQueryOptimizedBoundsAndEmptyRes = `
-SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) ( ?uq_s1 AS ?s1 ) WHERE {
-  {
-    {
-      SELECT ?m0_o WHERE {
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> <https://example.com/me> .
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> <https://example.com/name> .
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
-        <https://example.com/t> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m0_g_0 .
-      }
-    }
-    BIND( ?m0_o AS ?uq_name )
-  }
-  {
-    SELECT ( "dummy" AS ?dummy ) WHERE {
-      {
-        <https://example.com/t> <https://example.com/statedBy> <https://example.com/govBE> .
-        FILTER ( ( ! ISTRIPLE( <https://example.com/govBE> ) && ( ( <https://example.com/statedBy> != "rdf:reifies" ) && NOT EXISTS {
-          ?m1_sRoot <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <https://example.com/t> .
-        }
-        ) ) )
-      }
-    }
-  }
-  {
-    {
-      SELECT ?m0_o ?m0_p ?m0_s ?m0_t WHERE {
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> ?m0_s .
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> ?m0_p .
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
-        ?m0_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m0_g_0 .
-      }
-    }
-    BIND( <<( ?m0_s ?m0_p ?m0_o )>> AS ?uq_o )
-    BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?uq_p )
-    BIND( ?m0_t AS ?uq_s )
-  }
-  UNION {
-    {
-      SELECT ?m1_o ?m1_p ?m1_s WHERE {
-        ?m1_s ?m1_p ?m1_o .
-        FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?m1_p != "rdf:reifies" ) && NOT EXISTS {
-          ?m1_sRoot <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m1_s .
-        }
-        ) ) )
-      }
-    }
-    BIND( ?m1_o AS ?uq_o )
-    BIND( ?m1_p AS ?uq_p )
-    BIND( ?m1_s AS ?uq_s )
-  }
-  {
-    {
-      SELECT ?m0_o ?m0_p ?m0_s WHERE {
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#tripleTerm> .
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttSubject> ?m0_s .
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttPredicate> ?m0_p .
-        ?m0_g_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#ttObject> ?m0_o .
-        <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?m0_g_0 .
-      }
-    }
-    BIND( <<( ?m0_s ?m0_p ?m0_o )>> AS ?uq_o1 )
-    BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?uq_s1 )
-  }
-  UNION {
-    {
-      SELECT ?m1_o ?rm1_s_AND_p WHERE {
-        ?rm1_s_AND_p ?rm1_s_AND_p ?m1_o .
-        FILTER ( ( ! ISTRIPLE( ?m1_o ) && ( ( ?rm1_s_AND_p != "rdf:reifies" ) && NOT EXISTS {
-          ?m1_sRoot <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ?rm1_s_AND_p .
-        }
-        ) ) )
-      }
-    }
-    BIND( ?m1_o AS ?uq_o1 )
-    BIND( ?rm1_s_AND_p AS ?uq_s1 )
-  }
+export const expectedQueryOptimizedBoundsAndEmptyRes = `SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) ( ?uq_s1 AS ?s1 ) WHERE {
+  FILTER ( FALSE )
 }`;

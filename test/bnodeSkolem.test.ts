@@ -1,12 +1,13 @@
 import { describe, it } from 'vitest';
 import { DT_INTERNAL_BNODE } from '../lib/consts.js';
 import { internalBnodeAsSpecialLiteral } from '../lib/transformations/bnodeMapAsLiteral.js';
-import { createPartialContext } from '../lib/transformContext.js';
+import { createPartialContext, mergeMappingsIntoSingle } from '../lib/transformContext.js';
 
 describe('bnode skolem', () => {
+  const partialC = createPartialContext();
   const c = {
-    ...createPartialContext(),
-    mappers: [],
+    ...partialC,
+    mapper: mergeMappingsIntoSingle(partialC, []),
   };
   const AF = c.AF;
   const DF = c.DF;

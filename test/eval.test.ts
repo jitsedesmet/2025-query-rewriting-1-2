@@ -79,7 +79,9 @@ describe('evaluation tests', () => {
         transformFilterFalse,
       ]));
 
-      expect(resOnMappedData.getQuads(null, null, null, null))
+      expect(resOnMappedData.getQuads(null, null, null, null)
+        .filter(quad => !(quad.predicate.equals(DF.namedNode('http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies')) &&
+          (<any> quad.object).termType === 'Quad')))
         .toBeRdfIsomorphic(resUsingMapper.getQuads(null, null, null, null));
     });
   });

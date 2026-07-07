@@ -31,3 +31,13 @@
  * @see {@link https://w3c.github.io/rdf-interop/spec/} RDF 1.2 Interoperability Spec
  */
 export * from './transformations/index.js';
+export {
+  mergeMappingsIntoSingle,
+  transformContextFromConstructs,
+  createPartialContext,
+  constructToMapper,
+  prefixMappingVars,
+  prefixVarsInOperation,
+  parseQuery,
+} from './transformContext.js';
+export type { TransformContext } from './transformContext.js';

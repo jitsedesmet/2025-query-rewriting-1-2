@@ -85,6 +85,7 @@ export default config([
   {
     ignores: [
       'documentation',
+      'task.md',
     ],
   },
 ], { disableJest: true });

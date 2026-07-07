@@ -16,6 +16,8 @@ import {
   parseQuery,
   createPartialContext,
   transformContextFromConstructs,
+  mergeMappingsIntoSingle,
+  constructToMapper,
 } from '../lib/transformContext.js';
 import type { Mapping } from '../lib/types.js';
 import {
@@ -2014,4 +2016,187 @@ describe('dummy', () => {
       [ `CONSTRUCT { ?s ?p ?o } WHERE { SERVICE <ex://a> { ?s ?p ?o } }` ],
       [ operationTransform, transformExtendsToValues, transformServiceCallPushUp ],
     ));
+});
+
+describe('mergeMappingsIntoSingle', () => {
+  const c = createPartialContext();
+
+  /**
+   * Convenience helper that:
+   * 1. Prefixes each mapping (m0_, m1_, …)
+   * 2. Merges them into a single GAV mapping
+   * 3. Rewrites `userQuery` with that single mapping
+   */
+  function mergedTransform(
+    userQuery: string,
+    rawMappings: Mapping[],
+    transformations: ((c: TransformContext, op: Algebra.Operation) => Algebra.Operation)[] = [ operationTransform ],
+  ): string {
+    const prefixedMappings = rawMappings.map((m, i) => prefixMappingVars(c, m, `m${i}_`));
+    const merged = mergeMappingsIntoSingle(c, prefixedMappings);
+    const context = { ...c, mappers: [ merged ]};
+    return queryTransform(context, userQuery, transformations).trim();
+  }
+
+  /**
+   * Like mergedTransform but takes SPARQL CONSTRUCT strings directly.
+   */
+  function mergedTransformFromConstructs(
+    userQuery: string,
+    mappers: string[],
+    transformations: ((c: TransformContext, op: Algebra.Operation) => Algebra.Operation)[] = [ operationTransform ],
+  ): string {
+    const algebraMappers = mappers
+      .map(q => constructToMapper(c, q))
+      .map((m, i) => prefixMappingVars(c, m, `m${i}_`));
+    const merged = mergeMappingsIntoSingle(c, algebraMappers);
+    const context = { ...c, mappers: [ merged ]};
+    return queryTransform(context, userQuery, transformations).trim();
+  }
+
+  it('produces a single mapping with a plain variable head', ({ expect }) => {
+    const rawMappings: Mapping[] = [{
+      head: c.AF.createMappingHead(
+        c.DF.variable('s'),
+        c.DF.variable('p'),
+        c.AF.createTemplateIri([ 'ex://', c.DF.variable('s') ]),
+      ),
+      body: <Algebra.Project>parseQuery(c, 'SELECT * { ?s ?p <ex://b> }'),
+    }];
+    const prefixed = rawMappings.map((m, i) => prefixMappingVars(c, m, `m${i}_`));
+    const merged = mergeMappingsIntoSingle(c, prefixed);
+
+    // Head must contain only plain variables (no templates)
+    expect(merged.head.subject).toMatchObject({ termType: 'Variable', value: 'ms_s' });
+    expect(merged.head.predicate).toMatchObject({ termType: 'Variable', value: 'ms_p' });
+    expect(merged.head.object).toMatchObject({ termType: 'Variable', value: 'ms_o' });
+  });
+
+  it('task.md example: two templateIri mappings merged into a single UNION body', ({ expect }) => {
+    expect(mergedTransform('SELECT * { ?s ?p ?o }', [{
+      head: c.AF.createMappingHead(
+        c.DF.variable('s'),
+        c.DF.variable('p'),
+        c.AF.createTemplateIri([ 'ex://', c.DF.variable('s') ]),
+      ),
+      body: <Algebra.Project>parseQuery(c, 'SELECT * { ?s ?p <ex://b> }'),
+    }, {
+      head: c.AF.createMappingHead(
+        c.DF.variable('s'),
+        c.DF.variable('p'),
+        c.AF.createTemplateIri([ 'example://', c.DF.variable('s') ]),
+      ),
+      body: <Algebra.Project>parseQuery(c, 'SELECT * { ?s ?p <ex://c> }'),
+    }])).toEqual(`SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) WHERE {
+  {
+    SELECT ?ms_o ?ms_p ?ms_s WHERE {
+      {
+        {
+          SELECT ?m0_p ?m0_s WHERE {
+            ?m0_s ?m0_p <ex://b> .
+          }
+        }
+        BIND( IRI( CONCAT( "ex://" , STR( ?m0_s ) ) ) AS ?ms_o )
+        BIND( ?m0_p AS ?ms_p )
+        BIND( ?m0_s AS ?ms_s )
+      }
+      UNION {
+        {
+          SELECT ?m1_p ?m1_s WHERE {
+            ?m1_s ?m1_p <ex://c> .
+          }
+        }
+        BIND( IRI( CONCAT( "example://" , STR( ?m1_s ) ) ) AS ?ms_o )
+        BIND( ?m1_p AS ?ms_p )
+        BIND( ?m1_s AS ?ms_s )
+      }
+    }
+  }
+  BIND( ?ms_o AS ?uq_o )
+  BIND( ?ms_p AS ?uq_p )
+  BIND( ?ms_s AS ?uq_s )
+}`);
+  });
+
+  it('single templateIri mapping wraps body in a subSELECT with canonical-variable projection', ({ expect }) => {
+    expect(mergedTransform('SELECT * { ?s ?p ?o }', [{
+      head: c.AF.createMappingHead(
+        c.DF.variable('s'),
+        c.DF.variable('p'),
+        c.AF.createTemplateIri([ 'ex://', c.DF.variable('s') ]),
+      ),
+      body: <Algebra.Project>parseQuery(c, 'SELECT * { ?s ?p <ex://b> }'),
+    }])).toEqual(`SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) WHERE {
+  {
+    SELECT ( IRI( CONCAT( "ex://" , STR( ?m0_s ) ) ) AS ?ms_o ) ( ?m0_p AS ?ms_p ) ( ?m0_s AS ?ms_s ) WHERE {
+      SELECT ?m0_p ?m0_s WHERE {
+        ?m0_s ?m0_p <ex://b> .
+      }
+    }
+  }
+  BIND( ?ms_o AS ?uq_o )
+  BIND( ?ms_p AS ?uq_p )
+  BIND( ?ms_s AS ?uq_s )
+}`);
+  });
+
+  it('constant head terms become BIND expressions in the merged body', ({ expect }) => {
+    expect(mergedTransform('SELECT * { ?s ?p ?o }', [{
+      head: c.AF.createMappingHead(c.DF.variable('s'), c.DF.namedNode('ex://b'), c.DF.variable('o')),
+      body: <Algebra.Project>parseQuery(c, 'SELECT * { ?s <ex://b> ?o }'),
+    }, {
+      head: c.AF.createMappingHead(c.DF.variable('s'), c.DF.namedNode('ex://c'), c.DF.variable('o')),
+      body: <Algebra.Project>parseQuery(c, 'SELECT * { ?s <ex://c> ?o }'),
+    }])).toEqual(`SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) ( ?uq_s AS ?s ) WHERE {
+  {
+    SELECT ?ms_o ?ms_p ?ms_s WHERE {
+      {
+        {
+          SELECT ?m0_o ?m0_s WHERE {
+            ?m0_s <ex://b> ?m0_o .
+          }
+        }
+        BIND( ?m0_o AS ?ms_o )
+        BIND( <ex://b> AS ?ms_p )
+        BIND( ?m0_s AS ?ms_s )
+      }
+      UNION {
+        {
+          SELECT ?m1_o ?m1_s WHERE {
+            ?m1_s <ex://c> ?m1_o .
+          }
+        }
+        BIND( ?m1_o AS ?ms_o )
+        BIND( <ex://c> AS ?ms_p )
+        BIND( ?m1_s AS ?ms_s )
+      }
+    }
+  }
+  BIND( ?ms_o AS ?uq_o )
+  BIND( ?ms_p AS ?uq_p )
+  BIND( ?ms_s AS ?uq_s )
+}`);
+  });
+
+  it('cONSTRUCT queries are correctly merged and no-match becomes FILTER(FALSE)', ({ expect }) => {
+    expect(mergedTransformFromConstructs(
+      'SELECT * { ?s <ex://a> ?o }',
+      [ 'CONSTRUCT WHERE { ?s <ex://b> ?o }', 'CONSTRUCT WHERE { ?s <ex://c> ?o }' ],
+      [ operationTransform, substituteVarsThatArePreBoundToTerms, transformFilterFalse ],
+    )).toEqual(`SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) WHERE {
+  {
+    SELECT ?ms_o ?ms_s WHERE {
+      FILTER ( FALSE )
+    }
+  }
+  BIND( ?ms_o AS ?uq_o )
+  BIND( ?ms_s AS ?uq_s )
+}`);
+  });
+
+  it('empty mappings array produces a mapping over an empty BGP', ({ expect }) => {
+    const merged = mergeMappingsIntoSingle(c, []);
+    expect(merged.body.type).toEqual('project');
+    expect(merged.body.input.type).toEqual('bgp');
+  });
 });

@@ -10,8 +10,8 @@ import { DataFactory } from 'rdf-data-factory';
 import { AlgebraTemplateFactory } from './AlgebraTemplateFactory.js';
 import { ClusterSolver } from './ClusterSolver.js';
 import { MyGenerator } from './generator/generator.js';
-import type { Mapping, MappingHead } from './types.js';
-import { isRdfTerm } from './utils.js';
+import type { Mapping, MappingHead, Template } from './types.js';
+import { isRdfTerm, templateToExpr } from './utils.js';
 
 /**
  * The context object passed through all transformation operations.
@@ -193,5 +193,81 @@ export function transformContextFromConstructs(mappers: readonly string[]): Tran
   return {
     mappers: algebraMappers,
     ...partialContext,
+  };
+}
+
+/**
+ * Merges multiple mappings into a single GAV (Global-As-View) mapping.
+ *
+ * In a GAV mapping for RDF, a single mapping constructs the global schema (one
+ * triples relation).  This function takes an array of mappings — each of which
+ * may contain Skolem head functions (TemplateIri, TemplateLiteral, TemplateBlank)
+ * — and combines them into one mapping by:
+ *
+ * 1. Converting every head template in each mapping to a BIND/Extend operation
+ *    that binds the constructed value to a canonical variable (`?ms_s`, `?ms_p`, `?ms_o`).
+ * 2. Wrapping each mapping body with those BIND expressions to form a branch.
+ * 3. Joining all branches using UNION.
+ * 4. Projecting the canonical variables in a single mapping body.
+ *
+ * The resulting mapping has a plain triple-variable head `?ms_s ?ms_p ?ms_o` and
+ * carries all Skolem construction logic inside the body as BIND/Extend nodes, making
+ * the expressions available for static analysis by downstream optimisation passes.
+ *
+ * The canonical variable names use the `ms_` prefix (merged-single) to ensure they
+ * are recognised as mapping variables by the rewriting algorithm (which relies on
+ * variables whose names start with `m`).
+ *
+ * @param c - Partial context providing the algebra and data factories
+ * @param mappings - Array of mappings to merge (should already have prefixed variables,
+ *   e.g. via {@link prefixMappingVars})
+ * @returns A single Mapping with a variable-only head and a UNION body
+ *
+ * @example
+ * // Given two mappings with Skolem IRIs in the object position (already prefixed):
+ * const merged = mergeMappingsIntoSingle(c, prefixedMappings);
+ * // merged.head = ?ms_s ?ms_p ?ms_o
+ * // merged.body = SELECT ?ms_s ?ms_p ?ms_o WHERE {
+ * //   { <body0> BIND(IRI(CONCAT("ex://", STR(?m0_s))) AS ?ms_o) BIND(?m0_p AS ?ms_p) BIND(?m0_s AS ?ms_s) }
+ * //   UNION
+ * //   { <body1> BIND(IRI(CONCAT("example://", STR(?m1_s))) AS ?ms_o) BIND(?m1_p AS ?ms_p) BIND(?m1_s AS ?ms_s) }
+ * // }
+ */
+export function mergeMappingsIntoSingle(
+  c: Pick<TransformContext, 'AF' | 'DF'>,
+  mappings: Mapping[],
+): Mapping {
+  // Canonical variable names use the `ms_` prefix so that the rewriting algorithm
+  // (which checks `variable.startsWith('m')`) treats them as mapping variables.
+  const sVar = c.DF.variable('ms_s');
+  const pVar = c.DF.variable('ms_p');
+  const oVar = c.DF.variable('ms_o');
+
+  const branches = mappings.map(({ head, body }) => {
+    // Build extends in reverse (object first, then predicate, then subject) so
+    // that after wrapping, subject is the outermost extend (first to evaluate).
+    let bodyOp: Algebra.Operation = body;
+    for (const [ term, canonicalVar ] of <[Template | RDF.Term, RDF.Variable][]>[
+      [ head.object, oVar ],
+      [ head.predicate, pVar ],
+      [ head.subject, sVar ],
+    ]) {
+      bodyOp = c.AF.createExtend(bodyOp, canonicalVar, templateToExpr(c.AF, c.DF, term));
+    }
+    return bodyOp;
+  });
+
+  let bodyOp: Algebra.Operation;
+  if (branches.length === 0) {
+    bodyOp = c.AF.createBgp([]);
+  } else if (branches.length === 1) {
+    bodyOp = branches[0];
+  } else {
+    bodyOp = c.AF.createUnion(branches, true);
+  }
+
+  return {
+    head: c.AF.createMappingHead(sVar, pVar, oVar),
+    body: c.AF.createProject(bodyOp, [ sVar, pVar, oVar ]),
   };
 }

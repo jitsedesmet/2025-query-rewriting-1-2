@@ -353,6 +353,14 @@ describe('dummy', () => {
   {
     {
       SELECT ?ms_o ?ms_p ?ms_s WHERE {
+        VALUES ?ms_p {
+          <ex://a>
+          <ex://b>
+        }
+        VALUES ?ms_s {
+          <ex://a>
+          <ex://b>
+        }
         {
           {
             SELECT ?m0_o WHERE {
@@ -382,6 +390,10 @@ describe('dummy', () => {
   {
     {
       SELECT ?ms_o ?ms_p WHERE {
+        VALUES ?ms_p {
+          <ex://a>
+          <ex://b>
+        }
         {
           BIND( <ex://a> AS ?ms_s )
         }
@@ -412,6 +424,15 @@ describe('dummy', () => {
   {
     {
       SELECT ?ms_o ?ms_p ?ms_s WHERE {
+        VALUES ?ms_p {
+          <ex://a>
+          <ex://b>
+          <ex://c>
+        }
+        VALUES ?ms_s {
+          <ex://a>
+          <ex://b>
+        }
         {
           {
             SELECT ?m0_o WHERE {
@@ -451,6 +472,11 @@ describe('dummy', () => {
   {
     {
       SELECT ?ms_o ?ms_p WHERE {
+        VALUES ?ms_p {
+          <ex://a>
+          <ex://b>
+          <ex://c>
+        }
         {
           BIND( <ex://a> AS ?ms_s )
         }

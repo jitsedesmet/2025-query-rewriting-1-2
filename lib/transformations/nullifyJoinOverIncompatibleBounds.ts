@@ -237,12 +237,93 @@ function variableExtensionsOverJoin(c: TransformContext, join: Algebra.Join): Re
   return varSets;
 }
 
+/**
+ * Recursively determines the possible static values for a variable in an operation tree.
+ * Returns undefined if the variable is not bound in the tree, noFixed if it is bound
+ * dynamically, or a fixed VariableSet if the binding can be determined statically.
+ */
+function getPossibleValues(op: Algebra.Operation, varName: string): VariableSet | undefined {
+  if (op.type === Algebra.Types.EXTEND) {
+    if (op.variable.value === varName) {
+      const expr = op.expression;
+      if (expr.subType === Algebra.ExpressionTypes.TERM) {
+        if (termIsStaticTerm(expr.term)) {
+          return new VariableSet(expr.term);
+        }
+        if (expr.term.termType === 'Variable') {
+          return getPossibleValues(op.input, expr.term.value) ?? VariableSet.createNoFixed();
+        }
+      }
+      return VariableSet.createNoFixed();
+    }
+    return getPossibleValues(op.input, varName);
+  }
+
+  if (op.type === Algebra.Types.PROJECT) {
+    if (op.variables.some(variable => variable.value === varName)) {
+      return getPossibleValues(op.input, varName);
+    }
+    return undefined;
+  }
+
+  if (op.type === Algebra.Types.JOIN) {
+    let result = VariableSet.createNoFixed();
+    let anyBinding = false;
+    for (const operand of op.input) {
+      const variableSet = getPossibleValues(operand, varName);
+      if (variableSet !== undefined) {
+        if (variableSet.isNoFixed) {
+          return VariableSet.createNoFixed();
+        }
+        result = result.disjunct(variableSet);
+        anyBinding = true;
+      }
+    }
+    return anyBinding ? result : undefined;
+  }
+
+  if (op.type === Algebra.Types.UNION) {
+    let result: VariableSet | undefined;
+    for (const branch of op.input) {
+      const variableSet = getPossibleValues(branch, varName);
+      if (variableSet === undefined || variableSet.isNoFixed) {
+        return VariableSet.createNoFixed();
+      }
+      result = result ? result.union(variableSet) : variableSet;
+    }
+    return result;
+  }
+
+  if (op.type === Algebra.Types.VALUES) {
+    for (const variable of op.variables) {
+      if (variable.value === varName) {
+        return new VariableSet(
+          ...op.bindings
+            .map(binding => binding[varName])
+            .filter((term): term is RDF.NamedNode | RDF.Literal => term !== undefined),
+        );
+      }
+    }
+  }
+
+  return undefined;
+}
+
 function directExtensionOverUnionsAndMore(c: TransformContext, op: Algebra.Operation): Record<string, VariableSet> {
   const varSets: Record<string, VariableSet> = {};
   const traverse = (op: Algebra.Operation): void => {
     if (op.type === Algebra.Types.EXTEND) {
       if (op.expression.subType === Algebra.ExpressionTypes.TERM && termIsStaticTerm(op.expression.term)) {
         varSets[op.variable.value] = new VariableSet(op.expression.term);
+      } else if (
+        op.expression.subType === Algebra.ExpressionTypes.TERM &&
+        op.expression.term.termType === 'Variable' &&
+        /^[mr]/u.test(op.expression.term.value)
+      ) {
+        const innerValues = getPossibleValues(op.input, op.expression.term.value);
+        if (innerValues !== undefined) {
+          varSets[op.variable.value] = innerValues;
+        }
       }
       traverse(op.input);
     } else if (op.type === Algebra.Types.UNION) {

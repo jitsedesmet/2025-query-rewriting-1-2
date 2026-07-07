@@ -10,3 +10,9 @@ RUN echo $USERNAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USERNAME \
 
 # Set `DEVCONTAINER` environment variable to help with orientation
 ENV DEVCONTAINER=true
+
+
+USER node
+RUN curl -fsSL https://gh.io/copilot-install | bash
+RUN curl -fsSL https://claude.ai/install.sh | bash
+USER root

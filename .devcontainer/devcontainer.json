@@ -4,15 +4,15 @@
   "build": {
       "dockerfile": "Dockerfile"
   },
+  "initializeCommand": "mkdir -p .devcontainer/.copilot .devcontainer/.claude",
   "mounts": [
-    "source=${localWorkspaceFolder}/.devcontainer/config.json,target=/home/node/.copilot/config.json,type=bind",
+    "source=${localWorkspaceFolder}/.devcontainer/.copilot,target=/home/node/.copilot/,type=bind",
+    "source=${localWorkspaceFolder}/.devcontainer/.claude,target=/home/node/.claude/,type=bind"
   ],
   "remoteUser": "node",
-  "postCreateCommand": "curl -fsSL https://gh.io/copilot-install | bash",
   "customizations" : {
     "jetbrains" : {
       "backend" : "WebStorm"
     }
   }
-
 }

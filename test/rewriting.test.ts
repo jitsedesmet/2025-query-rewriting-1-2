@@ -8,6 +8,7 @@ import { transformFilterFalse } from '../lib/transformations/filterFalse.js';
 import { nullifyJoinOverIncompatibleBounds } from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
 import { rewriteNonRecursivePaths } from '../lib/transformations/pathTransformation.js';
 import { pushUpBoundedFromUnion } from '../lib/transformations/pushUpBoundedFromUnion.js';
+import { removeProjections } from '../lib/transformations/removeProjections.js';
 import { transformServiceCallPushUp } from '../lib/transformations/serviceCallMerge.js';
 import { operationTransform, queryTransform } from '../lib/transformBgp.js';
 import type { TransformContext } from '../lib/transformContext.js';
@@ -2014,4 +2015,43 @@ describe('dummy', () => {
       [ `CONSTRUCT { ?s ?p ?o } WHERE { SERVICE <ex://a> { ?s ?p ?o } }` ],
       [ operationTransform, transformExtendsToValues, transformServiceCallPushUp ],
     ));
+
+  describe('removeProjections', () => {
+    it('anonymizes variables hidden by a sub-SELECT', ({ expect }) => testConstructMappers(
+      expect,
+      'SELECT ?x WHERE { ?x <http://ex/p> ?w . { SELECT ?w { ?w ?a ?b } } }',
+      `SELECT ( ?uq_x AS ?x ) WHERE {
+  ?uq_x <http://ex/p> ?uq_w .
+  ?uq_w ?v_1 ?v_0 .
+}`,
+      [],
+      [ removeProjections ],
+    ));
+
+    it('coins unique fresh variables across sibling sub-SELECTs', ({ expect }) => testConstructMappers(
+      expect,
+      'SELECT ?x WHERE { { SELECT ?x { ?x ?a ?b } } { SELECT ?x { ?x ?c ?d } } }',
+      `SELECT ( ?uq_x AS ?x ) WHERE {
+  ?uq_x ?v_1 ?v_0 .
+  ?uq_x ?v_3 ?v_2 .
+}`,
+      [],
+      [ removeProjections ],
+    ));
+
+    it('anonymizes a non-projected VALUES variable including its binding key', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        'SELECT ?x WHERE { ?x <http://ex/p> ?y . { SELECT ?y { ?y ?p ?o . VALUES ?o { <http://ex/a> } } } }',
+        `SELECT ( ?uq_x AS ?x ) WHERE {
+  ?uq_x <http://ex/p> ?uq_y .
+  ?uq_y ?v_1 ?v_0 .
+  VALUES ?v_0 {
+    <http://ex/a>
+  }
+}`,
+        [],
+        [ removeProjections ],
+      ));
+  });
 });

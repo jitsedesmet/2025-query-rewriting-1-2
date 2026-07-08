@@ -22,6 +22,9 @@
  * - **rewriteSinglePattern**: Core function that rewrites a single triple pattern
  *   against a mapping definition.
  *
+ * - **removeProjections**: Removes all PROJECT operations from an algebra tree,
+ *   anonymizing every non-projected variable to a fresh variable to preserve scoping.
+ *
  * @module transformations
  */
 export { substituteVarsThatArePreBoundToTerms } from './boundedVarSubstitution.js';
@@ -29,3 +32,4 @@ export { transformFilterFalse } from './filterFalse.js';
 export { nullifyJoinOverIncompatibleBounds } from './nullifyJoinOverIncompatibleBounds.js';
 export { pushUpBoundedFromUnion } from './pushUpBoundedFromUnion.js';
 export { rewriteSinglePattern } from './rewriteSinglePattern.js';
+export { removeProjections } from './removeProjections.js';

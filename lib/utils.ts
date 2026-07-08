@@ -48,6 +48,38 @@ export function createFilterFalse(c: TransformContext, op?: Algebra.Operation): 
 }
 
 /**
+ * Creates a generator of fresh (non-colliding) RDF variables.
+ *
+ * The generator coins variable names using an internal, monotonically increasing
+ * index (e.g. `?v_0`, `?v_1`, ...). If a candidate name already exists in the set
+ * of known variables, the index is advanced until an unused name is found.
+ * Every coined name is remembered internally, so repeated calls never collide with
+ * each other nor with any variable that was present in the original operation tree.
+ *
+ * @param existing - Variable names that already exist within the operation tree
+ * @param prefix - Prefix used for the coined variable names (defaults to `v`)
+ * @returns A function that returns a new, unused variable on each call
+ * @example
+ * const fresh = freshVarGenerator([ 'x', 'v_0' ]);
+ * fresh(); // ?v_1  (v_0 was taken)
+ * fresh(); // ?v_2
+ */
+export function freshVarGenerator(existing: Iterable<string>, prefix = 'v'): () => RDF.Variable {
+  const taken = new Set(existing);
+  let index = 0;
+  return (): RDF.Variable => {
+    let name = `${prefix}_${index}`;
+    while (taken.has(name)) {
+      index += 1;
+      name = `${prefix}_${index}`;
+    }
+    taken.add(name);
+    index += 1;
+    return DF.variable(name);
+  };
+}
+
+/**
  * Type guard to check if an object is an RDF term.
  * @param obj - Object to check
  * @returns True if the object has a termType property

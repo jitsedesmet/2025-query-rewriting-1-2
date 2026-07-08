@@ -2,10 +2,9 @@ PREFIX : <ex://>
 PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 
 :me :name "jitse" .
-:t rdf:reifies _:temp .
-:t :statedBy :govBE .
 
-_:temp a rdf:tripleTerm .
-_:temp rdf:ttSubject :me .
-_:temp rdf:ttPredicate :name .
-_:temp rdf:ttObject "jitse" .
+:t a rdf:Statement .
+:t rdf:Subject :me .
+:t rdf:Predicate :name .
+:t rdf:Object "jitse" .
+:t :statedBy :govBE .

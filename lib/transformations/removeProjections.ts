@@ -77,27 +77,26 @@ function renameVariables<T extends object>(
  *
  * @example
  * // Before: SELECT ?x { ?x ?y ?z }        (?y and ?z are not projected)
- * // After:  ?x ?v_0 ?v_1                   (projection removed, hidden vars anonymized)
+ * // After:  ?x ?v_0 ?v_1                  (projection removed, hidden vars anonymized)
  */
 export function removeProjections<T extends Algebra.Operation>(c: TransformContext, op: T): T {
   // Seed the generator with every variable in the tree so fresh names never collide.
+  // We cannot collide in the top level context
   const nextVar = freshVarGenerator(collectVariableNames(c, op));
 
-  return algebraUtils.mapOperation<'unsafe', typeof op>(
-    op,
-    {
-      [Algebra.Types.PROJECT]: {
-        transform: (project) => {
-          const projected = new Set(project.variables.map(variable => variable.value));
-          const renames: Record<string, RDF.Variable> = {};
-          for (const name of collectVariableNames(c, project.input)) {
-            if (!projected.has(name)) {
-              renames[name] = nextVar();
-            }
-          }
-          return renameVariables(c, project.input, renames);
-        },
-      },
-    },
-  );
+  // TODO: this renames even if it has already renamed so could be optimized, but that's not a priority now.
+  return algebraUtils.mapOperation<'unsafe', typeof op>(op, {
+    [Algebra.Types.PROJECT]: { transform: (project) => {
+      const projected = new Set(project.variables.map(variable => variable.value));
+      const renames: Record<string, RDF.Variable> = {};
+      // For all variables in the current subquery (which you know contains no other subqueries)
+      for (const name of collectVariableNames(c, project.input)) {
+        // If that var is not projected, rename it
+        if (!projected.has(name)) {
+          renames[name] = nextVar();
+        }
+      }
+      return renameVariables(c, project.input, renames);
+    } },
+  });
 }

@@ -64,11 +64,11 @@ export function createFilterFalse(c: TransformContext, op?: Algebra.Operation): 
  * fresh(); // ?v_1  (v_0 was taken)
  * fresh(); // ?v_2
  */
-export function freshVarGenerator(existing: Iterable<string>, prefix = 'v'): () => RDF.Variable {
+export function freshVarGenerator(existing: Iterable<string>, prefix = 'v_'): () => RDF.Variable {
   const taken = new Set(existing);
   let index = 0;
   return (): RDF.Variable => {
-    let name = `${prefix}_${index}`;
+    let name = `${prefix}${index}`;
     while (taken.has(name)) {
       index += 1;
       name = `${prefix}_${index}`;

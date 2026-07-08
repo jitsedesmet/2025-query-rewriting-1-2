@@ -2053,5 +2053,21 @@ describe('dummy', () => {
         [],
         [ removeProjections ],
       ));
+
+    it('anonymizes a deeper nesting', ({ expect }) =>
+      testConstructMappers(
+        expect,
+        'SELECT ?x WHERE { ?x <http://ex/p> ?y . { SELECT ?y { ?y ?x ?o . VALUES ?o { <http://ex/a> } . { SELECT ?x { ?x ?p ?y }} } } }',
+              `SELECT ( ?uq_x AS ?x ) WHERE {
+  ?uq_x <http://ex/p> ?uq_y .
+  ?uq_y ?v_3 ?v_2 .
+  VALUES ?v_2 {
+    <http://ex/a>
+  }
+  ?v_3 ?v_5 ?v_4 .
+}`,
+              [],
+              [ removeProjections ],
+      ));
   });
 });

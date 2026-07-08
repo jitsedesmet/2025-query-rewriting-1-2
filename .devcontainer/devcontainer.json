@@ -1,6 +1,6 @@
 // See https://containers.dev/implementors/json_reference/ for configuration reference
 {
-  "name": "Untitled Node.js project",
+  "name": "2025-query-rewriting-1-2",
   "build": {
       "dockerfile": "Dockerfile"
   },

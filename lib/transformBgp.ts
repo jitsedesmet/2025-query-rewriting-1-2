@@ -3,7 +3,6 @@ import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { rewriteSinglePattern } from './transformations/index.js';
 import type { TransformContext } from './transformContext.js';
 import { prefixVarsInOperation, parseQuery } from './transformContext.js';
-import { createFilterFalse } from './utils.js';
 
 /**
  * Returns true when a GROUP node exists at the top of the operation's
@@ -111,75 +110,12 @@ export function queryTransform(
   return c.generator.generate(transformedAst);
 }
 
-/**
- * Core transformation that rewrites BGPs (Basic Graph Patterns) into unions of subselects.
- *
- * For each triple pattern in a BGP, this creates a UNION of alternatives where
- * each alternative corresponds to one of the configured mappings. This is the
- * key operation that enables query rewriting from SPARQL 1.2 to SPARQL 1.1.
- *
- * A BGP of `n` triple patterns with `m` mappers results in:
- * - A JOIN of `n` unions
- * - Each union has `m` alternatives (one per mapper)
- *
- * @param c - The transformation context
- * @param input - The algebra operation to transform
- * @returns The transformed operation with BGPs rewritten to unions
- *
- * @example
- * // Input: BGP { ?s ?p ?o . ?a ?b ?c }
- * // Output: JOIN [
- * //   UNION [ mapper1(?s ?p ?o), mapper2(?s ?p ?o) ],
- * //   UNION [ mapper1(?a ?b ?c), mapper2(?a ?b ?c) ]
- * // ]
- */
 export function operationTransform(c: TransformContext, input: Algebra.Operation): Algebra.Operation {
   const transformed = algebraUtils.mapOperation<'unsafe', typeof input>(
     input,
-    { [Algebra.Types.BGP]: {
-      transform: input => bgpTransform(c, input),
+    { [Algebra.Types.BGP]: { transform: input =>
+      c.AF.createJoin(input.patterns.map(pattern => rewriteSinglePattern(c, pattern, c.mapping)), true),
     }},
   );
   return transformed;
-}
-
-/**
- * Transforms a BGP (Basic Graph Pattern) into a join of unions.
- * Each triple pattern becomes a union of subselects (one per mapper).
- *
- * @param c - The transformation context
- * @param input - The BGP to transform
- * @returns A Join containing one Union per triple pattern
- */
-export function bgpTransform(c: TransformContext, input: Algebra.Bgp): Algebra.Join {
-  return c.AF.createJoin(input.patterns.map(pattern => mapPattern(c, pattern)), true);
-}
-
-/**
- * Transforms a single triple pattern into a union of alternatives.
- *
- * For each configured mapper, attempts to rewrite the pattern using that mapper.
- * If rewriting fails (e.g., incompatible patterns), a FILTER(FALSE) placeholder
- * is used to maintain the union structure.
- *
- * @param c - The transformation context
- * @param pattern - The triple pattern to transform
- * @returns A Union of rewritten patterns (or FILTER(FALSE) for non-matching mappers)
- */
-export function mapPattern(
-  c: TransformContext,
-  pattern: Algebra.Pattern,
-): Algebra.Union | Algebra.Filter | Algebra.Project | Algebra.Extend {
-  const mappedPatterns = c.mappers.map((mapper) => {
-    try {
-      return rewriteSinglePattern(c, pattern, mapper);
-    } catch {
-      // Console.error(e);
-      return createFilterFalse(c);
-    }
-  });
-  if (mappedPatterns.length === 1) {
-    return mappedPatterns[0];
-  }
-  return c.AF.createUnion(mappedPatterns, true);
 }

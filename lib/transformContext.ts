@@ -1,5 +1,4 @@
 /* eslint-disable jsdoc/check-param-names */
-import type * as RDF from '@rdfjs/types';
 import { toAlgebra } from '@traqula/algebra-sparql-1-2';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { algebraUtils } from '@traqula/algebra-transformations-1-2';
@@ -11,7 +10,7 @@ import { AlgebraTemplateFactory } from './AlgebraTemplateFactory.js';
 import { ClusterSolver } from './ClusterSolver.js';
 import { MyGenerator } from './generator/generator.js';
 import type { Mapping, MappingHead } from './types.js';
-import { isRdfTerm } from './utils.js';
+import { collectVariableNames, isRdfTerm } from './utils.js';
 
 /**
  * The context object passed through all transformation operations.
@@ -33,7 +32,7 @@ export interface TransformContext {
   /** Solver for variable clustering and unification during rewriting */
   clusterSolver: ClusterSolver;
   /** The active mappings to apply during transformation */
-  mappers: Mapping[];
+  mapping: Mapping;
 }
 
 /**
@@ -120,40 +119,35 @@ export function constructToMapper(
     throw new Error(`Mappers should have only a single mapping head, found ${construct.template.length}:
 ${JSON.stringify(construct.template, null, 2)}`);
   }
-  const head: MappingHead = {
-    ...construct.template[0],
-    type: 'template',
-    subType: 'Quad',
-  };
-  // Get used vars to create the proper projection
-  const usedVars: Record<string, RDF.Variable> = {};
-  for (const term of [ head.subject, head.object, head.predicate, head.graph ]) {
-    if (term && isRdfTerm(term) && term.termType === 'Variable') {
-      usedVars[term.value] = term;
+  const validPositions: [
+    MappingHead['subject']['termType'][],
+    MappingHead['predicate']['termType'][],
+    MappingHead['object']['termType'][],
+  ] = [[ 'Variable', 'NamedNode' ], [ 'Variable', 'NamedNode' ], [ 'NamedNode', 'Variable', 'Literal', 'Quad' ]];
+  const template = construct.template[0];
+  const spoTemplate = [ template.subject, template.predicate, template.object ];
+  for (let idx = 0; idx < construct.template.length; idx++) {
+    if (!(<string[]> validPositions[idx]).includes(spoTemplate[idx].termType)) {
+      throw new Error(`Invalid Template, cannot use ${spoTemplate[idx].termType} in this position.`);
     }
   }
+  const head: MappingHead = <MappingHead> AF.createPattern(template.subject, template.predicate, template.object);
+  // Get used vars to create the proper projection
+  const usedVars = collectVariableNames(astTransformer, head);
   const body = AF.createProject(construct.input, Object.values(usedVars));
   // Body should not call bnode function (you should not create blank nodes in mapping body)
   algebraUtils.visitOperationSub(body, {}, {
-    expression: { operator: {
-      visitor: (operatorExpression) => {
-        if (operatorExpression.operator === 'bnode') {
-          throw new Error('BNODE function cannot be used in mapping body');
-        }
-      },
-    }},
+    expression: { operator: { visitor: (operatorExpression) => {
+      if (operatorExpression.operator === 'bnode') {
+        throw new Error('BNODE function cannot be used in mapping body');
+      }
+    } }},
     // Mapping body may contain any path
-  });
-  // Fail if mapping head contains a BlankNode (only blank node templates are allowed!)
-  astTransformer.visitObject(head, (object) => {
-    if ('termType' in object && (<RDF.Term> object).termType === 'BlankNode') {
-      throw new Error('Mapping head may not contain blank nodes');
-    }
   });
   return {
     head,
     body,
-  } satisfies Mapping;
+  };
 }
 
 /**
@@ -161,7 +155,7 @@ ${JSON.stringify(construct.template, null, 2)}`);
  * Used as a base for creating full contexts with different mapper configurations.
  * @returns A context object with all components except mappers
  */
-export function createPartialContext(): Omit<TransformContext, 'mappers'> {
+export function createPartialContext(): Omit<TransformContext, 'mapping'> {
   return {
     parser: new Parser(),
     generator: new MyGenerator(),
@@ -190,8 +184,9 @@ export function transformContextFromConstructs(mappers: readonly string[]): Tran
   const algebraMappers = mappers
     .map(constructQuery => constructToMapper(partialContext, constructQuery))
     .map((mapping, index) => prefixMappingVars(partialContext, mapping, `m${index}_`));
+  // TODO: we need to create an SPO head and push the template construction in as expressions.
   return {
-    mappers: algebraMappers,
+    mapping: algebraMappers,
     ...partialContext,
   };
 }

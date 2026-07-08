@@ -1,62 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformContext } from '../transformContext.js';
-import { freshVarGenerator, isRdfTerm } from '../utils.js';
-
-/**
- * Collects the names of every variable that occurs anywhere in an operation subtree.
- * This includes variable terms (subjects, predicates, objects, expression operands,
- * projected/extended variables, ...) as well as the string keys used in VALUES bindings.
- *
- * @param c - The transformation context
- * @param obj - The operation (or any object) to scan
- * @returns The set of variable names present in the subtree
- */
-function collectVariableNames(c: TransformContext, obj: object): Set<string> {
-  const names = new Set<string>();
-  c.astTransformer.visitObject(obj, (object) => {
-    if (isRdfTerm(object) && object.termType === 'Variable') {
-      names.add(object.value);
-    }
-    // VALUES bindings reference their variables through string keys.
-    if ('type' in object && object.type === 'values' && 'bindings' in object) {
-      for (const binding of (<Algebra.Values> object).bindings) {
-        for (const key of Object.keys(binding)) {
-          names.add(key);
-        }
-      }
-    }
-  });
-  return names;
-}
-
-/**
- * Renames variables in an operation subtree according to the given map.
- * Handles both variable terms and the string keys used in VALUES bindings.
- *
- * @param c - The transformation context
- * @param obj - The operation to rewrite
- * @param renames - Map from original variable name to its replacement variable
- * @returns The rewritten operation
- */
-function renameVariables<T extends object>(
-  c: TransformContext,
-  obj: T,
-  renames: Record<string, RDF.Variable>,
-): T {
-  return <T> c.astTransformer.transformObject(obj, (object) => {
-    if (isRdfTerm(object) && object.termType === 'Variable' && object.value in renames) {
-      return renames[object.value];
-    }
-    if ('type' in object && object.type === 'values' && 'bindings' in object) {
-      const valuesOp = <Algebra.Values> object;
-      valuesOp.bindings = valuesOp.bindings.map(binding => Object.fromEntries(
-        Object.entries(binding).map(([ key, value ]) => [ key in renames ? renames[key].value : key, value ]),
-      ));
-    }
-    return object;
-  });
-}
+import { collectVariableNames, freshVarGenerator, renameVariables } from '../utils.js';
 
 /**
  * Transformation that removes all PROJECT operations from an algebra tree.
@@ -82,7 +27,7 @@ function renameVariables<T extends object>(
 export function removeProjections<T extends Algebra.Operation>(c: TransformContext, op: T): T {
   // Seed the generator with every variable in the tree so fresh names never collide.
   // We cannot collide in the top level context
-  const nextVar = freshVarGenerator(collectVariableNames(c, op));
+  const nextVar = freshVarGenerator(collectVariableNames(c.astFactory, op));
 
   // TODO: this renames even if it has already renamed so could be optimized, but that's not a priority now.
   return algebraUtils.mapOperation<'unsafe', typeof op>(op, {

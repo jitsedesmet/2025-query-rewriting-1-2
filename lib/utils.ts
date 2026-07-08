@@ -4,9 +4,8 @@ import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { Typed } from '@traqula/core';
 import { DataFactory } from 'rdf-data-factory';
 import { EXTENSION_FUNCTION_BNODE } from './consts.js';
-import type { RangedVar } from './RangeSet.js';
+import { RangeSet } from './RangeSet.js';
 import type { TransformContext } from './transformContext.js';
-import type { MappingHead, Template, TemplateBlank, TemplateIri, TemplateLiteral, TemplateQuad } from './types.js';
 
 /** Shared DataFactory instance for creating RDF terms */
 export const DF = new DataFactory();
@@ -48,6 +47,48 @@ export function createFilterFalse(c: TransformContext, op?: Algebra.Operation): 
 }
 
 /**
+ * A variable type extended with an optional range constraint.
+ * The range specifies which term types are valid for this variable
+ * based on its position in a triple pattern (subject, predicate, object).
+ */
+export type RangedVar = RDF.Variable & { range?: RangeSet };
+export function toRangeVar<T extends RDF.Variable>(variable: T): T & { range: RangeSet } {
+  const cast = <T & { range: RangeSet }> variable;
+  if (cast.range === undefined) {
+    cast.range = new RangeSet();
+  }
+  return cast;
+}
+
+/**
+ * Renames variables in an operation subtree according to the given map.
+ * Handles both variable terms and the string keys used in VALUES bindings.
+ *
+ * @param c - The transformation context
+ * @param obj - The operation to rewrite
+ * @param renames - Map from original variable name to its replacement variable
+ * @returns The rewritten operation
+ */
+export function renameVariables<T extends object>(
+  c: TransformContext,
+  obj: T,
+  renames: Record<string, RDF.Variable>,
+): T {
+  return <T> c.astTransformer.transformObject(obj, (object) => {
+    if (isRdfVar(object) && object.value in renames) {
+      return renames[object.value];
+    }
+    if ('type' in object && object.type === 'values' && 'bindings' in object) {
+      const valuesOp = <Algebra.Values> object;
+      valuesOp.bindings = valuesOp.bindings.map(binding => Object.fromEntries(
+        Object.entries(binding).map(([ key, value ]) => [ key in renames ? renames[key].value : key, value ]),
+      ));
+    }
+    return object;
+  });
+}
+
+/**
  * Creates a generator of fresh (non-colliding) RDF variables.
  *
  * The generator coins variable names using an internal, monotonically increasing
@@ -77,6 +118,33 @@ export function freshVarGenerator(existing: Iterable<string>, prefix = 'v_'): ()
     index += 1;
     return DF.variable(name);
   };
+}
+
+/**
+ * Collects the names of every variable that occurs anywhere in an operation subtree.
+ * This includes variable terms (subjects, predicates, objects, expression operands,
+ * projected/extended variables, ...) as well as the string keys used in VALUES bindings.
+ *
+ * @param c - The transformation context
+ * @param obj - The operation (or any object) to scan
+ * @returns The set of variable names present in the subtree
+ */
+export function collectVariableNames(astTransformer: TransformContext['astTransformer'], obj: object): Set<string> {
+  const names = new Set<string>();
+  astTransformer.visitObject(obj, (object) => {
+    if (isRdfTerm(object) && object.termType === 'Variable') {
+      names.add(object.value);
+    }
+    // VALUES bindings reference their variables through string keys.
+    if ('type' in object && object.type === 'values' && 'bindings' in object) {
+      for (const binding of (<Algebra.Values> object).bindings) {
+        for (const key of Object.keys(binding)) {
+          names.add(key);
+        }
+      }
+    }
+  });
+  return names;
 }
 
 /**
@@ -124,15 +192,6 @@ export function isTyped(obj: object): obj is Typed {
   return 'type' in obj && typeof obj.type === 'string' && (
     !('subType' in obj) || typeof obj.subType === 'string'
   );
-}
-
-/**
- * Type guard to check if an object is a MappingHead.
- * @param obj - Object to check
- * @returns True if the object is a mapping head template
- */
-export function isMappingHead(obj: object): obj is MappingHead {
-  return isTyped(obj) && obj.type === 'template' && 'subType' in obj && obj.subType === 'Quad';
 }
 
 /**

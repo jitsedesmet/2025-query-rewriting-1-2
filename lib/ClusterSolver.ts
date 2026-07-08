@@ -1,8 +1,7 @@
 import type * as RDF from '@rdfjs/types';
-import type { RangedVar } from './RangeSet.js';
 import { objectRange, RangeSet } from './RangeSet.js';
-import type { Template } from './types.js';
-import { isRdfTerm, isRdfVar } from './utils.js';
+import type { RangedVar } from './utils.js';
+import { isRdfVar } from './utils.js';
 
 /**
  * A raw term that is either a concrete term (not a variable) or a ranged variable.
@@ -42,20 +41,10 @@ export class ClusterSolver {
   private groupToVars: Record<number, RangedVar[]>;
   /** Maps group ID to the valid term type range for that group */
   private groupToRange: Record<number, RangeSet>;
-  /**
-   * Maps group ID to templates that must equal the group's value.
-   * Multiple template equalities can exist, creating filter conditions.
-   */
-  private groupToTemplates: Record<number, Template[]>;
   /** Maps group ID to the concrete term the group is bound to (if any) */
   private groupToTerm: Record<number, RawBasicTerm | undefined>;
   /** Maps variable name to its group ID */
   private varToGroup: Record<string, number | undefined>;
-  /**
-   * Static template validations where no variable group is involved.
-   * These occur when a template must equal a concrete term.
-   */
-  private staticTemplateValidation: { template: Template; term: RawBasicTerm }[];
   /** Counter for generating unique group IDs */
   private cleanNumber: number;
 
@@ -69,11 +58,9 @@ export class ClusterSolver {
    */
   public clear(): void {
     this.groupToVars = {};
-    this.groupToTemplates = {};
     this.groupToRange = {};
     this.groupToTerm = {};
     this.varToGroup = {};
-    this.staticTemplateValidation = [];
     this.cleanNumber = 1;
   }
 
@@ -111,8 +98,8 @@ export class ClusterSolver {
    * @param to - Term or variable (typically from triple pattern)
    * @throws Error if terms don't match or constraints conflict
    */
-  public register(from: RDF.Term | Template, to: RDF.Term): void {
-    if (isRdfTerm(from) && !isRdfVar(from) && isRdfTerm(to) && !isRdfVar(to)) {
+  public register(from: RDF.Term, to: RDF.Term): void {
+    if (!isRdfVar(from) && !isRdfVar(to)) {
       // Two terms, neither are vars
       if (from.equals(to)) {
         return;
@@ -125,29 +112,10 @@ export class ClusterSolver {
       // `from` is var - `to` is not
       const varGroup = this.getGroup(from);
       this.registerTermToGroup(varGroup, to);
-    } else if (isRdfVar(to)) {
-      // `to` is var, `from` is not
-      const varGroup = this.getGroup(to);
-      if (isRdfTerm(from)) {
-        this.registerTermToGroup(varGroup, from);
-      } else {
-        // It is a template
-        this.registerTemplateToGroup(varGroup, from);
-      }
     } else {
-      // Neither `from` nor `to` is a var. First condition would have checked this in case `from` is a term.
-      // Check term types match:
-      const template = <Exclude<typeof from, RDF.Term>> from;
-      if (template.subType !== to.termType) {
-        throw new Error(`Cannot match template of type ${template.subType} with term of type ${to.termType}. Matching
-${JSON.stringify(template)}
-with
-${JSON.stringify(to)}`);
-      }
-      this.staticTemplateValidation.push({
-        template,
-        term: to,
-      });
+      // `to` is var, `from` is not
+      const varGroup = this.getGroup(<RangedVar> to);
+      this.registerTermToGroup(varGroup, from);
     }
   }
 
@@ -165,34 +133,10 @@ ${JSON.stringify(to)}`);
     group = this.cleanNumber;
     this.cleanNumber++;
     this.groupToVars[group] = [ variable ];
-    this.groupToTemplates[group] = [];
     this.groupToTerm[group] = undefined;
     this.groupToRange[group] = new RangeSet(variable.range ?? objectRange);
     this.varToGroup[variable.value] = group;
     return group;
-  }
-
-  /**
-   * Registers a template constraint to a group.
-   * The template's output type must be compatible with the group's range.
-   * @param group - The group ID
-   * @param template - The template to add
-   * @throws Error if template type conflicts with group range or existing term
-   */
-  private registerTemplateToGroup(group: number, template: Template): void {
-    const curTerm = this.groupToTerm[group];
-    if (curTerm && curTerm.termType !== template.subType) {
-      throw new Error(`Cannot match Template ${JSON.stringify(template)} with term ${JSON.stringify(curTerm)}`);
-    }
-    const groupRange = this.groupToRange[group];
-    const newRange = groupRange.disjunct(new RangeSet([ template.subType ]));
-    if (newRange.size === 0) {
-      throw new Error(`Cannot assign template ${JSON.stringify(template)} to a group with range [${[ ...groupRange.values() ].join(', ')}]`);
-    }
-    // Narrow the groupRange
-    this.groupToRange[group] = newRange;
-
-    this.groupToTemplates[group].push(template);
   }
 
   /**
@@ -271,24 +215,5 @@ ${JSON.stringify(to)}`);
         .filter(x => !x.equals(from)),
       group: varGroup!,
     };
-  }
-
-  /**
-   * Gets all templates that must equal the given variable's value.
-   * @param from - The variable to look up
-   * @returns Array of templates that must equal this variable
-   */
-  public getTemplates(from: RDF.Variable): Template[] {
-    const varGroup = this.varToGroup[from.value];
-    return this.groupToTemplates[varGroup!];
-  }
-
-  /**
-   * Gets all static template validations (template-to-term equality checks).
-   * These are cases where a template must equal a concrete term with no variable involved.
-   * @returns Array of template-term pairs to validate
-   */
-  public getStaticTemplateValidation(): typeof this.staticTemplateValidation {
-    return this.staticTemplateValidation;
   }
 }

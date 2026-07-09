@@ -1,4 +1,5 @@
 /* eslint-disable jsdoc/check-param-names */
+import type * as RDF from '@rdfjs/types';
 import { toAlgebra } from '@traqula/algebra-sparql-1-2';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { algebraUtils } from '@traqula/algebra-transformations-1-2';
@@ -125,12 +126,19 @@ ${JSON.stringify(construct.template, null, 2)}`);
     MappingHead['object']['termType'][],
   ] = [[ 'Variable', 'NamedNode' ], [ 'Variable', 'NamedNode' ], [ 'NamedNode', 'Variable', 'Literal', 'Quad' ]];
   const template = construct.template[0];
-  const spoTemplate = [ template.subject, template.predicate, template.object ];
-  for (let idx = 0; idx < construct.template.length; idx++) {
-    if (!(<string[]> validPositions[idx]).includes(spoTemplate[idx].termType)) {
-      throw new Error(`Invalid Template, cannot use ${spoTemplate[idx].termType} in this position.`);
+  function checkQuadHeadValidity(quad: RDF.BaseQuad): void {
+    const spoQuad = [ quad.subject, quad.predicate, quad.object ];
+    for (let idx = 0; idx < construct.template.length; idx++) {
+      const toCheckTerm = spoQuad[idx];
+      if (!(<string[]> validPositions[idx]).includes(toCheckTerm.termType)) {
+        throw new Error(`Invalid Template, cannot use ${toCheckTerm.termType} in this position.`);
+      }
+      if (toCheckTerm.termType === 'Quad') {
+        checkQuadHeadValidity(toCheckTerm);
+      }
     }
   }
+  checkQuadHeadValidity(template);
   const head: MappingHead = <MappingHead> AF.createPattern(template.subject, template.predicate, template.object);
   // Get used vars to create the proper projection
   const usedVars = collectVariableNames(astTransformer, head);
@@ -180,13 +188,29 @@ export function createPartialContext(): Omit<TransformContext, 'mapping'> {
  * ]);
  */
 export function transformContextFromConstructs(mappers: readonly string[]): TransformContext {
-  const partialContext = createPartialContext();
-  const algebraMappers = mappers
-    .map(constructQuery => constructToMapper(partialContext, constructQuery))
-    .map((mapping, index) => prefixMappingVars(partialContext, mapping, `m${index}_`));
-  // TODO: we need to create an SPO head and push the template construction in as expressions.
+  const c = createPartialContext();
+
+  const manyMappings: Mapping[] = mappers.map(contr => constructToMapper(c, contr));
+  const vars = [ c.DF.variable('m_v'), c.DF.variable('m_p'), c.DF.variable('m_o') ];
+  const [ varS, varP, varO ] = vars;
+
+  const mappedBodies = manyMappings.map((mapping) => {
+    const { head, body } = mapping;
+    let newBody: Algebra.Operation = body;
+    const curPos = [ head.subject, head.predicate, head.object ];
+    for (const [ idx, headVar ] of vars.entries()) {
+      newBody = c.AF.createExtend(newBody, headVar, c.AF.createTermExpression(curPos[idx]));
+    }
+    return newBody;
+  });
+
+  const mergedMapping: Mapping = {
+    head: <MappingHead> c.AF.createPattern(varS, varP, varO),
+    body: c.AF.createProject(c.AF.createUnion(mappedBodies), [ varS, varP, varO ]),
+  };
+
   return {
-    mapping: algebraMappers,
-    ...partialContext,
+    mapping: mergedMapping,
+    ...c,
   };
 }

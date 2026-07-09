@@ -6,11 +6,9 @@ import { transformFilterFalse } from '../lib/transformations/filterFalse.js';
 import { operationTransform, queryTransform } from '../lib/transformBgp.js';
 import type { TransformContext } from '../lib/transformContext.js';
 import {
-  prefixMappingVars,
   createPartialContext,
   transformContextFromConstructs,
 } from '../lib/transformContext.js';
-import type { Mapping } from '../lib/types.js';
 import {
   expectedQuery,
   expectedQueryOptimizedBounds,
@@ -32,19 +30,6 @@ describe('dummy', () => {
     return queryTransform(transformerContext, userQuery, transformations);
   }
 
-  function transformQuery(
-    userQuery: string,
-    mappers: Mapping[],
-    transformations: ((c: TransformContext, op: Algebra.Operation) => Algebra.Operation)[] = [ operationTransform ],
-  ): string {
-    const transformerContext = {
-      ...c,
-      mappers: mappers
-        .map((mapping, index) => prefixMappingVars(c, mapping, `m${index}_`)),
-    };
-    return queryTransform(transformerContext, userQuery, transformations);
-  }
-
   function testConstructMappers(
     expect: typeof Expect,
     userQuery: string,
@@ -58,17 +43,6 @@ describe('dummy', () => {
     // Const _expectedAst = parser.parse(expectedQuery);
     // const _expectedAlgebra = toAlgebra(_expectedAst, { quads: true });
     // const _me = 2;
-  }
-
-  function testMappers(
-    expect: typeof Expect,
-    userQuery: string,
-    expectedQuery: string,
-    mappers: Mapping[],
-    transformations: ((c: TransformContext, op: Algebra.Operation) => Algebra.Operation)[] = [ operationTransform ],
-  ): void {
-    expect(transformQuery(userQuery, mappers, transformations).trim())
-      .toEqual(expectedQuery.trim());
   }
 
   it('simple', ({ expect }) =>

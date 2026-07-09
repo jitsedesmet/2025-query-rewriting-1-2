@@ -112,7 +112,7 @@ export function prefixMappingVars(
  * @throws Error if the body uses the BNODE() function
  */
 export function constructToMapper(
-  { parser, AF, astTransformer }: Pick<TransformContext, 'parser' | 'AF' | 'astTransformer'>,
+  { parser, AF, astTransformer, DF }: Pick<TransformContext, 'parser' | 'AF' | 'astTransformer' | 'DF'>,
   constructQuery: string,
 ): Mapping {
   const construct = <Algebra.Construct> parseQuery({ parser }, constructQuery);
@@ -128,8 +128,7 @@ ${JSON.stringify(construct.template, null, 2)}`);
   const template = construct.template[0];
   function checkQuadHeadValidity(quad: RDF.BaseQuad): void {
     const spoQuad = [ quad.subject, quad.predicate, quad.object ];
-    for (let idx = 0; idx < construct.template.length; idx++) {
-      const toCheckTerm = spoQuad[idx];
+    for (const [ idx, toCheckTerm ] of spoQuad.entries()) {
       if (!(<string[]> validPositions[idx]).includes(toCheckTerm.termType)) {
         throw new Error(`Invalid Template, cannot use ${toCheckTerm.termType} in this position.`);
       }
@@ -142,7 +141,7 @@ ${JSON.stringify(construct.template, null, 2)}`);
   const head: MappingHead = <MappingHead> AF.createPattern(template.subject, template.predicate, template.object);
   // Get used vars to create the proper projection
   const usedVars = collectVariableNames(astTransformer, head);
-  const body = AF.createProject(construct.input, Object.values(usedVars));
+  const body = AF.createProject(construct.input, [ ...usedVars.keys() ].map(x => DF.variable(x)));
   // Body should not call bnode function (you should not create blank nodes in mapping body)
   algebraUtils.visitOperationSub(body, {}, {
     expression: { operator: { visitor: (operatorExpression) => {
@@ -190,8 +189,8 @@ export function createPartialContext(): Omit<TransformContext, 'mapping'> {
 export function transformContextFromConstructs(mappers: readonly string[]): TransformContext {
   const c = createPartialContext();
 
-  const manyMappings: Mapping[] = mappers.map(contr => constructToMapper(c, contr));
-  const vars = [ c.DF.variable('m_v'), c.DF.variable('m_p'), c.DF.variable('m_o') ];
+  const manyMappings: Mapping[] = mappers.map(contr => prefixVarsInOperation(c, constructToMapper(c, contr), 'mi_'));
+  const vars = [ c.DF.variable('m_s'), c.DF.variable('m_p'), c.DF.variable('m_o') ];
   const [ varS, varP, varO ] = vars;
 
   const mappedBodies = manyMappings.map((mapping) => {
@@ -208,6 +207,8 @@ export function transformContextFromConstructs(mappers: readonly string[]): Tran
     head: <MappingHead> c.AF.createPattern(varS, varP, varO),
     body: c.AF.createProject(c.AF.createUnion(mappedBodies), [ varS, varP, varO ]),
   };
+
+  // Console.log(c.generator.generate(toAst(mergedMapping.body), c));
 
   return {
     mapping: mergedMapping,

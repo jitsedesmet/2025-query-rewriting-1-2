@@ -36,15 +36,6 @@ function headSPO(head: MappingHead): (MappingHead['subject'] | MappingHead['pred
 }
 
 /**
- * Extracts subject, predicate, object from a pattern or quad.
- * @param pattern - The pattern or quad
- * @returns Array of [subject, predicate, object]
- */
-function patternSPO(pattern: Algebra.Pattern | RDF.BaseQuad): RDF.Term[] {
-  return [ pattern.subject, pattern.predicate, pattern.object ];
-}
-
-/**
  * Register the unification between the current mapping and the triple pattern.
  * Function allows us to recurse over Triple Terms or nested Mapping Heads.
  * @param c transformation context
@@ -62,15 +53,19 @@ function iterateMappingHead(
 ): void {
   // Static array that allows us to access the range using the position index.
   const varRangesInPos = <const> [ subjectRange, predicateRange, objectRange ];
-  const spoPattern = patternSPO(pattern);
+  const spoPattern = [ pattern.subject, pattern.predicate, pattern.object ];
   for (const [ headIdx, headTerm ] of headSPO(head).entries()) {
     const patternTerm = spoPattern[headIdx];
     const variablePosRange = varRangesInPos[headIdx];
     if (isRdfQuad(headTerm) && isRdfQuad(patternTerm)) {
       // Recursion in triple term
       iterateMappingHead(c, mHVars, tPVars, headTerm, patternTerm);
+    } else if (isRdfQuad(patternTerm)) {
+      // TODO: a pattern provides restrictions on a variable being bound against.
+      //  These restrictions are only expressible through expressions though
+      //  and thus the solver should take expressions into account.
     } else {
-      // Head and Pattern can still be a Quad or MappingHead type
+      // If the head term is a Quad and the TP is a var, no issue, we perform the EXTEND to create the Triple Term
       // Register var and range it according to position (metadata for cluster algo). Done for triple pattern and head
       if (isRdfVar(headTerm)) {
         mHVars[headTerm.value] = headTerm;

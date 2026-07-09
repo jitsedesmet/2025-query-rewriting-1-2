@@ -45,7 +45,7 @@ describe('dummy', () => {
     // const _me = 2;
   }
 
-  it('very simple', ({ expect }) => testConstructMappers(
+  it('chain of unification through triple pattern', ({ expect }) => testConstructMappers(
     expect,
     'SELECT * { ?s <ex://p> <<(?s a "b")>> }',
     `SELECT ( ?uq_s AS ?s ) WHERE {
@@ -64,6 +64,21 @@ describe('dummy', () => {
   BIND( <ex://x> AS ?uq_s )
 }`,
     [ 'CONSTRUCT { <ex://x> <ex://p> ?y } WHERE { ?y ?y ?y }' ],
+  ));
+
+  it('simple pass through', ({ expect }) => testConstructMappers(
+    expect,
+    'SELECT * { ?s <ex://p> ?o }',
+      `SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) WHERE {
+  {
+    SELECT ?mi_o ?mi_s WHERE {
+      ?mi_s <ex://p> ?mi_o .
+    }
+  }
+  BIND( ?mi_o AS ?uq_o )
+  BIND( ?mi_s AS ?uq_s )
+}`,
+      [ 'CONSTRUCT WHERE { ?s <ex://p> ?o  }' ],
   ));
 
   it('simple', ({ expect }) =>

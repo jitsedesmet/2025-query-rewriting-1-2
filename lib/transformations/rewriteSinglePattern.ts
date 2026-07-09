@@ -122,12 +122,13 @@ function collectTriplePatternBinds({
   headVarsRemap,
   expressionFilters,
   AF,
+  DF,
 }: {
   clusterSolver: ClusterSolver;
   triplePatternVars: Record<string, RDF.Variable>;
   headVarsRemap: Record<string, RDF.Variable>;
   expressionFilters: Alg.Expression[];
-} & Pick<TransformContext, 'AF'>): Record<string, Alg.Expression> {
+} & Pick<TransformContext, 'AF' | 'DF'>): Record<string, Alg.Expression> {
   const triplePatternBinds: Record<string, Alg.Expression> = {};
   for (const tpVariable of Object.values(triplePatternVars)) {
     const cluster = clusterSolver.getCluster(tpVariable);
@@ -140,7 +141,8 @@ function collectTriplePatternBinds({
     if (term) {
       triplePatternBinds[tpVariable.value] = AF.createTermExpression(term);
     } else if (unifiedHeadVar) {
-      triplePatternBinds[tpVariable.value] = AF.createTermExpression(headVarsRemap[unifiedHeadVar.value]);
+      triplePatternBinds[tpVariable.value] =
+          AF.createTermExpression(headVarsRemap[unifiedHeadVar.value] ?? DF.variable(unifiedHeadVar.value));
     }
     let isBound = Boolean(term ?? unifiedHeadVar);
 
@@ -303,7 +305,7 @@ function wrapOperationInProject({ triplePatternBinds, operation, astTransformer,
   let buildOperation = operation;
   // All variables required from subselect -- recursive search needed for triple terms
   const variablesToSelect = collectVariableNames(astTransformer, triplePatternBinds);
-  const vars = Object.values(variablesToSelect);
+  const vars = [ ...variablesToSelect.values() ].map(x => DF.variable(x));
   if (vars.length === 0) {
     // You cannot select nothing, but actually we just want this subquery to validate if data exists.
     // You cannot have a subAsk, but you can do a select over a dummy var: SELECT (1 as ?dummy)
@@ -378,6 +380,7 @@ export function rewriteSinglePattern(
     headVarsRemap,
     expressionFilters,
     AF,
+    DF,
   });
 
   // Construct the contents of our subselect

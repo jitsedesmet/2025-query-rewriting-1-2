@@ -1,7 +1,8 @@
 import type * as RDF from '@rdfjs/types';
+import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { objectRange, RangeSet } from './RangeSet.js';
 import type { RangedVar } from './utils.js';
-import { isRdfVar } from './utils.js';
+import { isRdfTerm, isRdfVar } from './utils.js';
 
 /**
  * A raw term that is either a concrete term (not a variable) or a ranged variable.
@@ -41,10 +42,17 @@ export class ClusterSolver {
   private groupToVars: Record<number, RangedVar[]>;
   /** Maps group ID to the valid term type range for that group */
   private groupToRange: Record<number, RangeSet>;
+  /** Maps group ID to the expression that they need to satisfy */
+  private groupToExpressions: Record<number, Algebra.Expression[]>;
   /** Maps group ID to the concrete term the group is bound to (if any) */
   private groupToTerm: Record<number, RawBasicTerm | undefined>;
   /** Maps variable name to its group ID */
   private varToGroup: Record<string, number | undefined>;
+  /**
+   * Static expression validations where no variable group is involved.
+   * These occur when an expression must equal a concrete term.
+   */
+  private staticExpressionValidation: { expression: Algebra.Expression; term: RawBasicTerm }[];
   /** Counter for generating unique group IDs */
   private cleanNumber: number;
 
@@ -58,9 +66,11 @@ export class ClusterSolver {
    */
   public clear(): void {
     this.groupToVars = {};
+    this.groupToExpressions = {};
     this.groupToRange = {};
     this.groupToTerm = {};
     this.varToGroup = {};
+    this.staticExpressionValidation = [];
     this.cleanNumber = 1;
   }
 
@@ -98,8 +108,8 @@ export class ClusterSolver {
    * @param to - Term or variable (typically from triple pattern)
    * @throws Error if terms don't match or constraints conflict
    */
-  public register(from: RDF.Term, to: RDF.Term): void {
-    if (!isRdfVar(from) && !isRdfVar(to)) {
+  public register(from: RDF.Term | Algebra.Expression, to: RDF.Term): void {
+    if (isRdfTerm(from) && !isRdfVar(from) && isRdfTerm(to) && !isRdfVar(to)) {
       // Two terms, neither are vars
       if (from.equals(to)) {
         return;
@@ -112,10 +122,28 @@ export class ClusterSolver {
       // `from` is var - `to` is not
       const varGroup = this.getGroup(from);
       this.registerTermToGroup(varGroup, to);
-    } else {
+    } else if (isRdfVar(to)) {
       // `to` is var, `from` is not
-      const varGroup = this.getGroup(<RangedVar> to);
-      this.registerTermToGroup(varGroup, from);
+      const varGroup = this.getGroup(to);
+      if (isRdfTerm(from)) {
+        this.registerTermToGroup(varGroup, from);
+      } else {
+        // It is an expression
+        this.registerExpressionToGroup(varGroup, from);
+      }
+    } else {
+      // Neither `from` nor `to` is a var. First condition would have checked this in case `from` is a term.
+      // Check term types match:
+      const expression = <Exclude<typeof from, RDF.Term>> from;
+      // TODO; statically check if the expression is even satisfiable.
+      // if (expression.subType !== to.termType) {
+      //   throw new Error(`Cannot match template of type ${template.subType} with term of type ${to.termType}.
+      //   Matching ${JSON.stringify(expression)} with ${JSON.stringify(to)}`);
+      // }
+      this.staticExpressionValidation.push({
+        expression,
+        term: to,
+      });
     }
   }
 
@@ -133,10 +161,29 @@ export class ClusterSolver {
     group = this.cleanNumber;
     this.cleanNumber++;
     this.groupToVars[group] = [ variable ];
+    this.groupToExpressions[group] = [];
     this.groupToTerm[group] = undefined;
     this.groupToRange[group] = new RangeSet(variable.range ?? objectRange);
     this.varToGroup[variable.value] = group;
     return group;
+  }
+
+  private registerExpressionToGroup(group: number, expression: Algebra.Expression): void {
+    // TODO: is it expression satisfiable?
+    // const curTerm = this.groupToTerm[group];
+    // if (curTerm && curTerm.termType !== template.subType) {
+    //   throw new Error(`Cannot match Template ${JSON.stringify(template)} with term ${JSON.stringify(curTerm)}`);
+    // }
+    // const groupRange = this.groupToRange[group];
+    // Const newRange = groupRange.disjunct(new RangeSet([ template.subType ]));
+    // if (newRange.size === 0) {
+    //   throw new Error(`Cannot assign template ${JSON.stringify(template)}
+    //   to a group with range [${[ ...groupRange.values() ].join(', ')}]`);
+    // }
+    // Narrow the groupRange
+    // this.groupToRange[group] = newRange;
+
+    this.groupToExpressions[group].push(expression);
   }
 
   /**
@@ -215,5 +262,30 @@ export class ClusterSolver {
         .filter(x => !x.equals(from)),
       group: varGroup!,
     };
+  }
+
+  /**
+   * Gets all expressions that must equal the given variable's value.
+   * @param from - The variable to look up
+   * @returns Array of expressions that must equal this variable
+   */
+  public getExpressions(from: RDF.Variable): Algebra.Expression[] {
+    const varGroup = this.varToGroup[from.value];
+    return this.groupToExpressions[varGroup!];
+  }
+
+  /**
+   * Gets all static expression validations (expression-to-term equality checks).
+   * These are cases where an expression must equal a concrete term with no variable involved.
+   * @returns Array of template-term pairs to validate
+   *
+   * @example
+   *   UQ: ?s <p> <<(?s a "b")>>
+   *   MH: <x> <p> ?y
+   *   --> ?s = <x> = subject(?y) ;
+   *   AND ALSO: predicate(?y) = rdf:type ; object(?y) = "b"
+   */
+  public getStaticExpressionValidation(): typeof this.staticExpressionValidation {
+    return this.staticExpressionValidation;
   }
 }

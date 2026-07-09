@@ -1,6 +1,6 @@
 /* eslint-disable jsdoc/check-param-names */
 import type * as RDF from '@rdfjs/types';
-import { toAlgebra } from '@traqula/algebra-sparql-1-2';
+import { toAlgebra, toAst } from '@traqula/algebra-sparql-1-2';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { Generator } from '@traqula/generator-sparql-1-2';
@@ -190,6 +190,14 @@ export function transformContextFromConstructs(mappers: readonly string[]): Tran
   const c = createPartialContext();
 
   const manyMappings: Mapping[] = mappers.map(contr => prefixVarsInOperation(c, constructToMapper(c, contr), 'mi_'));
+  if (manyMappings.length === 1) {
+    // Console.log(manyMappings[0].head);
+    // console.log(c.generator.generate(toAst(manyMappings[0].body), c));
+    return {
+      ...c,
+      mapping: manyMappings[0],
+    };
+  }
   const vars = [ c.DF.variable('m_s'), c.DF.variable('m_p'), c.DF.variable('m_o') ];
   const [ varS, varP, varO ] = vars;
 
@@ -208,7 +216,7 @@ export function transformContextFromConstructs(mappers: readonly string[]): Tran
     body: c.AF.createProject(c.AF.createUnion(mappedBodies), [ varS, varP, varO ]),
   };
 
-  // Console.log(c.generator.generate(toAst(mergedMapping.body), c));
+  console.log(c.generator.generate(toAst(mergedMapping.body), c));
 
   return {
     mapping: mergedMapping,

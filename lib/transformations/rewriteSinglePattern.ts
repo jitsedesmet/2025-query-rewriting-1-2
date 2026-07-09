@@ -1,11 +1,10 @@
 import type * as RDF from '@rdfjs/types';
-import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { Algebra as Alg } from '@traqula/algebra-transformations-1-2';
 import type { ClusterSolver } from '../ClusterSolver.js';
 import { objectRange, predicateRange, subjectRange } from '../RangeSet.js';
 import type { TransformContext } from '../transformContext.js';
 import type { Mapping, MappingHead } from '../types.js';
-import { collectVariableNames, isRdfQuad, isRdfVar, renameVariables, templateToExpr } from '../utils.js';
+import { collectVariableNames, isRdfQuad, isRdfVar, renameVariables } from '../utils.js';
 
 /**
  * @fileoverview Core pattern rewriting logic.
@@ -35,6 +34,8 @@ function headSPO(head: MappingHead): (MappingHead['subject'] | MappingHead['pred
   return [ head.subject, head.predicate, head.object ];
 }
 
+let INTERNAL_VAR_FOR_EXISTENCE_COUNTER = 0;
+
 /**
  * Register the unification between the current mapping and the triple pattern.
  * Function allows us to recurse over Triple Terms or nested Mapping Heads.
@@ -60,10 +61,30 @@ function iterateMappingHead(
     if (isRdfQuad(headTerm) && isRdfQuad(patternTerm)) {
       // Recursion in triple term
       iterateMappingHead(c, mHVars, tPVars, headTerm, patternTerm);
-    } else if (isRdfQuad(patternTerm)) {
-      // TODO: a pattern provides restrictions on a variable being bound against.
-      //  These restrictions are only expressible through expressions though
-      //  and thus the solver should take expressions into account.
+    } else if (isRdfQuad(patternTerm) && isRdfVar(headTerm)) {
+      // If pattern is a quad, head must be a var. Otherwise, it was a quad, or a static term (which fails unification)
+
+      // We now know the varalues of the var should be FILTERed to aacount for the patternTerm restrictions;
+      //   or get the values of the patternTerm contained variables. -> start recursing the patternTerm.
+
+      function registerRestrictionsAndExpressionAssignments(quad: RDF.Quad, expression: Alg.Expression): void {
+        const spoQuad = [ quad.subject, quad.predicate, quad.object ];
+        const positionalOperators = [ 'subject', 'predicate', 'object' ];
+        for (const [ patternIdx, patternTerm ] of spoQuad.entries()) {
+          const variablePosRange = varRangesInPos[patternIdx];
+          const curHeadExpression = c.AF.createOperatorExpression(positionalOperators[patternIdx], [ expression ]);
+          if (isRdfQuad(patternTerm)) {
+            registerRestrictionsAndExpressionAssignments(patternTerm, curHeadExpression);
+          } else {
+            if (isRdfVar(patternTerm)) {
+              tPVars[patternTerm.value] = patternTerm;
+              patternTerm.range = variablePosRange;
+            }
+            c.clusterSolver.register(curHeadExpression, patternTerm);
+          }
+        }
+      }
+      registerRestrictionsAndExpressionAssignments(patternTerm, c.AF.createTermExpression(headTerm));
     } else {
       // If the head term is a Quad and the TP is a var, no issue, we perform the EXTEND to create the Triple Term
       // Register var and range it according to position (metadata for cluster algo). Done for triple pattern and head
@@ -99,21 +120,39 @@ function collectTriplePatternBinds({
   clusterSolver,
   triplePatternVars,
   headVarsRemap,
+  expressionFilters,
+  AF,
 }: {
   clusterSolver: ClusterSolver;
   triplePatternVars: Record<string, RDF.Variable>;
   headVarsRemap: Record<string, RDF.Variable>;
-}): Record<string, RDF.Term> {
-  const triplePatternBinds: Record<string, RDF.Term> = {};
+  expressionFilters: Alg.Expression[];
+} & Pick<TransformContext, 'AF'>): Record<string, Alg.Expression> {
+  const triplePatternBinds: Record<string, Alg.Expression> = {};
   for (const tpVariable of Object.values(triplePatternVars)) {
     const cluster = clusterSolver.getCluster(tpVariable);
+    const expressions = clusterSolver.getExpressions(tpVariable);
+
     const term = cluster.term;
+    // If two head vars are equal,
+    //  they are connected through a mapping var (would be first) and get their value from there.
+    const unifiedHeadVar = cluster.vars.at(0);
     if (term) {
-      triplePatternBinds[tpVariable.value] = term;
-    } else {
-      // If not bound to a term, you are always bound to a mappingHead var:
-      const boundTo = cluster.vars[0];
-      triplePatternBinds[tpVariable.value] = headVarsRemap[boundTo.value] ?? boundTo;
+      triplePatternBinds[tpVariable.value] = AF.createTermExpression(term);
+    } else if (unifiedHeadVar) {
+      triplePatternBinds[tpVariable.value] = AF.createTermExpression(headVarsRemap[unifiedHeadVar.value]);
+    }
+    let isBound = Boolean(term ?? unifiedHeadVar);
+
+    for (const expression of expressions) {
+      if (isBound) {
+        expressionFilters.push(
+          AF.createOperatorExpression('=', [ triplePatternBinds[tpVariable.value], expression ]),
+        );
+      } else {
+        triplePatternBinds[tpVariable.value] = expression;
+        isBound = true;
+      }
     }
   }
   return triplePatternBinds;
@@ -133,17 +172,19 @@ function collectTriplePatternBinds({
  * @param params.DF - Data factory for creating variables
  * @returns Object containing binds, remapping, and filters
  */
-function collectMappingHeadBindsAndFilters({ clusterSolver, mappingHeadVars, DF }: {
+function collectMappingHeadBindsAndFilters({ clusterSolver, mappingHeadVars, DF, AF }: {
   clusterSolver: ClusterSolver;
   mappingHeadVars: Record<string, RDF.Variable>;
-} & Pick<TransformContext, 'DF'>): {
+} & Pick<TransformContext, 'DF' | 'AF'>): {
     mappingHeadBinds: Record<string, RDF.Term>;
     headVarsRemap: Record<string, RDF.Variable>;
+    expressionFilters: Alg.Expression[];
   } {
   // If UQ triple pattern term is bound, and mapping head is var, put here - (starting Binds of subselect)
   const mappingHeadBinds: Record<string, RDF.Term> = {};
   // In case multiple headvars are equal to each-other, map them to their unifying replacement var.
   const headVarsRemap: Record<string, RDF.Variable> = {};
+  const expressionFilters: Alg.Expression[] = [];
 
   // Start by going over headVars and how they got restricted - restrict them within the body
   for (const headVar of Object.values(mappingHeadVars)) {
@@ -180,17 +221,27 @@ function collectMappingHeadBindsAndFilters({ clusterSolver, mappingHeadVars, DF 
       }
     }
 
+    // Done handling var unification - now register restrictions.
     if (cluster.term) {
       if (cluster.term.termType === 'BlankNode') {
         throw new Error(`Unreachable: The mapping head is assigned to a BlankNode, but this is not possible since blank nodes in the query have been replaced with variables during algebra conversion.`);
       }
       mappingHeadBinds[iterHeadVar.value] = cluster.term;
     }
+
+    const expressionsToRegister = clusterSolver.getExpressions(headVar);
+    for (const expression of expressionsToRegister) {
+      // If group has term, check if templates equal term, otherwise check if template equals var.
+      // By checking templates to terms we can perform prefix validation checks.
+      const term: RDF.Term = cluster.term ?? iterHeadVar;
+      expressionFilters.push(AF.createOperatorExpression('=', [ AF.createTermExpression(term), expression ]));
+    }
   }
 
   return {
     mappingHeadBinds,
     headVarsRemap,
+    expressionFilters,
   };
 }
 
@@ -210,8 +261,8 @@ function collectMappingHeadBindsAndFilters({ clusterSolver, mappingHeadVars, DF 
  */
 function rewriteToPreBindVars({ AF, DF, mappingHeadBinds, operation }: {
   mappingHeadBinds: Record<string, RDF.Term>;
-  operation: Algebra.Operation;
-} & Pick<TransformContext, 'AF' | 'DF'>): Algebra.Operation {
+  operation: Alg.Operation;
+} & Pick<TransformContext, 'AF' | 'DF'>): Alg.Operation {
   // For all statically bound mappingHead vars, register the terms they are equal too.
   // (add extend at start of subselect)
   let mappingHeadExtensions: Alg.Extend | Alg.Bgp = AF.createBgp([]);
@@ -246,9 +297,9 @@ function rewriteToPreBindVars({ AF, DF, mappingHeadBinds, operation }: {
  * @returns A PROJECT operation with the correct variable projection
  */
 function wrapOperationInProject({ triplePatternBinds, operation, astTransformer, DF, AF }: {
-  triplePatternBinds: Record<string, RDF.Term>;
-  operation: Algebra.Operation;
-} & Pick<TransformContext, 'astTransformer' | 'DF' | 'AF'>): Algebra.Project {
+  triplePatternBinds: Record<string, Alg.Expression>;
+  operation: Alg.Operation;
+} & Pick<TransformContext, 'astTransformer' | 'DF' | 'AF'>): Alg.Project {
   let buildOperation = operation;
   // All variables required from subselect -- recursive search needed for triple terms
   const variablesToSelect = collectVariableNames(astTransformer, triplePatternBinds);
@@ -257,13 +308,13 @@ function wrapOperationInProject({ triplePatternBinds, operation, astTransformer,
     // You cannot select nothing, but actually we just want this subquery to validate if data exists.
     // You cannot have a subAsk, but you can do a select over a dummy var: SELECT (1 as ?dummy)
     // [proof this works](https://query.comunica.dev/#transientDatasources=%2F%2Ffragments.dbpedia.org%2F2016-04%2Fen&query=SELECT%20*%0AWHERE%20%7B%0A%20%20%3Fs%20%3Fp%20%3Fo%20.%0A%20%20%7B%20SELECT%20%281%20as%20%3Fdummy%29%20WHERE%20%7B%0A%20%20%20%20%20%20%3Chttp%3A%2F%2F0-access.newspaperarchive.com.lib.utep.edu%2Fus%2Fmississippi%2Fbiloxi%2Fbiloxi-daily-herald%2F1899%2F05-06%2Fpage-6%3Ftag%3Dtierce%2Bwine%26rtserp%3Dtags%2Ftierce-wine%3Fpage%3D2%3E%0A%20%20%20%20%20%20%3Chttp%3A%2F%2Fdbpedia.org%2Fproperty%2Fdate%3E%0A%20%20%20%20%20%20%221899-05-05%22%5E%5E%3Chttp%3A%2F%2Fwww.w3.org%2F2001%2FXMLSchema%23date%3E%0A%20%20%20%20%20%20%23%20%221899-05-06%22%5E%5E%3Chttp%3A%2F%2Fwww.w3.org%2F2001%2FXMLSchema%23date%3E%0A%20%20%20%7D%20%7D%0A%7D)
-    // TODO: this should be a fresh variable to avoid collisions
+    const existenceVar = DF.variable(`mExists_${INTERNAL_VAR_FOR_EXISTENCE_COUNTER++}`);
     buildOperation = AF.createExtend(
       buildOperation,
-      DF.variable('dummy'),
+      existenceVar,
       AF.createTermExpression(DF.literal('dummy')),
     );
-    vars.push(DF.variable('dummy'));
+    vars.push(existenceVar);
   }
   // Sort allows for stable tests but does not practically change anything.
   vars.sort((a, b) => a.value.localeCompare(b.value));
@@ -284,13 +335,12 @@ function wrapOperationInProject({ triplePatternBinds, operation, astTransformer,
  * @returns The subquery with EXTEND operations for variable binding
  */
 function bindPatternTerms({ subQuery, AF, DF, triplePatternBinds }: {
-  subQuery: Algebra.Project;
-  triplePatternBinds: Record<string, RDF.Term>;
+  subQuery: Alg.Project;
+  triplePatternBinds: Record<string, Alg.Expression>;
 } & Pick<TransformContext, 'DF' | 'AF'>): Alg.Project | Alg.Extend {
   let buildOperation: Alg.Project | Alg.Extend = subQuery;
   // Finally add the binds after the subselect - Sort to create stable tests
-  for (const [ variable, template ] of Object.entries(triplePatternBinds).sort((a, b) => a[0].localeCompare(b[0]))) {
-    const expression = templateToExpr(AF, DF, template);
+  for (const [ variable, expression ] of Object.entries(triplePatternBinds).sort((a, b) => a[0].localeCompare(b[0]))) {
     buildOperation = AF.createExtend(
       buildOperation,
       DF.variable(variable),
@@ -318,20 +368,29 @@ export function rewriteSinglePattern(
 
   clusterSolver.sortClusters();
 
-  const { mappingHeadBinds, headVarsRemap } =
-    collectMappingHeadBindsAndFilters({ mappingHeadVars, DF, clusterSolver });
+  const { mappingHeadBinds, headVarsRemap, expressionFilters } =
+    collectMappingHeadBindsAndFilters({ mappingHeadVars, DF, clusterSolver, AF });
 
   // A map between what each uqVar now equals. Adds bind after the subselect
-  const triplePatternBinds: Record<string, RDF.Term> = collectTriplePatternBinds({
+  const triplePatternBinds: Record<string, Alg.Expression> = collectTriplePatternBinds({
     clusterSolver,
     triplePatternVars,
     headVarsRemap,
+    expressionFilters,
+    AF,
   });
 
   // Construct the contents of our subselect
   let inProject: Alg.Operation = mapping.body.input;
   inProject = renameVariables(c, inProject, headVarsRemap);
   inProject = rewriteToPreBindVars({ AF, DF, mappingHeadBinds, operation: inProject });
+  for (const expression of [
+    ...expressionFilters,
+    ...clusterSolver.getStaticExpressionValidation()
+      .map(x => AF.createOperatorExpression('=', [ AF.createTermExpression(x.term), x.expression ])),
+  ]) {
+    inProject = AF.createFilter(inProject, expression);
+  }
 
   const subQuery = wrapOperationInProject({ triplePatternBinds, AF, DF, astTransformer, operation: inProject });
   return bindPatternTerms({ subQuery, triplePatternBinds, DF, AF });

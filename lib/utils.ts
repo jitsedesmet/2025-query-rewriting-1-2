@@ -1,9 +1,7 @@
 import type * as RDF from '@rdfjs/types';
-import type { AlgebraFactory } from '@traqula/algebra-transformations-1-2';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { Typed } from '@traqula/core';
 import { DataFactory } from 'rdf-data-factory';
-import { EXTENSION_FUNCTION_BNODE } from './consts.js';
 import { RangeSet } from './RangeSet.js';
 import type { TransformContext } from './transformContext.js';
 
@@ -280,103 +278,4 @@ export function optimizeTemplateArray<T>(arr: T[]): (T | string)[] {
     }
   }
   return optimizedTemplate;
-}
-
-/**
- * Converts a TemplateIri to a SPARQL IRI() expression.
- * Creates: IRI(CONCAT(str1, STR(?var1), str2, ...))
- * @param AF - Algebra factory for creating expressions
- * @param DF - Data factory for creating RDF terms
- * @param template - The IRI template to convert
- * @returns An Expression that constructs the IRI at runtime
- */
-export function templateIriToExpr(AF: AlgebraFactory, DF: DataFactory, template: TemplateIri): Algebra.Expression {
-  return AF.createOperatorExpression('iri', [
-    AF.createOperatorExpression(
-      'concat',
-      template.value.map((val) => {
-        if (typeof val === 'string') {
-          return AF.createTermExpression(DF.literal(val));
-        }
-        return AF.createOperatorExpression('str', [ AF.createTermExpression(val) ]);
-      }),
-    ),
-  ]);
-}
-
-/**
- * Converts a TemplateLiteral to a SPARQL STRDT() expression.
- * Creates: STRDT(CONCAT(str1, STR(?var1), ...), datatype)
- * @param AF - Algebra factory for creating expressions
- * @param DF - Data factory for creating RDF terms
- * @param template - The literal template to convert
- * @returns An Expression that constructs the typed literal at runtime
- */
-export function templateLiteralToExpr(AF: AlgebraFactory, DF: DataFactory, template: TemplateLiteral):
-Algebra.Expression {
-  return AF.createOperatorExpression('strdt', [
-    AF.createOperatorExpression(
-      'concat',
-      template.value.map((val) => {
-        if (typeof val === 'string') {
-          return AF.createTermExpression(DF.literal(val));
-        }
-        return AF.createOperatorExpression('str', [ AF.createTermExpression(val) ]);
-      }),
-    ),
-    AF.createTermExpression(template.datatype),
-  ]);
-}
-
-/**
- * Converts a TemplateBlank to an internal blank node expression.
- * Creates: <internal://blank>(?var1, ?var2, ...)
- * This internal function will be further transformed by bnode transformation passes.
- * @param AF - Algebra factory for creating expressions
- * @param DF - Data factory for creating RDF terms
- * @param template - The blank node template to convert
- * @returns A NamedExpression representing the blank node construction
- */
-export function templateBlankToExpr(AF: AlgebraFactory, DF: DataFactory, template: TemplateBlank): Algebra.Expression {
-  return AF.createNamedExpression(
-    DF.namedNode(EXTENSION_FUNCTION_BNODE),
-    template.value.map(val => AF.createTermExpression(val)),
-  );
-}
-
-/**
- * Converts a TemplateQuad to a SPARQL TRIPLE() expression.
- * Creates: TRIPLE(subject_expr, predicate_expr, object_expr)
- * @param AF - Algebra factory for creating expressions
- * @param DF - Data factory for creating RDF terms
- * @param template - The quad template to convert
- * @returns An Expression that constructs the triple term at runtime
- */
-export function templateQuadToExpr(AF: AlgebraFactory, DF: DataFactory, template: TemplateQuad): Algebra.Expression {
-  return AF.createOperatorExpression('triple', [ template.subject, template.predicate, template.object ]
-    .map(x => templateToExpr(AF, DF, x)));
-}
-
-/**
- * Converts any template or RDF term to its corresponding SPARQL expression.
- * Dispatches to the appropriate template-to-expression function based on type.
- * @param AF - Algebra factory for creating expressions
- * @param DF - Data factory for creating RDF terms
- * @param template - The template or term to convert
- * @returns An Expression representing the template or a simple TermExpression
- */
-export function templateToExpr(AF: AlgebraFactory, DF: DataFactory, template: Template | RDF.Term): Algebra.Expression {
-  if (isRdfTerm(template)) {
-    return AF.createTermExpression(template);
-  }
-  switch (template.subType) {
-    case 'NamedNode':
-      return templateIriToExpr(AF, DF, template);
-    case 'Literal':
-      return templateLiteralToExpr(AF, DF, template);
-    case 'BlankNode':
-      return templateBlankToExpr(AF, DF, template);
-    case 'Quad':
-      return templateQuadToExpr(AF, DF, template);
-  }
 }

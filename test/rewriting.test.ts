@@ -45,6 +45,27 @@ describe('dummy', () => {
     // const _me = 2;
   }
 
+  it('very simple', ({ expect }) => testConstructMappers(
+    expect,
+    'SELECT * { ?s <ex://p> <<(?s a "b")>> }',
+    `SELECT ( ?uq_s AS ?s ) WHERE {
+  {
+    SELECT ( "dummy" AS ?mExists_0 ) WHERE {
+      {
+        {
+          ?mi_y ?mi_y ?mi_y .
+          FILTER ( ( <ex://x> = SUBJECT( ?mi_y ) ) )
+        }
+        FILTER ( ( <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> = PREDICATE( ?mi_y ) ) )
+      }
+      FILTER ( ( "b" = OBJECT( ?mi_y ) ) )
+    }
+  }
+  BIND( <ex://x> AS ?uq_s )
+}`,
+    [ 'CONSTRUCT { <ex://x> <ex://p> ?y } WHERE { ?y ?y ?y }' ],
+  ));
+
   it('simple', ({ expect }) =>
     testConstructMappers(expect, testQuery, expectedQuery, [ tripleTermConstruct, nonTripleTermConstruct ]));
 

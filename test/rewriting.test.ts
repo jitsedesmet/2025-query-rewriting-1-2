@@ -1,6 +1,7 @@
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { describe, it } from 'vitest';
 import type { expect as Expect } from 'vitest';
+import { transformExtendsToValues } from '../lib/transformations/extendsToValues.js';
 import { operationTransform, queryTransform } from '../lib/transformBgp.js';
 import type { TransformContext } from '../lib/transformContext.js';
 import {
@@ -79,6 +80,15 @@ describe('dummy', () => {
 
   it('simple', ({ expect }) =>
     testConstructMappers(expect, testQuery, expectedQuery, [ tripleTermConstruct, nonTripleTermConstruct ]));
+
+  // TODO: and also push down VALUES constraint
+  it('simple & toVALUES', ({ expect }) => testConstructMappers(
+    expect,
+    testQuery,
+    expectedQuery,
+    [ tripleTermConstruct, nonTripleTermConstruct ],
+    [ operationTransform, transformExtendsToValues ],
+  ));
 
   // It('simple & optimizeBinds', ({ expect }) => testConstructMappers(
   //   expect,

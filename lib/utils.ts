@@ -122,10 +122,6 @@ export function freshVarGenerator(existing: Iterable<string>, prefix = 'v_'): ()
  * Collects the names of every variable that occurs anywhere in an operation subtree.
  * This includes variable terms (subjects, predicates, objects, expression operands,
  * projected/extended variables, ...) as well as the string keys used in VALUES bindings.
- *
- * @param c - The transformation context
- * @param obj - The operation (or any object) to scan
- * @returns The set of variable names present in the subtree
  */
 export function collectVariableNames(astTransformer: TransformContext['astTransformer'], obj: object): Set<string> {
   const names = new Set<string>();

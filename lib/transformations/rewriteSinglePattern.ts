@@ -109,12 +109,6 @@ function iterateMappingHead(
  * be bound to after the subquery executes:
  * - A concrete term (if the mapping determines a specific value)
  * - A mapping variable (if bound through the subquery)
- *
- * @param params - Configuration object
- * @param params.clusterSolver - The cluster solver with variable unification info
- * @param params.triplePatternVars - Variables from the user's triple pattern
- * @param params.headVarsRemap - Remapping for unified head variables
- * @returns A record mapping variable names to their bindings
  */
 function collectTriplePatternBinds({
   clusterSolver,

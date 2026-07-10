@@ -1,6 +1,6 @@
 /* eslint-disable jsdoc/check-param-names */
 import type * as RDF from '@rdfjs/types';
-import { toAlgebra, toAst } from '@traqula/algebra-sparql-1-2';
+import { toAlgebra } from '@traqula/algebra-sparql-1-2';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { Generator } from '@traqula/generator-sparql-1-2';
@@ -216,7 +216,7 @@ export function transformContextFromConstructs(mappers: readonly string[]): Tran
     body: c.AF.createProject(c.AF.createUnion(mappedBodies), [ varS, varP, varO ]),
   };
 
-  console.log(c.generator.generate(toAst(mergedMapping.body), c));
+  // Console.log(c.generator.generate(toAst(mergedMapping.body), c));
 
   return {
     mapping: mergedMapping,

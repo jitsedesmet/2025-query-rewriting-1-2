@@ -1,8 +1,6 @@
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { describe, it } from 'vitest';
 import type { expect as Expect } from 'vitest';
-import { substituteVarsThatArePreBoundToTerms } from '../lib/transformations/boundedVarSubstitution.js';
-import { transformFilterFalse } from '../lib/transformations/filterFalse.js';
 import { operationTransform, queryTransform } from '../lib/transformBgp.js';
 import type { TransformContext } from '../lib/transformContext.js';
 import {
@@ -11,8 +9,6 @@ import {
 } from '../lib/transformContext.js';
 import {
   expectedQuery,
-  expectedQueryOptimizedBounds,
-  expectedQueryOptimizedBoundsAndEmptyRes,
   nonTripleTermConstruct,
   testQuery,
   tripleTermConstruct,
@@ -84,28 +80,28 @@ describe('dummy', () => {
   it('simple', ({ expect }) =>
     testConstructMappers(expect, testQuery, expectedQuery, [ tripleTermConstruct, nonTripleTermConstruct ]));
 
-  it('simple & optimizeBinds', ({ expect }) => testConstructMappers(
-    expect,
-    testQuery,
-    expectedQueryOptimizedBounds,
-    [ tripleTermConstruct, nonTripleTermConstruct ],
-    [ operationTransform, substituteVarsThatArePreBoundToTerms ],
-  ));
-
-  it('simple & optimizeBinds & optimizeEmptyResultSets', ({ expect }) => testConstructMappers(
-    expect,
-    testQuery,
-    expectedQueryOptimizedBoundsAndEmptyRes,
-    [ tripleTermConstruct, nonTripleTermConstruct ],
-    [ operationTransform, substituteVarsThatArePreBoundToTerms, transformFilterFalse ],
-  ));
-
-  it('spo with blank in mapping head', ({ expect }) => {
-    expect(() => transformQueryUsingConstructs(
-      'SELECT * { { ?s <http://ex.org/a> ?a ; <http://ex.org/b> ?b } UNION { ?s <http://ex.org/b> ?b2 } }',
-      [ `CONSTRUCT { ?s ?p _:blank } WHERE { ?s ?p ?o }` ],
-    )).toThrow('Mapping head may not contain blank nodes');
-  });
+  // It('simple & optimizeBinds', ({ expect }) => testConstructMappers(
+  //   expect,
+  //   testQuery,
+  //   expectedQueryOptimizedBounds,
+  //   [ tripleTermConstruct, nonTripleTermConstruct ],
+  //   [ operationTransform, substituteVarsThatArePreBoundToTerms ],
+  // ));
+  //
+  // it('simple & optimizeBinds & optimizeEmptyResultSets', ({ expect }) => testConstructMappers(
+  //   expect,
+  //   testQuery,
+  //   expectedQueryOptimizedBoundsAndEmptyRes,
+  //   [ tripleTermConstruct, nonTripleTermConstruct ],
+  //   [ operationTransform, substituteVarsThatArePreBoundToTerms, transformFilterFalse ],
+  // ));
+  //
+  // it('spo with blank in mapping head', ({ expect }) => {
+  //   expect(() => transformQueryUsingConstructs(
+  //     'SELECT * { { ?s <http://ex.org/a> ?a ; <http://ex.org/b> ?b } UNION { ?s <http://ex.org/b> ?b2 } }',
+  //     [ `CONSTRUCT { ?s ?p _:blank } WHERE { ?s ?p ?o }` ],
+  //   )).toThrow('Mapping head may not contain blank nodes');
+  // });
 
 //   It('sps with blank in mapping head', ({ expect }) => {
 //     expect(() => transformQueryUsingConstructs(

@@ -27,7 +27,7 @@ import { collectVariableNames, freshVarGenerator, renameVariables } from '../uti
 export function removeProjections<T extends Algebra.Operation>(c: TransformContext, op: T): T {
   // Seed the generator with every variable in the tree so fresh names never collide.
   // We cannot collide in the top level context
-  const nextVar = freshVarGenerator(collectVariableNames(c.astFactory, op));
+  const nextVar = freshVarGenerator(collectVariableNames(c.astTransformer, op));
 
   // TODO: this renames even if it has already renamed so could be optimized, but that's not a priority now.
   return algebraUtils.mapOperation<'unsafe', typeof op>(op, {
@@ -35,7 +35,7 @@ export function removeProjections<T extends Algebra.Operation>(c: TransformConte
       const projected = new Set(project.variables.map(variable => variable.value));
       const renames: Record<string, RDF.Variable> = {};
       // For all variables in the current subquery (which you know contains no other subqueries)
-      for (const name of collectVariableNames(c, project.input)) {
+      for (const name of collectVariableNames(c.astTransformer, project.input)) {
         // If that var is not projected, rename it
         if (!projected.has(name)) {
           renames[name] = nextVar();

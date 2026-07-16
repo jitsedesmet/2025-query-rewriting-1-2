@@ -8,27 +8,24 @@ PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 :alice :age 30 .
 
 # Reified triple 1: Alice knows Bob, stated by Wikipedia with high confidence
-:t1 rdf:reifies _:tt1 .
+:t1 a rdf:Statement .
+:t1 rdf:Subject :alice .
+:t1 rdf:Predicate :knows .
+:t1 rdf:Object :bob .
 :t1 :statedBy :wikipedia .
 :t1 :confidence "0.9" .
-_:tt1 a rdf:tripleTerm .
-_:tt1 rdf:ttSubject :alice .
-_:tt1 rdf:ttPredicate :knows .
-_:tt1 rdf:ttObject :bob .
 
 # Reified triple 2: Alice knows Charlie, stated by a survey
-:t2 rdf:reifies _:tt2 .
+:t2 a rdf:Statement .
+:t2 rdf:Subject :alice .
+:t2 rdf:Predicate :knows .
+:t2 rdf:Object :charlie .
 :t2 :statedBy :survey .
 :t2 :confidence "0.7" .
-_:tt2 a rdf:tripleTerm .
-_:tt2 rdf:ttSubject :alice .
-_:tt2 rdf:ttPredicate :knows .
-_:tt2 rdf:ttObject :charlie .
 
 # Reified triple 3: Bob knows Dave, stated by Alice
-:t3 rdf:reifies _:tt3 .
+:t3 a rdf:Statement .
+:t3 rdf:Subject :bob .
+:t3 rdf:Predicate :knows .
+:t3 rdf:Object :dave .
 :t3 :statedBy :alice .
-_:tt3 a rdf:tripleTerm .
-_:tt3 rdf:ttSubject :bob .
-_:tt3 rdf:ttPredicate :knows .
-_:tt3 rdf:ttObject :dave .

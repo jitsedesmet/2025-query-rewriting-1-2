@@ -48,6 +48,62 @@ CONSTRUCT {
 }
 `;
 
+/**
+ * Maps RDF reification (rdf:Statement / rdf:subject / rdf:predicate / rdf:object) to
+ * RDF 1.2 triple terms (rdf:reifies).  Used as a mapper for BKR-Reification.ttl.
+ */
+export const bkrReificationConstruct = `
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+CONSTRUCT {
+  ?t rdf:reifies <<( ?s ?p ?o )>>
+} WHERE {
+  ?t rdf:type rdf:Statement ;
+     rdf:subject ?s ;
+     rdf:predicate ?p ;
+     rdf:object ?o .
+}
+`;
+
+/**
+ * Passes through all triples that are NOT part of the reification structure itself
+ * (rdf:type rdf:Statement, rdf:subject, rdf:predicate, rdf:object).  Annotation
+ * property triples attached to the reification node (e.g. ?t derives_from ?source)
+ * are kept because they are needed to answer annotation queries in RDF 1.2 form.
+ *
+ * Used alongside bkrReificationConstruct for BKR-Reification.ttl.
+ */
+export const bkrNonReificationConstruct = `
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+CONSTRUCT {
+  ?s ?p ?o .
+} WHERE {
+  ?s ?p ?o .
+  FILTER ( !isTriple(?o) ) .
+  FILTER ( ?p != rdf:subject && ?p != rdf:predicate && ?p != rdf:object ) .
+  FILTER ( ?p != rdf:type || ?o != rdf:Statement ) .
+}
+`;
+
+/**
+ * Non-singleton pass-through for BKR-Singleton.ttl.  Unlike nonSingletonTripleConstruct,
+ * this variant does NOT exclude triples whose SUBJECT is a singleton property, because in
+ * BKR data the singleton predicate blank node also appears as a subject carrying
+ * annotation properties (e.g. ?singleton derives_from ?source).  Those must be preserved
+ * in the RDF 1.2 view so annotation queries can match `?t derives_from ?source` where
+ * `?t rdf:reifies <<( ?s ?p ?o )>>`.
+ */
+export const bkrNonSingletonConstruct = `
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+CONSTRUCT {
+  ?s ?p ?o .
+} WHERE {
+  ?s ?p ?o .
+  FILTER ( !isTriple(?o) ) .
+  FILTER NOT EXISTS { ?p rdf:singletonPropertyOf ?trueProp . }
+  FILTER ( ?p != rdf:singletonPropertyOf ) .
+}
+`;
+
 export const testQuery = `
 PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 PREFIX : <https://example.com/>

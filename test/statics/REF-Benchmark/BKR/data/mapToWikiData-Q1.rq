@@ -1,0 +1,34 @@
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX wikibase: <http://wikiba.se/ontology#>
+PREFIX wds: <http://www.wikidata.org/entity/statement/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX ps: <http://www.wikidata.org/prop/statement/>
+PREFIX p: <http://www.wikidata.org/prop/>
+
+# Since `<< ... >>` is the only construction used in BKR star,
+#   we know the depth is capped to one, and we know the predicate is rdf:reifies
+# Proof on wdt, wd, p, ps namespace relation: http://query.wikidata.org/#PREFIX%20wikibase%3A%20%3Chttp%3A%2F%2Fwikiba.se%2Fontology%23%3E%0APREFIX%20wds%3A%20%3Chttp%3A%2F%2Fwww.wikidata.org%2Fentity%2Fstatement%2F%3E%0APREFIX%20wdt%3A%20%3Chttp%3A%2F%2Fwww.wikidata.org%2Fprop%2Fdirect%2F%3E%0APREFIX%20wd%3A%20%3Chttp%3A%2F%2Fwww.wikidata.org%2Fentity%2F%3E%0APREFIX%20ps%3A%20%3Chttp%3A%2F%2Fwww.wikidata.org%2Fprop%2Fstatement%2F%3E%0APREFIX%20p%3A%20%3Chttp%3A%2F%2Fwww.wikidata.org%2Fprop%2F%3E%0A%0ASELECT%20%2a%20WHERE%20%7B%0A%20%20wd%3AQ13909%20%20wdt%3AP26%20%20%20%3Fs%20%3B%0A%20%20%20%20%20%20%20%20%20%20%20%20%20p%3AP26%20%5B%20ps%3AP26%20%3Fs%20%5D%0A%23%20%20%20wd%3AQ13909%20%20wdt%3AP26%20%20%20%3Fs%0A%23%20%20%20%20%20wd%3AQ13909%20%20p%3AP26%20%20%20%3Fs%20%20.%20%20%23%20%3Fs%20is%20the%20the%20statement%20node%0A%23%20%20%20%20%20%20%20%20%20%20%20%20%3Fs%20%20ps%3AP26%20%20%3Fsp%20.%20%20%23%20that%20simulates%20the%20predicate%20%0A%23%20%20%20%20%20%20%20%20%20%20%20%20%3Fs%20%20pq%3AP580%20%3Ft%20%20.%20%20%23%20this%20is%20an%20attribute%20%28a%20qualifier%29%0A%23%20%23%20%20%0A%23%20%20%20%20%20ps%3AP26%20%3Fp%20%3Fo%0A%20%20%0A%23%20%20%20wdt%3AP26%20%3Fp%20%3Fo%20.%0A%20%20%0A%23%20%20%20%3Fs1%20%3Fp1%20%5B%20%3Fp%20wdt%3AP26%20%5D%20.%0A%20%20%0A%23%20%20%20%3Fs%20%3Fp%20p%3AP26%20%3B%0A%23%20%20%20%20%20%20%3Fp1%20ps%3AP26%0A%20%20%20%20%20%0A%23%20%20%20wd%3AP26%0A%23%20%20%20%20%20%20%3Fp1%20wdt%3AP26%0A%20%20%20%20%0A%20%7D
+
+CONSTRUCT {
+    ?s ?p ?o .
+
+    ?propertyTerm wikibase:directClaim ?p ;
+                  wikibase:claim ?claim ;
+                  wikibase:statementProp ?statementProp .
+
+    ?s ?claim ?t .
+    ?t ?statementProp ?o ;
+    # Information on `?t` is added later.
+
+} WHERE {
+    ?t rdf:reifies <<( ?s ?p ?o )>> .
+
+    # Assume ?p is like the `wdt` namespace
+    # Create a `wd` namespace
+    BIND ( <internal://bnode>(?p) as ?propertyTerm )
+    # Create a `p` namespace
+    BIND ( <internal://bnode>(?p) as ?claim )
+    # Create a `ps` namespace
+    BIND ( <internal://bnode>(?p) as ?statementProp )
+}

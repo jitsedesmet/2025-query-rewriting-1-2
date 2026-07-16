@@ -1,0 +1,15 @@
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+
+# Since `<< ... >>` is the only construction used in BKR star,
+#   we know the depth is capped to one, and we know the predicate is rdf:reifies
+
+CONSTRUCT {
+    ?s ?p ?o .
+    ?t rdf:type rdf:Statement ;
+       rdf:subject ?s ;
+       rdf:predicate ?p ;
+       rdf:object ?o ;
+    # remaining of ?t populated in Q2.
+} WHERE {
+    ?t rdf:reifies <<( ?s ?p ?o )>>
+}

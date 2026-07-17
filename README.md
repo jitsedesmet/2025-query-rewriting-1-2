@@ -12,9 +12,29 @@ A conceptual overview of rewriting, specifically targeting the RDF 1.1/1.2 inter
 
 ## Overview
 
-Given a query Q without recursive paths:
+Given a query Q without recursive paths and mapping with head H and body B:
 1. Rewrite the paths to triple patterns without any paths: `./lib/transformations/pathTransformation.ts`
-2. 
+2. For each triple pattern in the user query, unfold the mapping body within it
+  2.1 Unify the mapping head and the body so you get groups of equality between expressions, mapping head variables and triple term variables.
+  2.2 B' = FILTER(B) with the equality of mapping head vars that are equal (using rewriteToSingleVar we replace them later)
+  2.3 B' = FILTER(B') with the other constraints on the vars we found (equality with a static term)
+  2.4 B' = EXTEND(B') with how the triple term vars are constructed from the mapping head vars
+  2.5 B' = FILTER(B') assert the triple term vars are assigned.
+  2.6 B' = PROJECT(B') what remains accessible are only the triple terms vars
+3. rewrite B' to replace equality between many variables with a single variable that represents this equality.
+In case one of the variables is normally constructed using an EXTEND, use a filter instead. TODO: this is not 100% correct yet.
+4. Replace variables that are assigned to static terms with those terms, again special care is needed when they are used in certain operations such as expressions.
+5. group constraints together using pushDownRestrictions, which pushes restrictions down and distributes JOIN over UNION
+6. Prune invalid constraint groups, replacing them with filter false.
+  This involves statically evaluating the expression equalities, using both the ClusterSolver (I think), as range and domain of known operations,
+  but also using comunica's expression evaluator to evaluate static expressions and optimize the query.
+  Certain operations might be fruitful to implement specific prune algorithms for,
+  like word equations testing literal concatenations are possible given a variable.
+7. optimize filter False expressions by letting them walk up.
+
+To check:
+1. projections may cause some engines to behave weird. In that case we should remove projections.
+2. Merge service calls. Services can handle a variable amound of computation, given that, we can compose them in various ways.
 
 ## How It Works
 

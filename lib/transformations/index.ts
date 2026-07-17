@@ -25,6 +25,10 @@
  * - **removeProjections**: Removes all PROJECT operations from an algebra tree,
  *   anonymizing every non-projected variable to a fresh variable to preserve scoping.
  *
+ * - **transformJoinValuesToFilter**: Rewrites a JOIN with a VALUES clause into an equality FILTER
+ *   over the remaining join operands (extracting any column that is constant across all rows, and
+ *   collapsing contradicting VALUES to an empty result), enabling further push-down optimizations.
+ *
  * @module transformations
  */
 export { substituteVarsThatArePreBoundToTerms } from './boundedVarSubstitution.js';
@@ -36,3 +40,4 @@ export { removeProjections } from './removeProjections.js';
 export {
   pushDownRestrictors,
 } from './pushDownRestrictors.js';
+export { transformJoinValuesToFilter } from './joinValuesToFilter.js';

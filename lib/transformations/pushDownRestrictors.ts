@@ -1,4 +1,3 @@
-import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformContext } from '../transformContext.js';
 import { collectVariableNames } from '../utils.js';
@@ -152,7 +151,7 @@ function pushFilterThroughJoin(
 ): Algebra.Operation {
   const { AF } = c;
   const conjuncts = splitConjunction(expression);
-  const operandSafeVars = join.input.map(operand => safeVars(operand));
+  const operandSafeVars = join.input.map(operand => algebraUtils.certainlyBoundVariables(operand));
 
   const remaining: Algebra.Expression[] = [];
   for (const conjunct of conjuncts) {
@@ -232,99 +231,4 @@ function isSubsetOf(subset: Set<string>, superset: Set<string>): boolean {
     }
   }
   return true;
-}
-
-/**
- * Computes `safeVars(A)`: the set of variables that are guaranteed to be bound after evaluating `A`
- * on any dataset. This is a sound under-approximation following Definition 5 of Schmidt et al.
- * (https://arxiv.org/pdf/0812.3788). Any variable not proven to be certainly bound is simply left
- * out, which keeps (SJPush) sound.
- *
- * Notably, EXTEND (BIND) does not add its variable: a BIND expression may raise an evaluation error,
- * in which case the variable stays unbound, so it is not part of safeVars.
- *
- * @param op - The operation whose certainly-bound variables are computed
- * @returns The set of certainly-bound variable names
- */
-function safeVars(op: Algebra.Operation): Set<string> {
-  switch (op.type) {
-    case Algebra.Types.BGP:
-      return unionSets(op.patterns.map(pattern => patternVars(pattern)));
-    case Algebra.Types.PATTERN:
-      return patternVars(op);
-    case Algebra.Types.PATH:
-      return unionSets([ termVars(op.subject), termVars(op.object) ]);
-    case Algebra.Types.JOIN:
-      return unionSets(op.input.map(input => safeVars(input)));
-    case Algebra.Types.UNION:
-      return intersectSets(op.input.map(input => safeVars(input)));
-    case Algebra.Types.MINUS:
-    case Algebra.Types.LEFT_JOIN:
-      return safeVars(op.input[0]);
-    case Algebra.Types.PROJECT: {
-      const projected = new Set(op.variables.map(variable => variable.value));
-      return intersectSets([ safeVars(op.input), projected ]);
-    }
-    case Algebra.Types.GROUP:
-      return new Set(op.variables.map(variable => variable.value));
-    case Algebra.Types.VALUES:
-      // A VALUES variable is certainly bound only if every row provides a value for it.
-      return new Set(op.variables
-        .filter(variable => op.bindings.every(binding => binding[variable.value] !== undefined))
-        .map(variable => variable.value));
-    case Algebra.Types.GRAPH:
-    case Algebra.Types.FILTER:
-    case Algebra.Types.EXTEND:
-    case Algebra.Types.SERVICE:
-    case Algebra.Types.DISTINCT:
-    case Algebra.Types.REDUCED:
-    case Algebra.Types.SLICE:
-    case Algebra.Types.ORDER_BY:
-    case Algebra.Types.FROM:
-      return safeVars((<Algebra.Single> op).input);
-    default:
-      return new Set<string>();
-  }
-}
-
-/**
- * Collects the variables appearing in a single triple/quad pattern (including nested quoted triples).
- */
-function patternVars(pattern: Algebra.Pattern): Set<string> {
-  return unionSets([
-    termVars(pattern.subject),
-    termVars(pattern.predicate),
-    termVars(pattern.object),
-    termVars(pattern.graph),
-  ]);
-}
-
-/**
- * Collects the variables in an RDF term, recursing into quoted triples.
- */
-function termVars(term: RDF.Term): Set<string> {
-  if (term.termType === 'Variable') {
-    return new Set([ term.value ]);
-  }
-  if (term.termType === 'Quad') {
-    return unionSets([ termVars(term.subject), termVars(term.predicate), termVars(term.object) ]);
-  }
-  return new Set<string>();
-}
-
-function unionSets(sets: Set<string>[]): Set<string> {
-  const result = new Set<string>();
-  for (const set of sets) {
-    for (const value of set) {
-      result.add(value);
-    }
-  }
-  return result;
-}
-
-function intersectSets(sets: Set<string>[]): Set<string> {
-  if (sets.length === 0) {
-    return new Set<string>();
-  }
-  return sets.reduce((acc, set) => new Set([ ...acc ].filter(value => set.has(value))));
 }

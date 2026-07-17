@@ -5,6 +5,11 @@ import { DataFactory } from 'rdf-data-factory';
 import { RangeSet } from './RangeSet.js';
 import type { TransformContext } from './transformContext.js';
 
+interface Metadata {
+  certainlyBoundVars: RangedVar[];
+  scopedVariables: RangedVar[];
+}
+
 /** Shared DataFactory instance for creating RDF terms */
 export const DF = new DataFactory();
 

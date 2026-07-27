@@ -48,7 +48,7 @@ describe('dummy', () => {
     {
       {
         ?p0_mi_y ?p0_mi_y ?p0_mi_y .
-        FILTER ( ( <ex://x> = SUBJECT( ?p0_mi_y ) ) )
+        FILTER ( SAMETERM( <ex://x> , SUBJECT( ?p0_mi_y ) ) )
       }
       FILTER ( SAMETERM( <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> , PREDICATE( ?p0_mi_y ) ) )
     }

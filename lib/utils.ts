@@ -110,7 +110,7 @@ export function freshVarGenerator(existing: Iterable<string>, prefix = 'v_'): ()
     let name = `${prefix}${index}`;
     while (taken.has(name)) {
       index += 1;
-      name = `${prefix}_${index}`;
+      name = `${prefix}${index}`;
     }
     taken.add(name);
     index += 1;

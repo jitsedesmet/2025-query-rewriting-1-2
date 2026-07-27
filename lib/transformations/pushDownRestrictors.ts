@@ -164,13 +164,10 @@ function pushFilterThroughJoin(
     }
   }
 
-  if (remaining.length === conjuncts.length) {
-    // Nothing could be pushed into an operand: keep the (recombined) filter above the JOIN.
-    return AF.createFilter(join, conjunctionOf(c, remaining));
-  }
   if (remaining.length === 0) {
     return join;
   }
+  // What could not be pushed into a single operand stays in a (recombined) filter above the JOIN.
   return AF.createFilter(join, conjunctionOf(c, remaining));
 }
 

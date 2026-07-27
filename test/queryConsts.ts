@@ -67,34 +67,37 @@ export const expectedQuery = `SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq
           {
             {
               {
-                SELECT ?p0_mi_o ?p0_mi_p ?p0_mi_s ?p0_mi_t WHERE {
-                  ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
-                  ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?p0_mi_s .
-                  ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?p0_mi_p .
-                  ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?p0_mi_o .
+                {
+                  SELECT ?p0_mi_o ?p0_mi_p ?p0_mi_s ?p0_mi_t WHERE {
+                    ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
+                    ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?p0_mi_s .
+                    ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?p0_mi_p .
+                    ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?p0_mi_o .
+                  }
                 }
+                BIND( ?p0_mi_t AS ?p0_m_s )
+                BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?p0_m_p )
+                BIND( <<( ?p0_mi_s ?p0_mi_p ?p0_mi_o )>> AS ?p0_m_o )
               }
-              BIND( ?p0_mi_t AS ?p0_m_s )
-              BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?p0_m_p )
-              BIND( <<( ?p0_mi_s ?p0_mi_p ?p0_mi_o )>> AS ?p0_m_o )
-            }
-            UNION {
-              {
-                SELECT ?p0_mi_o ?p0_mi_p ?p0_mi_s WHERE {
-                  ?p0_mi_s ?p0_mi_p ?p0_mi_o .
+              UNION {
+                {
+                  SELECT ?p0_mi_o ?p0_mi_p ?p0_mi_s WHERE {
+                    ?p0_mi_s ?p0_mi_p ?p0_mi_o .
+                  }
                 }
+                BIND( ?p0_mi_s AS ?p0_m_s )
+                BIND( ?p0_mi_p AS ?p0_m_p )
+                BIND( ?p0_mi_o AS ?p0_m_o )
               }
-              BIND( ?p0_mi_s AS ?p0_m_s )
-              BIND( ?p0_mi_p AS ?p0_m_p )
-              BIND( ?p0_mi_o AS ?p0_m_o )
+              FILTER ( SAMETERM( ?p0_m_s , <https://example.com/t> ) )
             }
-            FILTER ( SAMETERM( ?p0_m_s , <https://example.com/t> ) )
+            FILTER ( SAMETERM( ?p0_m_p , <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ) )
           }
-          FILTER ( SAMETERM( ?p0_m_p , <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ) )
+          FILTER ( SAMETERM( <https://example.com/me> , SUBJECT( ?p0_m_o ) ) )
         }
-        FILTER ( SAMETERM( <https://example.com/me> , SUBJECT( ?p0_m_o ) ) )
+        FILTER ( SAMETERM( <https://example.com/name> , PREDICATE( ?p0_m_o ) ) )
       }
-      FILTER ( SAMETERM( <https://example.com/name> , PREDICATE( ?p0_m_o ) ) )
+      FILTER ( ISTRIPLE( ?p0_m_o ) )
     }
   }
   {
@@ -196,34 +199,37 @@ export const expectedQueryToValues = `SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o
           {
             {
               {
-                SELECT ?p0_mi_o ?p0_mi_p ?p0_mi_s ?p0_mi_t WHERE {
-                  ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
-                  ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?p0_mi_s .
-                  ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?p0_mi_p .
-                  ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?p0_mi_o .
+                {
+                  SELECT ?p0_mi_o ?p0_mi_p ?p0_mi_s ?p0_mi_t WHERE {
+                    ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
+                    ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?p0_mi_s .
+                    ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?p0_mi_p .
+                    ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?p0_mi_o .
+                  }
                 }
+                BIND( ?p0_mi_t AS ?p0_m_s )
+                BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?p0_m_p )
+                BIND( <<( ?p0_mi_s ?p0_mi_p ?p0_mi_o )>> AS ?p0_m_o )
               }
-              BIND( ?p0_mi_t AS ?p0_m_s )
-              BIND( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> AS ?p0_m_p )
-              BIND( <<( ?p0_mi_s ?p0_mi_p ?p0_mi_o )>> AS ?p0_m_o )
-            }
-            UNION {
-              {
-                SELECT ?p0_mi_o ?p0_mi_p ?p0_mi_s WHERE {
-                  ?p0_mi_s ?p0_mi_p ?p0_mi_o .
+              UNION {
+                {
+                  SELECT ?p0_mi_o ?p0_mi_p ?p0_mi_s WHERE {
+                    ?p0_mi_s ?p0_mi_p ?p0_mi_o .
+                  }
                 }
+                BIND( ?p0_mi_s AS ?p0_m_s )
+                BIND( ?p0_mi_p AS ?p0_m_p )
+                BIND( ?p0_mi_o AS ?p0_m_o )
               }
-              BIND( ?p0_mi_s AS ?p0_m_s )
-              BIND( ?p0_mi_p AS ?p0_m_p )
-              BIND( ?p0_mi_o AS ?p0_m_o )
+              FILTER ( SAMETERM( ?p0_m_s , <https://example.com/t> ) )
             }
-            FILTER ( SAMETERM( ?p0_m_s , <https://example.com/t> ) )
+            FILTER ( SAMETERM( ?p0_m_p , <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ) )
           }
-          FILTER ( SAMETERM( ?p0_m_p , <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ) )
+          FILTER ( SAMETERM( <https://example.com/me> , SUBJECT( ?p0_m_o ) ) )
         }
-        FILTER ( SAMETERM( <https://example.com/me> , SUBJECT( ?p0_m_o ) ) )
+        FILTER ( SAMETERM( <https://example.com/name> , PREDICATE( ?p0_m_o ) ) )
       }
-      FILTER ( SAMETERM( <https://example.com/name> , PREDICATE( ?p0_m_o ) ) )
+      FILTER ( ISTRIPLE( ?p0_m_o ) )
     }
   }
   {

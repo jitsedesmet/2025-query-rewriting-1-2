@@ -5,6 +5,7 @@ import { DataFactory, Store } from 'n3';
 import { describe, it } from 'vitest';
 import { transformFilterFalse } from '../lib/transformations/filterFalse.js';
 import { nullifyJoinOverIncompatibleBounds } from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
+import { removeProjections } from '../lib/transformations/removeProjections.js';
 import { operationTransform, queryTransform } from '../lib/transformBgp.js';
 import { transformContextFromConstructs } from '../lib/transformContext.js';
 import {
@@ -35,6 +36,7 @@ describe('integration tests', () => {
     transformFilterFalse,
     nullifyJoinOverIncompatibleBounds,
     transformFilterFalse,
+    removeProjections,
   ];
 
   async function sourceToStore(
@@ -297,6 +299,20 @@ describe('integration tests', () => {
         mappers,
         `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
          SELECT ?s ?p ?o WHERE { ?t rdf:reifies <<( ?s ?p ?o )>> }`,
+      );
+      expect(resOnMappedData).toEqual(resUsingRewriter);
+    });
+
+    // A triple term pattern whose predicate is a variable also reaches the pass through mapping,
+    // where the object is any term. Reading SUBJECT/PREDICATE/OBJECT out of a non triple term
+    // raises an evaluation error, which leaves the BIND target unbound instead of rejecting the
+    // solution, so the rewriting has to assert the triple term-ness itself.
+    it('a triple term pattern with a variable predicate does not match plain triples', async({ expect }) => {
+      const store11 = await sourceToStore([ './test/statics/multipleRdfReifiedTriples.ttl' ]);
+      const { resOnMappedData, resUsingRewriter } = await compareSelectRewrittenToMapped(
+        store11,
+        mappers,
+        'SELECT ?t ?p ?s ?p2 ?o WHERE { ?t ?p <<( ?s ?p2 ?o )>> }',
       );
       expect(resOnMappedData).toEqual(resUsingRewriter);
     });

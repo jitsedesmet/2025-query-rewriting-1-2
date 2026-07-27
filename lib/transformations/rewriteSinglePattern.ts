@@ -1,5 +1,6 @@
 import type * as RDF from '@rdfjs/types';
 import type { Algebra as Alg } from '@traqula/algebra-transformations-1-2';
+import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { ClusterSolver } from '../ClusterSolver.js';
 import { objectRange, predicateRange, subjectRange } from '../RangeSet.js';
 import type { TransformContext } from '../transformContext.js';
@@ -137,8 +138,10 @@ function collectTriplePatternBinds({
 
     for (const expression of expressions) {
       if (isBound) {
+        // Triple pattern matching is term equality, so assert sameTerm and not `=`:
+        // "1"^^xsd:integer and "1.0"^^xsd:decimal are `=` but never match the same pattern.
         expressionFilters.push(
-          AF.createOperatorExpression('=', [ triplePatternBinds[tpVariable.value], expression ]),
+          AF.createOperatorExpression('sameTerm', [ triplePatternBinds[tpVariable.value], expression ]),
         );
       } else {
         triplePatternBinds[tpVariable.value] = expression;
@@ -265,6 +268,43 @@ function bindPatternTerms({ operation, AF, DF, triplePatternBinds }: {
 }
 
 /**
+ * Builds the conditions under which a pattern bind yields a term instead of raising an evaluation
+ * error - README step 2.5: "assert the triple term vars are assigned".
+ *
+ * A BIND whose expression errors leaves its target variable *unbound* while keeping the solution,
+ * but a triple pattern only matches when every one of its variables is assigned a term. A pattern
+ * variable inside a triple term is bound through `SUBJECT`/`PREDICATE`/`OBJECT` of a mapping
+ * variable, and those raise an error whenever that variable does not hold a triple term. Without
+ * the guard, a mapping producing no triple term at all still yields a solution in which the
+ * pattern's variables are unbound.
+ *
+ * `ISTRIPLE` also covers an unbound argument (it errors, so the FILTER rejects the solution), which
+ * is why no separate `BOUND` check is emitted.
+ *
+ * The guards are added *below* the binds, over the mapping body, so the top of a rewritten pattern
+ * stays an EXTEND. A FILTER at the top would be lifted into the condition of an enclosing LEFT JOIN
+ * once {@link removeProjections} drops the subselect barrier (SPARQL 1.2 §18.2.2.2).
+ *
+ * @param c - The transformation context
+ * @param expression - The expression a pattern variable gets bound to
+ * @returns The conditions to assert, innermost argument first
+ */
+function bindEvaluationGuards(c: TransformContext, expression: Alg.Expression): Alg.Expression[] {
+  if (
+    expression.subType !== Algebra.ExpressionTypes.OPERATOR ||
+    ![ 'subject', 'predicate', 'object' ].includes(expression.operator)
+  ) {
+    return [];
+  }
+  const [ argument ] = expression.args;
+  return [
+    ...bindEvaluationGuards(c, argument),
+    // Copy the argument: the guard and the bind must not alias, later passes rewrite algebra in place.
+    c.AF.createOperatorExpression('istriple', [ <Alg.Expression> c.astTransformer.transformObject(argument, o => o) ]),
+  ];
+}
+
+/**
  * Rewrites a single triple pattern using a mapping definition.
  */
 export function rewriteSinglePattern(
@@ -298,10 +338,19 @@ export function rewriteSinglePattern(
   // Collapse unified head variables onto their fresh representative. Where a
   // representative would be bound twice, the redundant BIND becomes an equality
   // FILTER so the variables' equality is asserted, not dropped.
+  // A pattern variable that is read out of a triple term is only assigned when that triple term
+  // really is one - assert it, duplicates removed since one mapping variable feeds several binds.
+  const guards = new Map<string, Alg.Expression>();
+  for (const [ , expression ] of Object.entries(triplePatternBinds).sort((a, b) => a[0].localeCompare(b[0]))) {
+    for (const guard of bindEvaluationGuards(c, expression)) {
+      guards.set(JSON.stringify(guard), guard);
+    }
+  }
   for (const expression of [
     ...expressionFilters,
     ...clusterSolver.getStaticExpressionValidation()
       .map(x => AF.createOperatorExpression('sameTerm', [ AF.createTermExpression(x.term), x.expression ])),
+    ...guards.values(),
   ]) {
     inProject = AF.createFilter(inProject, expression);
   }

@@ -203,7 +203,7 @@ export class ClusterSolver extends ClusterSet<RangedVar> {
 
   /**
    * Merges two variable groups into one.
-   * Combines ranges, terms, and templates from both groups.
+   * Combines ranges, terms, and expressions from both groups.
    * @param from - First variable
    * @param to - Second variable
    */
@@ -220,6 +220,12 @@ export class ClusterSolver extends ClusterSet<RangedVar> {
     if (oldTerm) {
       this.registerTermToGroup(newGroup, oldTerm);
     }
+    // Merge expressions - the old group is no longer reachable, so its constraints would be lost.
+    this.groupToExpressions[newGroup].push(...this.groupToExpressions[oldGroup]);
+    delete this.groupToExpressions[oldGroup];
+    delete this.groupToRange[oldGroup];
+    delete this.groupToTerm[oldGroup];
+    return res;
   }
 
   /**

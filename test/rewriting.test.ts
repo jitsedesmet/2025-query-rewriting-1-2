@@ -5,7 +5,6 @@ import { transformExtendsToValues } from '../lib/transformations/extendsToValues
 import { operationTransform, queryTransform } from '../lib/transformBgp.js';
 import type { TransformContext } from '../lib/transformContext.js';
 import {
-  createPartialContext,
   transformContextFromConstructs,
 } from '../lib/transformContext.js';
 import {
@@ -17,8 +16,6 @@ import {
 } from './queryConsts.js';
 
 describe('dummy', () => {
-  const c = createPartialContext();
-
   function transformQueryUsingConstructs(
     userQuery: string,
     mappers: string[],
@@ -47,19 +44,16 @@ describe('dummy', () => {
     expect,
     'SELECT * { ?s <ex://p> <<(?s a "b")>> }',
     `SELECT ( ?uq_s AS ?s ) WHERE {
-  {
-    SELECT ( "dummy" AS ?p0_mExists ) WHERE {
+  SELECT ( <ex://x> AS ?uq_s ) WHERE {
+    {
       {
-        {
-          ?p0_mi_y ?p0_mi_y ?p0_mi_y .
-          FILTER ( ( <ex://x> = SUBJECT( ?p0_mi_y ) ) )
-        }
-        FILTER ( ( <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> = PREDICATE( ?p0_mi_y ) ) )
+        ?p0_mi_y ?p0_mi_y ?p0_mi_y .
+        FILTER ( ( <ex://x> = SUBJECT( ?p0_mi_y ) ) )
       }
-      FILTER ( ( "b" = OBJECT( ?p0_mi_y ) ) )
+      FILTER ( SAMETERM( <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> , PREDICATE( ?p0_mi_y ) ) )
     }
+    FILTER ( SAMETERM( "b" , OBJECT( ?p0_mi_y ) ) )
   }
-  BIND( <ex://x> AS ?uq_s )
 }`,
     [ 'CONSTRUCT { <ex://x> <ex://p> ?y } WHERE { ?y ?y ?y }' ],
   ));
@@ -67,16 +61,12 @@ describe('dummy', () => {
   it('simple pass through', ({ expect }) => testConstructMappers(
     expect,
     'SELECT * { ?s <ex://p> ?o }',
-      `SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) WHERE {
-  {
-    SELECT ?p0_mi_o ?p0_mi_s WHERE {
-      ?p0_mi_s <ex://p> ?p0_mi_o .
-    }
+    `SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) WHERE {
+  SELECT ( ?p0_mi_o AS ?uq_o ) ( ?p0_mi_s AS ?uq_s ) WHERE {
+    ?p0_mi_s <ex://p> ?p0_mi_o .
   }
-  BIND( ?p0_mi_o AS ?uq_o )
-  BIND( ?p0_mi_s AS ?uq_s )
 }`,
-      [ 'CONSTRUCT WHERE { ?s <ex://p> ?o  }' ],
+    [ 'CONSTRUCT WHERE { ?s <ex://p> ?o  }' ],
   ));
 
   it('simple', ({ expect }) =>
@@ -367,7 +357,8 @@ describe('dummy', () => {
 //       ],
 //     ));
 //
-//     it('nullifyJoinOverIncompatibleBounds - adding simple filter and optimizing', ({ expect }) => testConstructMappers(
+//     it('nullifyJoinOverIncompatibleBounds - adding simple filter and optimizing',
+//     ({ expect }) => testConstructMappers(
 //       expect,
 //       `SELECT * { <ex://a> ?p ?o . <ex://b> ?p ?o . }`,
 //       `SELECT ( ?uq_o AS ?o ) ( ?uq_p AS ?p ) WHERE {
@@ -504,7 +495,11 @@ describe('dummy', () => {
 //
 //     ?s10 <ex://a> | ^<ex://b> ?o10 .
 // }`,
-//       `SELECT ( ?uq_o1 AS ?o1 ) ( ?uq_o10 AS ?o10 ) ( ?uq_o2 AS ?o2 ) ( ?uq_o3 AS ?o3 ) ( ?uq_o4 AS ?o4 ) ( ?uq_o5 AS ?o5 ) ( ?uq_o6 AS ?o6 ) ( ?uq_o7 AS ?o7 ) ( ?uq_o8 AS ?o8 ) ( ?uq_o9 AS ?o9 ) ( ?uq_s1 AS ?s1 ) ( ?uq_s10 AS ?s10 ) ( ?uq_s2 AS ?s2 ) ( ?uq_s3 AS ?s3 ) ( ?uq_s4 AS ?s4 ) ( ?uq_s5 AS ?s5 ) ( ?uq_s6 AS ?s6 ) ( ?uq_s7 AS ?s7 ) ( ?uq_s8 AS ?s8 ) ( ?uq_s9 AS ?s9 ) WHERE {
+//       `SELECT ( ?uq_o1 AS ?o1 ) ( ?uq_o10 AS ?o10 ) ( ?uq_o2 AS ?o2 ) ( ?uq_o3 AS ?o3 )
+//       ( ?uq_o4 AS ?o4 ) ( ?uq_o5 AS ?o5 ) ( ?uq_o6 AS ?o6 ) ( ?uq_o7 AS ?o7 ) ( ?uq_o8 AS ?o8 )
+//       ( ?uq_o9 AS ?o9 ) ( ?uq_s1 AS ?s1 )
+//       ( ?uq_s10 AS ?s10 ) ( ?uq_s2 AS ?s2 ) ( ?uq_s3 AS ?s3 ) ( ?uq_s4 AS ?s4 ) ( ?uq_s5 AS ?s5 ) ( ?uq_s6 AS ?s6 )
+//       ( ?uq_s7 AS ?s7 ) ( ?uq_s8 AS ?s8 ) ( ?uq_s9 AS ?s9 ) WHERE {
 //   ?uq_s1 <ex://a> ?uq_o1 .
 //   ?uq_s2 <ex://a> ?uq_var0 .
 //   ?uq_var0 <ex://b> ?uq_o2 .
@@ -537,7 +532,10 @@ describe('dummy', () => {
 //     ?s10 <ex://a> | ^<ex://b> ?o10 .
 //     ?s5 !(<ex://a>|<ex://b>) ?o5 .
 // }`,
-//       `SELECT ( ?uq_o1 AS ?o1 ) ( ?uq_o10 AS ?o10 ) ( ?uq_o2 AS ?o2 ) ( ?uq_o3 AS ?o3 ) ( ?uq_o4 AS ?o4 ) ( ?uq_o5 AS ?o5 ) ( ?uq_o6 AS ?o6 ) ( ?uq_o7 AS ?o7 ) ( ?uq_o8 AS ?o8 ) ( ?uq_o9 AS ?o9 ) ( ?uq_s1 AS ?s1 ) ( ?uq_s10 AS ?s10 ) ( ?uq_s2 AS ?s2 ) ( ?uq_s3 AS ?s3 ) ( ?uq_s4 AS ?s4 ) ( ?uq_s5 AS ?s5 ) ( ?uq_s6 AS ?s6 ) ( ?uq_s7 AS ?s7 ) ( ?uq_s8 AS ?s8 ) ( ?uq_s9 AS ?s9 ) WHERE {
+//       `SELECT ( ?uq_o1 AS ?o1 ) ( ?uq_o10 AS ?o10 ) ( ?uq_o2 AS ?o2 ) ( ?uq_o3 AS ?o3 ) ( ?uq_o4 AS ?o4 )
+//       ( ?uq_o5 AS ?o5 ) ( ?uq_o6 AS ?o6 ) ( ?uq_o7 AS ?o7 ) ( ?uq_o8 AS ?o8 ) ( ?uq_o9 AS ?o9 ) ( ?uq_s1 AS ?s1 )
+//       ( ?uq_s10 AS ?s10 ) ( ?uq_s2 AS ?s2 ) ( ?uq_s3 AS ?s3 ) ( ?uq_s4 AS ?s4 ) ( ?uq_s5 AS ?s5 ) ( ?uq_s6 AS ?s6 )
+//       ( ?uq_s7 AS ?s7 ) ( ?uq_s8 AS ?s8 ) ( ?uq_s9 AS ?s9 ) WHERE {
 //   ?uq_s1 <ex://a> ?uq_o1 .
 //   ?uq_s2 <ex://a> ?uq_var0 .
 //   ?uq_var0 <ex://b> ?uq_o2 .
@@ -1710,7 +1708,8 @@ describe('dummy', () => {
 //     it('inner subquery with GROUP BY and HAVING is correctly rewritten', ({ expect }) =>
 //       testConstructMappers(
 //         expect,
-//         `SELECT ?s ?c WHERE { { SELECT ?s (COUNT(?o) AS ?c) WHERE { ?s ?p ?o } GROUP BY ?s HAVING (COUNT(?o) > 3) } }`,
+//         `SELECT ?s ?c WHERE
+//         { { SELECT ?s (COUNT(?o) AS ?c) WHERE { ?s ?p ?o } GROUP BY ?s HAVING (COUNT(?o) > 3) } }`,
 //         `SELECT ( ?uq_s AS ?s ) ( ?uq_c AS ?c ) WHERE {
 //   SELECT ?uq_s ( COUNT( ?uq_o ) AS ?uq_c ) WHERE {
 //     {
@@ -1771,7 +1770,9 @@ describe('dummy', () => {
 //     it('inner and outer GROUP BY are both rewritten correctly (user example)', ({ expect }) =>
 //       testConstructMappers(
 //         expect,
-//         `SELECT ?s ?p WHERE { ?s ?p ?o . { SELECT ?o WHERE { ?s ?p ?o } GROUP BY ?s ?p HAVING (COUNT(?o) > 10) } } GROUP BY ?s ?p HAVING (COUNT(?o) > 5)`,
+//         `SELECT ?s ?p WHERE
+//         { ?s ?p ?o . { SELECT ?o WHERE { ?s ?p ?o } GROUP BY ?s ?p HAVING (COUNT(?o) > 10) } }
+//         GROUP BY ?s ?p HAVING (COUNT(?o) > 5)`,
 //         `SELECT ( ?uq_s AS ?s ) ( ?uq_p AS ?p ) WHERE {
 //   SELECT ?uq_s ?uq_p WHERE {
 //     {
@@ -1812,7 +1813,8 @@ describe('dummy', () => {
 //     it('outer aggregate over inner subquery aggregate is correctly rewritten', ({ expect }) =>
 //       testConstructMappers(
 //         expect,
-//         `SELECT ?s (SUM(?c) AS ?total) WHERE { { SELECT ?s (COUNT(?o) AS ?c) WHERE { ?s ?p ?o } GROUP BY ?s } } GROUP BY ?s`,
+//         `SELECT ?s (SUM(?c) AS ?total)
+//         WHERE { { SELECT ?s (COUNT(?o) AS ?c) WHERE { ?s ?p ?o } GROUP BY ?s } } GROUP BY ?s`,
 //         `SELECT ( ?uq_s AS ?s ) ( ?uq_total AS ?total ) WHERE {
 //   SELECT ?uq_s ( SUM( ?uq_c ) AS ?uq_total ) WHERE {
 //     SELECT ?uq_s ( COUNT( ?uq_o ) AS ?uq_c ) WHERE {
@@ -1868,7 +1870,8 @@ describe('dummy', () => {
 //       ));
 //
 //     it(
-//       'substituteVarsThatArePreBoundToTerms applies to outer BGP; inner GROUP BY subquery is rewritten independently',
+//       'substituteVarsThatArePreBoundToTerms
+//       applies to outer BGP; inner GROUP BY subquery is rewritten independently',
 //       ({ expect }) => testConstructMappers(
 //         expect,
 //         `SELECT ?c WHERE { ?s <ex://p> ?o . { SELECT ?s (COUNT(?o) AS ?c) WHERE { ?s ?p ?o } GROUP BY ?s } }`,

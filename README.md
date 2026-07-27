@@ -6,7 +6,6 @@ A user query targeting the global schema is rewritten to instead target the loca
 The idea is explained in our [under review, in works paper targeting AMW](https://2026-amw-rewriting.jitsedesmet.be/),
 and a [under review demo paper targeting SEMANTiCS](https://2026-semantics-rewriting.jitsedesmet.be/), based on a previous version of this repo.
 
-
 A conceptual overview of rewriting, specifically targeting the RDF 1.1/1.2 interoperability case is given:
 ![Schematic overview of query rewriting](assets/schematic-plan.png)
 
@@ -63,7 +62,6 @@ The rewriter transforms each triple pattern in your BGP (Basic Graph Pattern) in
 - **Single triple in head**: Each mapping must have exactly one triple in the CONSTRUCT template
 - **No blank nodes in head**: Use variables instead; blank node templates are supported for skolemization
 - **No BNODE() function in body**: Blank node creation in the mapping body is not allowed
-
 
 ## Blank Node Handling (Skolem Functions)
 

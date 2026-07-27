@@ -1,8 +1,10 @@
+import type * as RDF from '@rdfjs/types';
 import { toAst } from '@traqula/algebra-sparql-1-2';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { rewriteSinglePattern } from './transformations/index.js';
 import type { TransformContext } from './transformContext.js';
 import { prefixVarsInOperation, parseQuery } from './transformContext.js';
+import { collectVariableNames, renameVariables } from './utils.js';
 
 /**
  * Returns true when a GROUP node exists at the top of the operation's
@@ -110,11 +112,48 @@ export function queryTransform(
   return c.generator.generate(transformedAst);
 }
 
+/**
+ * Rewrites a single BGP pattern and namespaces every internal (non user-query)
+ * variable it introduces so that sibling patterns in the same BGP cannot collide.
+ *
+ * `rewriteSinglePattern` always produces the same internal variable names for a
+ * given mapping (`m_s`, `m_o`, `mi_*`, unification vars, ...). When two patterns
+ * of a BGP are joined, these internal variables — some of which are projected out
+ * of the pattern's subselect and are therefore visible at the JOIN level — would
+ * be unified across patterns, yielding incorrect (usually empty) results.
+ *
+ * User-query variables carry the `uq_` prefix and are the *only* variables that
+ * are meant to be shared between patterns (they are the natural join keys). We
+ * therefore rename every other variable with a per-pattern prefix, keeping the
+ * rename consistent within the pattern's subtree so scoping is preserved.
+ */
+function rewritePatternWithUniqueScope(
+  c: TransformContext,
+  pattern: Algebra.Pattern,
+  patternIndex: number,
+): Algebra.Operation {
+  const rewritten = rewriteSinglePattern(c, pattern, c.mapping);
+  const renames: Record<string, RDF.Variable> = {};
+  for (const name of collectVariableNames(c.astTransformer, rewritten)) {
+    if (!name.startsWith('uq_')) {
+      renames[name] = c.DF.variable(`p${patternIndex}_${name}`);
+    }
+  }
+  return renameVariables(c, rewritten, renames);
+}
+
 export function operationTransform(c: TransformContext, input: Algebra.Operation): Algebra.Operation {
+  // Counter shared across every BGP of the query so that the internal variables of
+  // distinct pattern rewrites never collide — not even across sibling BGPs that are
+  // later combined by a JOIN/LEFT JOIN (e.g. a pattern and an OPTIONAL block).
+  let patternCounter = 0;
   const transformed = algebraUtils.mapOperation<'unsafe', typeof input>(
     input,
     { [Algebra.Types.BGP]: { transform: input =>
-      c.AF.createJoin(input.patterns.map(pattern => rewriteSinglePattern(c, pattern, c.mapping)), true),
+      c.AF.createJoin(
+        input.patterns.map(pattern => rewritePatternWithUniqueScope(c, pattern, patternCounter++)),
+        true,
+      ),
     }},
   );
   return transformed;

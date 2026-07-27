@@ -10,6 +10,7 @@ import {
 } from '../lib/transformContext.js';
 import {
   expectedQuery,
+  expectedQueryToValues,
   nonTripleTermConstruct,
   testQuery,
   tripleTermConstruct,
@@ -47,15 +48,15 @@ describe('dummy', () => {
     'SELECT * { ?s <ex://p> <<(?s a "b")>> }',
     `SELECT ( ?uq_s AS ?s ) WHERE {
   {
-    SELECT ( "dummy" AS ?mExists_0 ) WHERE {
+    SELECT ( "dummy" AS ?p0_mExists ) WHERE {
       {
         {
-          ?mi_y ?mi_y ?mi_y .
-          FILTER ( ( <ex://x> = SUBJECT( ?mi_y ) ) )
+          ?p0_mi_y ?p0_mi_y ?p0_mi_y .
+          FILTER ( ( <ex://x> = SUBJECT( ?p0_mi_y ) ) )
         }
-        FILTER ( ( <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> = PREDICATE( ?mi_y ) ) )
+        FILTER ( ( <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> = PREDICATE( ?p0_mi_y ) ) )
       }
-      FILTER ( ( "b" = OBJECT( ?mi_y ) ) )
+      FILTER ( ( "b" = OBJECT( ?p0_mi_y ) ) )
     }
   }
   BIND( <ex://x> AS ?uq_s )
@@ -68,12 +69,12 @@ describe('dummy', () => {
     'SELECT * { ?s <ex://p> ?o }',
       `SELECT ( ?uq_o AS ?o ) ( ?uq_s AS ?s ) WHERE {
   {
-    SELECT ?mi_o ?mi_s WHERE {
-      ?mi_s <ex://p> ?mi_o .
+    SELECT ?p0_mi_o ?p0_mi_s WHERE {
+      ?p0_mi_s <ex://p> ?p0_mi_o .
     }
   }
-  BIND( ?mi_o AS ?uq_o )
-  BIND( ?mi_s AS ?uq_s )
+  BIND( ?p0_mi_o AS ?uq_o )
+  BIND( ?p0_mi_s AS ?uq_s )
 }`,
       [ 'CONSTRUCT WHERE { ?s <ex://p> ?o  }' ],
   ));
@@ -85,7 +86,7 @@ describe('dummy', () => {
   it('simple & toVALUES', ({ expect }) => testConstructMappers(
     expect,
     testQuery,
-    expectedQuery,
+    expectedQueryToValues,
     [ tripleTermConstruct, nonTripleTermConstruct ],
     [ operationTransform, transformExtendsToValues ],
   ));

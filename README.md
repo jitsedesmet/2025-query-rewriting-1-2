@@ -21,8 +21,9 @@ Given a query Q without recursive paths and mapping with head H and body B:
   2.4 B' = EXTEND(B') with how the triple term vars are constructed from the mapping head vars
   2.5 B' = FILTER(B') assert the triple term vars are assigned.
   2.6 B' = PROJECT(B') what remains accessible are only the triple terms vars
-3. rewrite B' to replace equality between many variables with a single variable that represents this equality.
-In case one of the variables is normally constructed using an EXTEND, use a filter instead. TODO: this is not 100% correct yet.
+3. rewrite B' to replace equality (sameTerm) between many variables with a single variable that represents this equality.
+In case one of the variables is normally constructed using an EXTEND, a FILTER is used instead of a second EXTEND
+(`collapseDuplicateExtends`), so the same variable is never bound twice.
 4. Replace variables that are assigned to static terms with those terms, again special care is needed when they are used in certain operations such as expressions.
 5. group constraints together using pushDownRestrictions, which pushes restrictions down and distributes JOIN over UNION
 6. Prune invalid constraint groups, replacing them with filter false.

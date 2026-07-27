@@ -4,7 +4,8 @@ import type { ClusterSolver } from '../ClusterSolver.js';
 import { objectRange, predicateRange, subjectRange } from '../RangeSet.js';
 import type { TransformContext } from '../transformContext.js';
 import type { Mapping, MappingHead } from '../types.js';
-import { collectVariableNames, isRdfQuad, isRdfVar, renameVariables } from '../utils.js';
+import { collectVariableNames, isRdfQuad, isRdfVar } from '../utils.js';
+import { unifyVariables } from './unifyVariables.js';
 
 /**
  * @fileoverview Core pattern rewriting logic.
@@ -33,8 +34,6 @@ import { collectVariableNames, isRdfQuad, isRdfVar, renameVariables } from '../u
 function headSPO(head: MappingHead): (MappingHead['subject'] | MappingHead['predicate'] | MappingHead['object'])[] {
   return [ head.subject, head.predicate, head.object ];
 }
-
-let INTERNAL_VAR_FOR_EXISTENCE_COUNTER = 0;
 
 /**
  * Register the unification between the current mapping and the triple pattern.
@@ -304,7 +303,9 @@ function wrapOperationInProject({ triplePatternBinds, operation, astTransformer,
     // You cannot select nothing, but actually we just want this subquery to validate if data exists.
     // You cannot have a subAsk, but you can do a select over a dummy var: SELECT (1 as ?dummy)
     // [proof this works](https://query.comunica.dev/#transientDatasources=%2F%2Ffragments.dbpedia.org%2F2016-04%2Fen&query=SELECT%20*%0AWHERE%20%7B%0A%20%20%3Fs%20%3Fp%20%3Fo%20.%0A%20%20%7B%20SELECT%20%281%20as%20%3Fdummy%29%20WHERE%20%7B%0A%20%20%20%20%20%20%3Chttp%3A%2F%2F0-access.newspaperarchive.com.lib.utep.edu%2Fus%2Fmississippi%2Fbiloxi%2Fbiloxi-daily-herald%2F1899%2F05-06%2Fpage-6%3Ftag%3Dtierce%2Bwine%26rtserp%3Dtags%2Ftierce-wine%3Fpage%3D2%3E%0A%20%20%20%20%20%20%3Chttp%3A%2F%2Fdbpedia.org%2Fproperty%2Fdate%3E%0A%20%20%20%20%20%20%221899-05-05%22%5E%5E%3Chttp%3A%2F%2Fwww.w3.org%2F2001%2FXMLSchema%23date%3E%0A%20%20%20%20%20%20%23%20%221899-05-06%22%5E%5E%3Chttp%3A%2F%2Fwww.w3.org%2F2001%2FXMLSchema%23date%3E%0A%20%20%20%7D%20%7D%0A%7D)
-    const existenceVar = DF.variable(`mExists_${INTERNAL_VAR_FOR_EXISTENCE_COUNTER++}`);
+    // The name is deterministic: callers namespace each pattern's variables uniquely, so no
+    // global counter is needed to keep existence vars of distinct patterns apart.
+    const existenceVar = DF.variable('mExists');
     buildOperation = AF.createExtend(
       buildOperation,
       existenceVar,
@@ -379,7 +380,10 @@ export function rewriteSinglePattern(
 
   // Construct the contents of our subselect
   let inProject: Alg.Operation = mapping.body.input;
-  inProject = renameVariables(c, inProject, headVarsRemap);
+  // Collapse unified head variables onto their fresh representative. Where a
+  // representative would be bound twice, the redundant BIND becomes an equality
+  // FILTER so the variables' equality is asserted, not dropped.
+  inProject = unifyVariables(c, inProject, headVarsRemap);
   inProject = rewriteToPreBindVars({ AF, DF, mappingHeadBinds, operation: inProject });
   for (const expression of [
     ...expressionFilters,

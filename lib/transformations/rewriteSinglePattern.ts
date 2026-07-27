@@ -1,11 +1,10 @@
 import type * as RDF from '@rdfjs/types';
-import { Algebra as Alg } from '@traqula/algebra-transformations-1-2';
+import type { Algebra as Alg } from '@traqula/algebra-transformations-1-2';
 import type { ClusterSolver } from '../ClusterSolver.js';
 import { objectRange, predicateRange, subjectRange } from '../RangeSet.js';
 import type { TransformContext } from '../transformContext.js';
 import type { Mapping, MappingHead } from '../types.js';
 import { collectVariableNames, isRdfQuad, isRdfVar } from '../utils.js';
-import { unifyVariables } from './unifyVariables.js';
 
 /**
  * @fileoverview Core pattern rewriting logic.
@@ -112,14 +111,12 @@ function iterateMappingHead(
 function collectTriplePatternBinds({
   clusterSolver,
   triplePatternVars,
-  headVarsRemap,
   expressionFilters,
   AF,
   DF,
 }: {
   clusterSolver: ClusterSolver;
   triplePatternVars: Record<string, RDF.Variable>;
-  headVarsRemap: Record<string, RDF.Variable>;
   expressionFilters: Alg.Expression[];
 } & Pick<TransformContext, 'AF' | 'DF'>): Record<string, Alg.Expression> {
   const triplePatternBinds: Record<string, Alg.Expression> = {};
@@ -134,8 +131,7 @@ function collectTriplePatternBinds({
     if (term) {
       triplePatternBinds[tpVariable.value] = AF.createTermExpression(term);
     } else if (unifiedHeadVar) {
-      triplePatternBinds[tpVariable.value] =
-          AF.createTermExpression(headVarsRemap[unifiedHeadVar.value] ?? DF.variable(unifiedHeadVar.value));
+      triplePatternBinds[tpVariable.value] = AF.createTermExpression(DF.variable(unifiedHeadVar.value));
     }
     let isBound = Boolean(term ?? unifiedHeadVar);
 
@@ -167,114 +163,60 @@ function collectTriplePatternBinds({
  * @param params.DF - Data factory for creating variables
  * @returns Object containing binds, remapping, and filters
  */
-function collectMappingHeadBindsAndFilters({ clusterSolver, mappingHeadVars, DF, AF }: {
+function collectMappingHeadBindsAndFilters({ clusterSolver, mappingHeadVars, AF }: {
   clusterSolver: ClusterSolver;
   mappingHeadVars: Record<string, RDF.Variable>;
-} & Pick<TransformContext, 'DF' | 'AF'>): {
-    mappingHeadBinds: Record<string, RDF.Term>;
-    headVarsRemap: Record<string, RDF.Variable>;
-    expressionFilters: Alg.Expression[];
-  } {
-  // If UQ triple pattern term is bound, and mapping head is var, put here - (starting Binds of subselect)
-  const mappingHeadBinds: Record<string, RDF.Term> = {};
-  // In case multiple headvars are equal to each-other, map them to their unifying replacement var.
-  const headVarsRemap: Record<string, RDF.Variable> = {};
+} & Pick<TransformContext, 'AF'>): Alg.Expression[] {
   const expressionFilters: Alg.Expression[] = [];
+  const handledGroups = new Set<number>();
 
-  // Start by going over headVars and how they got restricted - restrict them within the body
+  // Start by going over headVars and how they got restricted - restrict them within the body.
   for (const headVar of Object.values(mappingHeadVars)) {
-    // If this headVar is equal to other headvars, we know it will be replaced by the new unifying rewrittenHeadVar
-    if (headVarsRemap[headVar.value]) {
+    // The cluster for this mapping head.
+    const group = clusterSolver.getGroup(headVar);
+    if (handledGroups.has(group)) {
       continue;
     }
+    handledGroups.add(group);
 
-    // The cluster for this mapping head.
-    const cluster = clusterSolver.getCluster(headVar);
-    let iterHeadVar = headVar;
+    const groupTerm = clusterSolver.groupToTerm[group];
+    const groupMappingVars = clusterSolver.groupToValues[group].filter(val => val.value.startsWith('m'));
 
-    // If boundlist contains other mappingHead Variables,
-    //  you need to create a new variable for the matching mappingHead vars since they are the same.
-    //  Since any group links to each-other, the first such match is enough to find all equal vars.
-    //  All future vars in the group can be ignored.
-    //  Furthermore, it is essential to capture the new variable in the triplePatternBinds
-    // Note that Head does not bind to var,
-    // if a var in the head is equal to a var in the pattern, we handle it on the pattern
-    const otherMappingVars = cluster.vars.filter(x => x.value.startsWith('m'));
-    if (otherMappingVars.length > 0) {
-      const varNamespacePrefix = otherMappingVars[0].value
-        .slice(0, otherMappingVars[0].value.indexOf('_'));
-      const newVarName = [
-        'r',
-        varNamespacePrefix,
-        '_',
-        [ headVar, ...otherMappingVars ].map(x => x.value.slice(varNamespacePrefix.length + 1)).join('_AND_'),
-      ].join('');
-      iterHeadVar = DF.variable(newVarName);
-      headVarsRemap[headVar.value] = iterHeadVar;
-      for (const variable of otherMappingVars) {
-        headVarsRemap[variable.value] = iterHeadVar;
-      }
-    }
-
-    // Done handling var unification - now register restrictions.
-    if (cluster.term) {
-      if (cluster.term.termType === 'BlankNode') {
+    // Handle term restrictions first!
+    if (groupTerm) {
+      if (groupTerm.termType === 'BlankNode') {
         throw new Error(`Unreachable: The mapping head is assigned to a BlankNode, but this is not possible since blank nodes in the query have been replaced with variables during algebra conversion.`);
       }
-      mappingHeadBinds[iterHeadVar.value] = cluster.term;
+      // Each mapping head var in the cluter should be equal to the term.
+      for (const clusterVar of groupMappingVars) {
+        expressionFilters.push(AF.createOperatorExpression('sameTerm', [
+          AF.createTermExpression(clusterVar),
+          AF.createTermExpression(groupTerm),
+        ]));
+      }
+    } else {
+      // Assert equality between the various mapping head Vars
+      const headIdx = 0;
+      while (headIdx < groupMappingVars.length - 1) {
+        const headVar = groupMappingVars[headIdx];
+        const tailVar = groupMappingVars[headIdx + 1];
+        expressionFilters.push(AF.createOperatorExpression('sameTerm', [
+          AF.createTermExpression(headVar),
+          AF.createTermExpression(tailVar),
+        ]));
+      }
     }
 
     const expressionsToRegister = clusterSolver.getExpressions(headVar);
     for (const expression of expressionsToRegister) {
       // If group has term, check if templates equal term, otherwise check if template equals var.
       // By checking templates to terms we can perform prefix validation checks.
-      const term: RDF.Term = cluster.term ?? iterHeadVar;
-      expressionFilters.push(AF.createOperatorExpression('=', [ AF.createTermExpression(term), expression ]));
+      const term: RDF.Term = groupTerm ?? groupMappingVars[0];
+      expressionFilters.push(AF.createOperatorExpression('sameTerm', [ AF.createTermExpression(term), expression ]));
     }
   }
 
-  return {
-    mappingHeadBinds,
-    headVarsRemap,
-    expressionFilters,
-  };
-}
-
-/**
- * Adds EXTEND operations at the start of the subquery for known variable bindings.
- *
- * When a mapping head variable is determined to equal a specific term,
- * we inject that binding at the start of the subquery using EXTEND operations.
- * This allows pattern matching to use the concrete values.
- *
- * @param params - Configuration object
- * @param params.mappingHeadBinds - Map of variable names to their bound terms
- * @param params.operation - The operation to wrap
- * @param params.AF - Algebra factory
- * @param params.DF - Data factory
- * @returns The operation wrapped with necessary EXTEND operations
- */
-function rewriteToPreBindVars({ AF, DF, mappingHeadBinds, operation }: {
-  mappingHeadBinds: Record<string, RDF.Term>;
-  operation: Alg.Operation;
-} & Pick<TransformContext, 'AF' | 'DF'>): Alg.Operation {
-  // For all statically bound mappingHead vars, register the terms they are equal too.
-  // (add extend at start of subselect)
-  let mappingHeadExtensions: Alg.Extend | Alg.Bgp = AF.createBgp([]);
-  // Sort for consistent testing
-  for (const [ variable, expr ] of Object.entries(mappingHeadBinds).sort((a, b) =>
-    a[0].localeCompare(b[0]))) {
-    mappingHeadExtensions = AF.createExtend(
-      mappingHeadExtensions,
-      DF.variable(variable),
-      AF.createTermExpression(expr),
-    );
-  }
-  if (mappingHeadExtensions.type === Alg.Types.EXTEND) {
-    // Change the projection only when needed.
-    return AF.createJoin([ mappingHeadExtensions, operation ]);
-  }
-  return operation;
+  return expressionFilters;
 }
 
 /**
@@ -365,14 +307,12 @@ export function rewriteSinglePattern(
 
   clusterSolver.sortClusters();
 
-  const { mappingHeadBinds, headVarsRemap, expressionFilters } =
-    collectMappingHeadBindsAndFilters({ mappingHeadVars, DF, clusterSolver, AF });
+  const expressionFilters = collectMappingHeadBindsAndFilters({ mappingHeadVars, clusterSolver, AF });
 
   // A map between what each uqVar now equals. Adds bind after the subselect
   const triplePatternBinds: Record<string, Alg.Expression> = collectTriplePatternBinds({
     clusterSolver,
     triplePatternVars,
-    headVarsRemap,
     expressionFilters,
     AF,
     DF,
@@ -383,12 +323,10 @@ export function rewriteSinglePattern(
   // Collapse unified head variables onto their fresh representative. Where a
   // representative would be bound twice, the redundant BIND becomes an equality
   // FILTER so the variables' equality is asserted, not dropped.
-  inProject = unifyVariables(c, inProject, headVarsRemap);
-  inProject = rewriteToPreBindVars({ AF, DF, mappingHeadBinds, operation: inProject });
   for (const expression of [
     ...expressionFilters,
     ...clusterSolver.getStaticExpressionValidation()
-      .map(x => AF.createOperatorExpression('=', [ AF.createTermExpression(x.term), x.expression ])),
+      .map(x => AF.createOperatorExpression('sameTerm', [ AF.createTermExpression(x.term), x.expression ])),
   ]) {
     inProject = AF.createFilter(inProject, expression);
   }

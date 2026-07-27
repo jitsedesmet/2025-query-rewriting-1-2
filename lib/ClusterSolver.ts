@@ -1,5 +1,6 @@
 import type * as RDF from '@rdfjs/types';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
+import { ClusterSet } from './datastructures/ClusterSet.js';
 import { objectRange, RangeSet } from './RangeSet.js';
 import type { RangedVar } from './utils.js';
 import { isRdfTerm, isRdfVar } from './utils.js';
@@ -37,26 +38,22 @@ export type RawBasicTerm = Exclude<RawTerm, RDF.Quad>;
  * // And triple pattern: ?x rdf:reifies <<( ?x ?y ?z )>>
  * // The solver determines: ?t = ?x = ?s, ?y = ?p, ?z = ?o
  */
-export class ClusterSolver {
-  /** Maps group ID to the variables in that group */
-  private groupToVars: Record<number, RangedVar[]>;
+export class ClusterSolver extends ClusterSet<RangedVar> {
   /** Maps group ID to the valid term type range for that group */
-  private groupToRange: Record<number, RangeSet>;
+  protected groupToRange: Record<number, RangeSet>;
   /** Maps group ID to the expression that they need to satisfy */
-  private groupToExpressions: Record<number, Algebra.Expression[]>;
+  public groupToExpressions: Record<number, Algebra.Expression[]>;
   /** Maps group ID to the concrete term the group is bound to (if any) */
-  private groupToTerm: Record<number, RawBasicTerm | undefined>;
-  /** Maps variable name to its group ID */
-  private varToGroup: Record<string, number | undefined>;
+  public groupToTerm: Record<number, RawBasicTerm | undefined>;
   /**
    * Static expression validations where no variable group is involved.
    * These occur when an expression must equal a concrete term.
    */
-  private staticExpressionValidation: { expression: Algebra.Expression; term: RawBasicTerm }[];
+  protected staticExpressionValidation: { expression: Algebra.Expression; term: RawBasicTerm }[];
   /** Counter for generating unique group IDs */
-  private cleanNumber: number;
 
   public constructor() {
+    super(variable => variable.value);
     this.clear();
   }
 
@@ -64,14 +61,12 @@ export class ClusterSolver {
    * Resets the solver to its initial state.
    * Call this before processing a new triple pattern.
    */
-  public clear(): void {
-    this.groupToVars = {};
+  public override clear(): void {
+    super.clear();
     this.groupToExpressions = {};
     this.groupToRange = {};
     this.groupToTerm = {};
-    this.varToGroup = {};
     this.staticExpressionValidation = [];
-    this.cleanNumber = 1;
   }
 
   /**
@@ -80,9 +75,9 @@ export class ClusterSolver {
    * @param variable - The variable whose range to register
    * @throws Error if the narrowed range conflicts with an existing term binding
    */
-  private handleVarRange(variable: RangedVar): void {
+  protected handleVarRange(variable: RangedVar): void {
     const range = variable.range;
-    const group = this.varToGroup[variable.value];
+    const group = this.getGroup(variable);
     if (range !== undefined && group !== undefined) {
       const groupRange = this.groupToRange[group].disjunct(range);
       this.groupToRange[group] = groupRange;
@@ -117,7 +112,7 @@ export class ClusterSolver {
       throw new Error(`Cannot match Term ${JSON.stringify(from)} with term ${JSON.stringify(to)}`);
     } else if (isRdfVar(from) && isRdfVar(to)) {
       // Two vars
-      this.mergeVars(from, to);
+      this.mergeGroups(from, to);
     } else if (isRdfVar(from)) {
       // `from` is var - `to` is not
       const varGroup = this.getGroup(from);
@@ -147,28 +142,29 @@ export class ClusterSolver {
     }
   }
 
+  protected override createGroup(variable: RangedVar): number {
+    const group = super.createGroup(variable);
+    this.groupToExpressions[group] = [];
+    this.groupToTerm[group] = undefined;
+    this.groupToRange[group] = new RangeSet(variable.range ?? objectRange);
+    return group;
+  }
+
   /**
    * Gets or creates a group for a variable.
    * @param variable - The variable to get/create a group for
    * @returns The group ID
    */
-  private getGroup(variable: RangedVar): number {
-    let group = this.varToGroup[variable.value];
-    if (group !== undefined) {
+  public override getGroup(variable: RangedVar): number {
+    const oldNum = this.cleanNumber;
+    const group = super.getGroup(variable);
+    if (oldNum !== this.cleanNumber) {
       this.handleVarRange(variable);
-      return group;
     }
-    group = this.cleanNumber;
-    this.cleanNumber++;
-    this.groupToVars[group] = [ variable ];
-    this.groupToExpressions[group] = [];
-    this.groupToTerm[group] = undefined;
-    this.groupToRange[group] = new RangeSet(variable.range ?? objectRange);
-    this.varToGroup[variable.value] = group;
     return group;
   }
 
-  private registerExpressionToGroup(group: number, expression: Algebra.Expression): void {
+  protected registerExpressionToGroup(group: number, expression: Algebra.Expression): void {
     // TODO: is it expression satisfiable?
     // const curTerm = this.groupToTerm[group];
     // if (curTerm && curTerm.termType !== template.subType) {
@@ -192,7 +188,7 @@ export class ClusterSolver {
    * @param term - The term to bind
    * @throws Error if term conflicts with existing binding or range
    */
-  private registerTermToGroup(group: number, term: RawBasicTerm): void {
+  protected registerTermToGroup(group: number, term: RawBasicTerm): void {
     const curTerm = this.groupToTerm[group];
     // TODO: validate in the case of triple term by also registering that some variables present might be the same.
     if (curTerm && !curTerm.equals(term)) {
@@ -211,26 +207,18 @@ export class ClusterSolver {
    * @param from - First variable
    * @param to - Second variable
    */
-  public mergeVars(from: RangedVar, to: RangedVar): void {
-    const fromGroup = this.getGroup(from);
-    const toGroup = this.getGroup(to);
-    if (fromGroup === toGroup) {
-      return;
+  public override mergeGroups(from: RangedVar, to: RangedVar): { oldGroup: number; newGroup: number } | undefined {
+    const res = super.mergeGroups(from, to);
+    if (res === undefined) {
+      return res;
     }
-    // Merge groups into the lowest number
-    const [ newGroup, oldGroup ] = fromGroup < toGroup ? [ fromGroup, toGroup ] : [ toGroup, fromGroup ];
+    const { oldGroup, newGroup } = res;
+    // Merge range
     this.groupToRange[newGroup] = this.groupToRange[newGroup].disjunct(this.groupToRange[oldGroup]);
     // Merge term
     const oldTerm = this.groupToTerm[oldGroup];
     if (oldTerm) {
       this.registerTermToGroup(newGroup, oldTerm);
-    }
-    // Merge vars:
-    const oldVars = this.groupToVars[oldGroup];
-    delete this.groupToVars[oldGroup];
-    this.groupToVars[newGroup].push(...oldVars);
-    for (const variable of oldVars) {
-      this.varToGroup[variable.value] = newGroup;
     }
   }
 
@@ -239,7 +227,7 @@ export class ClusterSolver {
    * Mapping variables (starting with 'm') are sorted before user query variables ('uq').
    */
   public sortClusters(): void {
-    for (const groupVars of Object.values(this.groupToVars)) {
+    for (const groupVars of Object.values(this.groupToValues)) {
       groupVars.sort((a, b) =>
         // Make sure 'm' (mapping) vars are before 'uq' (user query) vars
         a.value.localeCompare(b.value));
@@ -255,12 +243,12 @@ export class ClusterSolver {
    *   - `group`: The cluster's group ID
    */
   public getCluster(from: RDF.Variable): { term: RawBasicTerm | undefined ; vars: RDF.Variable[]; group: number } {
-    const varGroup = this.varToGroup[from.value];
+    const varGroup = this.getGroup(from);
     return {
-      term: this.groupToTerm[varGroup!],
-      vars: this.groupToVars[varGroup!]
+      term: this.groupToTerm[varGroup],
+      vars: this.groupToValues[varGroup]
         .filter(x => !x.equals(from)),
-      group: varGroup!,
+      group: varGroup,
     };
   }
 
@@ -270,8 +258,8 @@ export class ClusterSolver {
    * @returns Array of expressions that must equal this variable
    */
   public getExpressions(from: RDF.Variable): Algebra.Expression[] {
-    const varGroup = this.varToGroup[from.value];
-    return this.groupToExpressions[varGroup!];
+    const varGroup = this.getGroup(from);
+    return this.groupToExpressions[varGroup];
   }
 
   /**

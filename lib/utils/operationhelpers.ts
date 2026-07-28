@@ -5,6 +5,9 @@ import { datatypeBoolean, DF } from './rdfDatatypes.js';
 /** The literal `false` with xsd:boolean datatype, used for FILTER(FALSE) patterns */
 export const termFalse = DF.literal('false', datatypeBoolean);
 
+/** The literal `true` with xsd:boolean datatype, used for conditions that are statically satisfied */
+export const termTrue = DF.literal('true', datatypeBoolean);
+
 /**
  * Checks if an operation is a FILTER(FALSE) pattern.
  * FILTER(FALSE) is used as a sentinel to represent patterns that will never match.
@@ -27,4 +30,32 @@ export function isFilterFalse(c: TransformContext, op: Algebra.Operation): boole
  */
 export function createFilterFalse(c: TransformContext, op?: Algebra.Operation): Algebra.Filter {
   return c.AF.createFilter(op ?? c.AF.createBgp([]), c.AF.createTermExpression(termFalse));
+}
+
+/**
+ * Splits a filter expression on top level logical conjunctions (`&&`), implementing (SDecompI) of
+ * Schmidt et al. (https://arxiv.org/pdf/0812.3788):
+ * `FILTER_{R1 && R2}(A) == FILTER_R1(FILTER_R2(A))`, so each conjunct can be handled independently.
+ *
+ * @param expression - The filter expression to split
+ * @returns The list of top level conjuncts (a single element list when there is no `&&`)
+ */
+export function splitConjunction(expression: Algebra.Expression): Algebra.Expression[] {
+  if (
+    expression.subType === Algebra.ExpressionTypes.OPERATOR &&
+    expression.operator === '&&'
+  ) {
+    return expression.args.flatMap(arg => splitConjunction(arg));
+  }
+  return [ expression ];
+}
+
+/**
+ * Combines a non-empty list of expressions back into a single conjunction (`&&`).
+ * @param c - The transformation context
+ * @param expressions - The conjuncts to combine (must contain at least one element)
+ * @returns A single expression equivalent to the conjunction of the inputs
+ */
+export function conjunctionOf(c: TransformContext, expressions: Algebra.Expression[]): Algebra.Expression {
+  return expressions.reduce((acc, expr) => c.AF.createOperatorExpression('&&', [ acc, expr ]));
 }

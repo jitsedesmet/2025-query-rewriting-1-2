@@ -1,10 +1,19 @@
+import { QueryEngine } from '@comunica/query-sparql-file';
+import { toAst } from '@traqula/algebra-sparql-1-2';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
+import * as arrayifyStreamNS from 'arrayify-stream';
 import { describe, it } from 'vitest';
 import type { expect as Expect } from 'vitest';
 import { transformExtendsToValues } from '../lib/transformations/extendsToValues.js';
+import { transformFilterToStaticBind } from '../lib/transformations/filterToStaticBind.js';
+import { pushDownRestrictors } from '../lib/transformations/pushDownRestrictors.js';
+import { pushUpBoundedFromUnion } from '../lib/transformations/pushUpBoundedFromUnion.js';
+import { removeDeadExtends } from '../lib/transformations/removeDeadExtends.js';
 import { operationTransform, queryTransform } from '../lib/transformBgp.js';
 import type { TransformContext } from '../lib/transformContext.js';
 import {
+  createPartialContext,
+  parseQuery,
   transformContextFromConstructs,
 } from '../lib/transformContext.js';
 import {
@@ -2082,4 +2091,575 @@ describe('dummy', () => {
 //               [ removeProjections ],
 //       ));
 //   });
+});
+
+// Crazy workaround to support both CJS and ESM
+const arrayifyStream =
+  (<any> arrayifyStreamNS).default ?? arrayifyStreamNS;
+
+/**
+ * Tests for the static bind rewrite:
+ * `Filter(sameTerm(?v, <a>), P)` becomes `Extend(P[?v := <a>], ?v, <a>)`,
+ * for the accompanying dead bind elimination, and for how both cooperate with the existing
+ * filter push down ({@link pushDownRestrictors}) and bind hoisting ({@link pushUpBoundedFromUnion}).
+ */
+describe('static binds', () => {
+  // None of the transformations under test uses the mapping, only AF / DF / astTransformer /
+  // generator, so a mapping-less partial context is sufficient here.
+  const c = <TransformContext> createPartialContext();
+
+  function transform(
+    query: string,
+    transformations: ((c: TransformContext, op: Algebra.Operation) => Algebra.Operation)[] =
+    [ transformFilterToStaticBind ],
+  ): string {
+    let algebra = parseQuery(c, query);
+    for (const transformation of transformations) {
+      algebra = transformation(c, algebra);
+    }
+    return c.generator.generate(toAst(algebra)).trim();
+  }
+
+  function expectTransform(
+    expect: typeof Expect,
+    query: string,
+    expected: string,
+    transformations?: ((c: TransformContext, op: Algebra.Operation) => Algebra.Operation)[],
+  ): void {
+    expect(transform(query, transformations)).toEqual(expected.trim());
+  }
+
+  describe('transformFilterToStaticBind', () => {
+    describe('recognising the pinning conjunct', () => {
+      it('substitutes the term of sameTerm and re-binds the variable', ({ expect }) => {
+        expectTransform(
+          expect,
+          'SELECT * WHERE { ?s <ex://p> ?o FILTER(sameTerm(?o, <ex://a>)) }',
+          `SELECT ( <ex://a> AS ?o ) ?s WHERE {
+  ?s <ex://p> <ex://a> .
+}`,
+        );
+      });
+
+      it('treats equality with an IRI as sameTerm', ({ expect }) => {
+        expectTransform(
+          expect,
+          'SELECT * WHERE { ?s <ex://p> ?o FILTER(<ex://a> = ?o) }',
+          `SELECT ( <ex://a> AS ?o ) ?s WHERE {
+  ?s <ex://p> <ex://a> .
+}`,
+        );
+      });
+
+      it('pins a variable to a literal through sameTerm', ({ expect }) => {
+        expectTransform(
+          expect,
+          'SELECT * WHERE { ?s <ex://p> ?o FILTER(sameTerm(?o, "b")) }',
+          `SELECT ( "b" AS ?o ) ?s WHERE {
+  ?s <ex://p> "b" .
+}`,
+        );
+      });
+
+      it('leaves equality with a literal alone, since that is value and not term equality', ({ expect }) => {
+        expectTransform(
+          expect,
+          'SELECT * WHERE { ?s <ex://p> ?o FILTER(?o = "b") }',
+          `SELECT ?o ?s WHERE {
+  ?s <ex://p> ?o .
+  FILTER ( ( ?o = "b" ) )
+}`,
+        );
+      });
+
+      it('leaves a sameTerm between two variables alone', ({ expect }) => {
+        expectTransform(
+          expect,
+          'SELECT * WHERE { ?s <ex://p> ?o FILTER(sameTerm(?s, ?o)) }',
+          `SELECT ?o ?s WHERE {
+  ?s <ex://p> ?o .
+  FILTER ( SAMETERM( ?s , ?o ) )
+}`,
+        );
+      });
+    });
+
+    describe('substituting the operand', () => {
+      it('replaces BOUND of the pinned variable by true', ({ expect }) => {
+        expectTransform(
+          expect,
+          'SELECT * WHERE { ?s <ex://p> ?o FILTER(sameTerm(?o, <ex://a>) && BOUND(?o)) }',
+          `SELECT ?o ?s WHERE {
+  {
+    ?s <ex://p> <ex://a> .
+    BIND( <ex://a> AS ?o )
+  }
+  FILTER ( TRUE )
+}`,
+        );
+      });
+
+      it('substitutes within an EXISTS sub-pattern', ({ expect }) => {
+        expectTransform(
+          expect,
+          'SELECT * WHERE { ?s <ex://p> ?o FILTER(sameTerm(?o, <ex://a>) && EXISTS { ?o <ex://q> ?z }) }',
+          `SELECT ?o ?s WHERE {
+  {
+    ?s <ex://p> <ex://a> .
+    BIND( <ex://a> AS ?o )
+  }
+  FILTER ( EXISTS {
+    <ex://a> <ex://q> ?z .
+  }
+  )
+}`,
+        );
+      });
+
+      it('turns a BIND of the pinned variable into the residual sameTerm constraint', ({ expect }) => {
+        expectTransform(
+          expect,
+          'SELECT * WHERE { ?s <ex://p> ?t BIND(?t AS ?o) FILTER(sameTerm(?o, <ex://a>)) }',
+          `SELECT ( <ex://a> AS ?o ) ?s ?t WHERE {
+  ?s <ex://p> ?t .
+  FILTER ( SAMETERM( ?t , <ex://a> ) )
+}`,
+        );
+      });
+
+      it('drops the VALUES rows that bind the variable to another term', ({ expect }) => {
+        expectTransform(
+          expect,
+          `SELECT * WHERE {
+            VALUES (?o ?s) { (<ex://a> <ex://x>) (<ex://b> <ex://y>) }
+            FILTER(sameTerm(?o, <ex://a>))
+          }`,
+          `SELECT ( <ex://a> AS ?o ) ?s WHERE {
+  VALUES ?s {
+    <ex://x>
+  }
+}`,
+        );
+      });
+
+      it('substitutes the conjuncts it does not consume, collapsing a contradicting bind', ({ expect }) => {
+        expectTransform(
+          expect,
+          'SELECT * WHERE { ?s <ex://p> ?o FILTER(sameTerm(?o, <ex://a>) && sameTerm(?o, <ex://b>)) }',
+          `SELECT ?o ?s WHERE {
+  {
+    ?s <ex://p> <ex://a> .
+    BIND( <ex://a> AS ?o )
+  }
+  FILTER ( SAMETERM( <ex://a> , <ex://b> ) )
+}`,
+        );
+      });
+    });
+
+    describe('pushing the bind onto a single JOIN operand', () => {
+      it('binds in the operand that admits it, leaving the joining operand untouched', ({ expect }) => {
+        expectTransform(
+          expect,
+          `SELECT * WHERE {
+            { SELECT ?o ?s WHERE { ?s <ex://a> ?o } }
+            { SELECT ?y ?o WHERE { ?y <ex://b> ?o OPTIONAL { ?y <ex://c> ?z } } }
+            FILTER(sameTerm(?o, <ex://a>))
+          }`,
+          `SELECT ?o ?s ?y WHERE {
+  {
+    {
+      SELECT ?s WHERE {
+        ?s <ex://a> <ex://a> .
+      }
+    }
+    BIND( <ex://a> AS ?o )
+  }
+  {
+    SELECT ?y ?o WHERE {
+      ?y <ex://b> ?o .
+      OPTIONAL {
+        ?y <ex://c> ?z .
+      }
+    }
+  }
+}`,
+        );
+      });
+
+      it('does not substitute the homonymous variable of a subquery that scopes it', ({ expect }) => {
+        expectTransform(
+          expect,
+          `SELECT * WHERE {
+            ?s <ex://p> ?o
+            { SELECT ?y WHERE { ?y <ex://q> ?o } }
+            FILTER(sameTerm(?o, <ex://a>))
+          }`,
+          `SELECT ?o ?s ?y WHERE {
+  {
+    ?s <ex://p> <ex://a> .
+    BIND( <ex://a> AS ?o )
+  }
+  {
+    SELECT ?y WHERE {
+      ?y <ex://q> ?o .
+    }
+  }
+}`,
+        );
+      });
+    });
+
+    describe('declining the rewrite where it is not value preserving', () => {
+      it('declines when the variable is only optionally bound', ({ expect }) => {
+        expectTransform(
+          expect,
+          'SELECT * WHERE { ?s <ex://p> ?x OPTIONAL { ?s <ex://q> ?o } FILTER(sameTerm(?o, <ex://a>)) }',
+          `SELECT ?o ?s ?x WHERE {
+  ?s <ex://p> ?x .
+  OPTIONAL {
+    ?s <ex://q> ?o .
+  }
+  FILTER ( SAMETERM( ?o , <ex://a> ) )
+}`,
+        );
+      });
+
+      it('declines when a UNION branch does not bind the variable', ({ expect }) => {
+        expectTransform(
+          expect,
+          'SELECT * WHERE { { ?s <ex://a> ?o } UNION { ?s <ex://b> ?x } FILTER(sameTerm(?o, <ex://a>)) }',
+          `SELECT ?o ?s ?x WHERE {
+  {
+    ?s <ex://a> ?o .
+  }
+  UNION {
+    ?s <ex://b> ?x .
+  }
+  FILTER ( SAMETERM( ?o , <ex://a> ) )
+}`,
+        );
+      });
+
+      it('declines when the variable occurs in the right operand of a MINUS', ({ expect }) => {
+        expectTransform(
+          expect,
+          'SELECT * WHERE { ?s <ex://p> ?o MINUS { ?s <ex://q> ?o } FILTER(sameTerm(?o, <ex://a>)) }',
+          `SELECT ?o ?s WHERE {
+  ?s <ex://p> ?o .
+  MINUS {
+    ?s <ex://q> ?o .
+  }
+  FILTER ( SAMETERM( ?o , <ex://a> ) )
+}`,
+        );
+      });
+
+      it('declines below a LIMIT, where the filter may not be pushed through', ({ expect }) => {
+        expectTransform(
+          expect,
+          'SELECT * WHERE { { SELECT * WHERE { ?s <ex://p> ?o } LIMIT 10 } FILTER(sameTerm(?o, <ex://a>)) }',
+          `SELECT ?o ?s WHERE {
+  {
+    SELECT ?o ?s WHERE {
+      ?s <ex://p> ?o .
+    }
+    LIMIT 10
+  }
+  FILTER ( SAMETERM( ?o , <ex://a> ) )
+}`,
+        );
+      });
+
+      it('declines on the only key of a grouping, which would make it implicit', ({ expect }) => {
+        expectTransform(
+          expect,
+          'SELECT ?o (COUNT(?s) AS ?c) WHERE { ?s <ex://p> ?o } GROUP BY ?o HAVING(sameTerm(?o, <ex://a>))',
+          `SELECT ?o ( COUNT( ?s ) AS ?c ) WHERE {
+  ?s <ex://p> ?o .
+  FILTER ( SAMETERM( ?o , <ex://a> ) )
+}
+GROUP BY ?o`,
+        );
+      });
+
+      it('binds a group key while another key remains', ({ expect }) => {
+        expectTransform(
+          expect,
+          `SELECT ?o ?x (COUNT(?s) AS ?c) WHERE { ?s <ex://p> ?o . ?s <ex://q> ?x }
+           GROUP BY ?o ?x HAVING(sameTerm(?o, <ex://a>))`,
+          `SELECT ( <ex://a> AS ?o ) ?x ( COUNT( ?s ) AS ?c ) WHERE {
+  ?s <ex://p> <ex://a> .
+  ?s <ex://q> ?x .
+}
+GROUP BY ?x`,
+        );
+      });
+
+      it('declines a literal for a variable that also occurs as a subject', ({ expect }) => {
+        expectTransform(
+          expect,
+          'SELECT * WHERE { ?s <ex://p> ?o . ?o <ex://q> ?x FILTER(sameTerm(?o, "b")) }',
+          `SELECT ?o ?s ?x WHERE {
+  ?s <ex://p> ?o .
+  ?o <ex://q> ?x .
+  FILTER ( SAMETERM( ?o , "b" ) )
+}`,
+        );
+      });
+    });
+
+    describe('idempotence', () => {
+      it('applying the transformation twice yields the same result as once', ({ expect }) => {
+        const query = 'SELECT * WHERE { ?s <ex://p> ?o FILTER(sameTerm(?o, <ex://a>) && BOUND(?o)) }';
+        expect(transform(query, [ transformFilterToStaticBind, transformFilterToStaticBind ]))
+          .toEqual(transform(query));
+      });
+    });
+  });
+
+  describe('removeDeadExtends', () => {
+    const staticBinds = [ transformFilterToStaticBind, removeDeadExtends ];
+
+    it('drops a bind the projection hides', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT ?s WHERE { ?s <ex://p> ?o FILTER(sameTerm(?o, <ex://a>)) }',
+        `SELECT ?s WHERE {
+  ?s <ex://p> <ex://a> .
+}`,
+        staticBinds,
+      );
+    });
+
+    it('keeps a bind that is projected', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT ?s ?o WHERE { ?s <ex://p> ?o FILTER(sameTerm(?o, <ex://a>)) }',
+        `SELECT ?s ( <ex://a> AS ?o ) WHERE {
+  ?s <ex://p> <ex://a> .
+}`,
+        staticBinds,
+      );
+    });
+
+    it('keeps a bind a sibling join operand still joins on', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT ?s WHERE { { ?s <ex://p> ?o FILTER(sameTerm(?o, <ex://a>)) } { ?o <ex://q> ?z } }',
+        `SELECT ?s WHERE {
+  {
+    ?s <ex://p> <ex://a> .
+    BIND( <ex://a> AS ?o )
+  }
+  ?o <ex://q> ?z .
+}`,
+        staticBinds,
+      );
+    });
+
+    it('keeps a bind an ORDER BY reads', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT ?s WHERE { ?s <ex://p> ?o FILTER(sameTerm(?o, <ex://a>)) } ORDER BY ?o',
+        `SELECT ?s WHERE {
+  ?s <ex://p> <ex://a> .
+  BIND( <ex://a> AS ?o )
+}
+ORDER BY ASC ( ?o )`,
+        staticBinds,
+      );
+    });
+
+    it('drops a bind a subquery does not project', ({ expect }) => {
+      expectTransform(
+        expect,
+        `SELECT ?s ?z WHERE {
+          { SELECT ?s WHERE { ?s <ex://p> ?o FILTER(sameTerm(?o, <ex://a>)) } }
+          ?s <ex://q> ?z
+        }`,
+        `SELECT ?s ?z WHERE {
+  {
+    SELECT ?s WHERE {
+      ?s <ex://p> <ex://a> .
+    }
+  }
+  ?s <ex://q> ?z .
+}`,
+        staticBinds,
+      );
+    });
+  });
+
+  describe('hoisting the produced binds out of a UNION', () => {
+    it('merges the bind of every branch into a single bind above the UNION', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT ?s ?o WHERE { { ?s <ex://a> ?o } UNION { ?s <ex://b> ?o } FILTER(sameTerm(?o, <ex://a>)) }',
+        `SELECT ?s ( <ex://a> AS ?o ) WHERE {
+  {
+    ?s <ex://a> <ex://a> .
+  }
+  UNION {
+    ?s <ex://b> <ex://a> .
+  }
+}`,
+        [ pushDownRestrictors, transformFilterToStaticBind, pushUpBoundedFromUnion ],
+      );
+    });
+
+    it('drops the hoisted bind when nothing reads it', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT ?s WHERE { { ?s <ex://a> ?o } UNION { ?s <ex://b> ?o } FILTER(sameTerm(?o, <ex://a>)) }',
+        `SELECT ?s WHERE {
+  {
+    ?s <ex://a> <ex://a> .
+  }
+  UNION {
+    ?s <ex://b> <ex://a> .
+  }
+}`,
+        [ pushDownRestrictors, transformFilterToStaticBind, pushUpBoundedFromUnion, removeDeadExtends ],
+      );
+    });
+  });
+
+  describe('within the rewriter', () => {
+    const staticBindPipeline = [
+      operationTransform,
+      pushDownRestrictors,
+      transformFilterToStaticBind,
+      pushUpBoundedFromUnion,
+      removeDeadExtends,
+    ];
+
+    it('lands the constant of the user query inside the mapping body', ({ expect }) => {
+      expect(queryTransform(
+        transformContextFromConstructs([ 'CONSTRUCT WHERE { ?s <ex://p> ?o }' ]),
+        'SELECT * { ?s <ex://p> <ex://a> }',
+        staticBindPipeline,
+      ).trim()).toEqual(`SELECT ( ?uq_s AS ?s ) WHERE {
+  SELECT ( ?p0_mi_s AS ?uq_s ) WHERE {
+    ?p0_mi_s <ex://p> <ex://a> .
+  }
+}`);
+    });
+
+    it('constrains the reification mapping and nullifies the branch that cannot match', ({ expect }) => {
+      expect(queryTransform(
+        transformContextFromConstructs([ tripleTermConstruct, nonTripleTermConstruct ]),
+        'PREFIX : <https://example.com/> SELECT ?o WHERE { :t :statedBy ?o }',
+        staticBindPipeline,
+      ).trim()).toEqual(`SELECT ( ?uq_o AS ?o ) WHERE {
+  SELECT ( ?p0_m_o AS ?uq_o ) WHERE {
+    {
+      {
+        {
+          {
+            SELECT ?p0_mi_o ?p0_mi_p ?p0_mi_s ?p0_mi_t WHERE {
+              ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#Statement> .
+              ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Subject> ?p0_mi_s .
+              ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Predicate> ?p0_mi_p .
+              ?p0_mi_t <http://www.w3.org/1999/02/22-rdf-syntax-ns#Object> ?p0_mi_o .
+            }
+          }
+          FILTER ( SAMETERM( ?p0_mi_t , <https://example.com/t> ) )
+        }
+        FILTER ( FALSE )
+      }
+      BIND( <<( ?p0_mi_s ?p0_mi_p ?p0_mi_o )>> AS ?p0_m_o )
+    }
+    UNION {
+      {
+        {
+          {
+            SELECT ?p0_mi_o ?p0_mi_p ?p0_mi_s WHERE {
+              ?p0_mi_s ?p0_mi_p ?p0_mi_o .
+            }
+          }
+          FILTER ( SAMETERM( ?p0_mi_s , <https://example.com/t> ) )
+        }
+        FILTER ( SAMETERM( ?p0_mi_p , <https://example.com/statedBy> ) )
+      }
+      BIND( ?p0_mi_o AS ?p0_m_o )
+    }
+  }
+}`);
+    });
+  });
+
+  describe('semantic equivalence (evaluation)', () => {
+    const engine = new QueryEngine();
+    const pipeline = [
+      pushDownRestrictors,
+      transformFilterToStaticBind,
+      pushUpBoundedFromUnion,
+      removeDeadExtends,
+    ];
+
+    async function bindings(query: string): Promise<string[]> {
+      const stream = await engine.queryBindings(query, {
+        sources: [ './test/statics/multipleRdfReifiedTriples.ttl' ],
+      });
+      const rows: any[] = await arrayifyStream(stream);
+      return rows
+        .map(row => [ ...row ].map(([ k, v ]: [any, any]) => `${k.value}=${v.value}`).sort().join('|'))
+        .sort();
+    }
+
+    async function assertEquivalent(expect: typeof Expect, query: string): Promise<void> {
+      const original = await bindings(query);
+      const rewritten = await bindings(transform(query, pipeline));
+      expect(rewritten).toEqual(original);
+      // Sanity: the query actually returns something so the test is meaningful.
+      expect(original.length).toBeGreaterThan(0);
+    }
+
+    it('pins a variable of a plain pattern', async({ expect }) => {
+      await assertEquivalent(expect, `PREFIX : <ex://>
+        SELECT * WHERE { ?s :knows ?o FILTER(sameTerm(?o, :bob)) }`);
+    });
+
+    it('pins a variable bound in every branch of a UNION', async({ expect }) => {
+      await assertEquivalent(expect, `PREFIX : <ex://>
+        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+        SELECT * WHERE {
+          { ?t rdf:Subject ?s } UNION { ?t rdf:Object ?s }
+          FILTER(sameTerm(?s, :alice))
+        }`);
+    });
+
+    it('pins a variable of the required side of an OPTIONAL', async({ expect }) => {
+      await assertEquivalent(expect, `PREFIX : <ex://>
+        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+        SELECT * WHERE {
+          ?t rdf:Subject ?s
+          OPTIONAL { ?t rdf:Object ?s }
+          FILTER(sameTerm(?s, :alice))
+        }`);
+    });
+
+    it('pins a variable that a VALUES clause and a BIND also constrain', async({ expect }) => {
+      await assertEquivalent(expect, `PREFIX : <ex://>
+        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+        SELECT * WHERE {
+          ?t :statedBy ?by
+          VALUES ?by { :wikipedia :survey }
+          BIND(?by AS ?source)
+          FILTER(sameTerm(?source, :wikipedia) && BOUND(?by))
+        }`);
+    });
+
+    it('keeps the solutions of a filter it declines to rewrite', async({ expect }) => {
+      await assertEquivalent(expect, `PREFIX : <ex://>
+        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+        SELECT * WHERE {
+          ?t rdf:Subject ?s
+          OPTIONAL { ?t :statedBy ?by }
+          FILTER(sameTerm(?by, :wikipedia))
+        }`);
+    });
+  });
 });

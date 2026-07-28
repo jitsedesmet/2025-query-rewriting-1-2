@@ -1,6 +1,7 @@
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformContext } from '../transformContext.js';
 import { certainlyBoundVariables } from '../utils/certainlyBoundVars.js';
+import { conjunctionOf, splitConjunction } from '../utils/operationhelpers.js';
 import { collectVariableNames } from '../utils.js';
 
 /**
@@ -170,33 +171,6 @@ function pushFilterThroughJoin(
   }
   // What could not be pushed into a single operand stays in a (recombined) filter above the JOIN.
   return AF.createFilter(join, conjunctionOf(c, remaining));
-}
-
-/**
- * Splits a filter expression on top level logical conjunctions (`&&`), implementing (SDecompI):
- * `FILTER_{R1 && R2}(A) == FILTER_R1(FILTER_R2(A))`, so each conjunct can be pushed independently.
- *
- * @param expression - The filter expression to split
- * @returns The list of top level conjuncts (a single element list when there is no `&&`)
- */
-function splitConjunction(expression: Algebra.Expression): Algebra.Expression[] {
-  if (
-    expression.subType === Algebra.ExpressionTypes.OPERATOR &&
-    expression.operator === '&&'
-  ) {
-    return expression.args.flatMap(arg => splitConjunction(arg));
-  }
-  return [ expression ];
-}
-
-/**
- * Combines a non-empty list of expressions back into a single conjunction (`&&`).
- * @param c - The transformation context
- * @param expressions - The conjuncts to combine (must contain at least one element)
- * @returns A single expression equivalent to the conjunction of the inputs
- */
-function conjunctionOf(c: TransformContext, expressions: Algebra.Expression[]): Algebra.Expression {
-  return expressions.reduce((acc, expr) => c.AF.createOperatorExpression('&&', [ acc, expr ]));
 }
 
 /**

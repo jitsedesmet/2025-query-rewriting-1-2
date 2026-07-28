@@ -29,6 +29,12 @@
  *   over the remaining join operands (extracting any column that is constant across all rows, and
  *   collapsing contradicting VALUES to an empty result), enabling further push-down optimizations.
  *
+ * - **transformFilterToStaticBind**: Rewrites a filter pinning a variable to a term into a
+ *   substitution of that term wrapped in a BIND: `Filter(sameTerm(?v, <a>), P)` becomes
+ *   `Extend(P[?v := <a>], ?v, <a>)`.
+ *
+ * - **removeDeadExtends**: Drops BINDs of a term whose variable is not read anywhere above them.
+ *
  * @module transformations
  */
 export { substituteVarsThatArePreBoundToTerms } from './boundedVarSubstitution.js';
@@ -41,3 +47,5 @@ export {
   pushDownRestrictors,
 } from './pushDownRestrictors.js';
 export { transformJoinValuesToFilter } from './joinValuesToFilter.js';
+export { transformFilterToStaticBind } from './filterToStaticBind.js';
+export { removeDeadExtends } from './removeDeadExtends.js';

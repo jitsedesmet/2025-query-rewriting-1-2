@@ -25,6 +25,10 @@ In case one of the variables is normally constructed using an EXTEND, a FILTER i
 (`collapseDuplicateExtends`), so the same variable is never bound twice.
 4. Replace variables that are assigned to static terms with those terms, again special care is needed when they are used in certain operations such as expressions.
 5. group constraints together using pushDownRestrictions, which pushes restrictions down and distributes JOIN over UNION
+5.1 turn the restrictions that pin a variable to a single term into a substitution of that term (`transformFilterToStaticBind`):
+`FILTER(sameTerm(?v, <a>), P)` becomes `Extend(P[?v := <a>], ?v, <a>)`, so the term reaches the triple patterns, VALUES rows
+and expressions where it prunes work. The `Extend` keeps the rewrite value-preserving; the binds that are left dead by it are
+removed by `removeDeadExtends`, the ones common to every UNION branch are hoisted by `pushUpBoundedFromUnion`.
 6. Prune invalid constraint groups, replacing them with filter false.
   This involves statically evaluating the expression equalities, using both the ClusterSolver (I think), as range and domain of known operations,
   but also using comunica's expression evaluator to evaluate static expressions and optimize the query.
@@ -110,6 +114,8 @@ This means a mapping that doesn't match uses `FILTER(FALSE)` (zero results), not
 | `transformFilterFalse` | Remove FILTER(FALSE) branches and simplify |
 | `nullifyJoinOverIncompatibleBounds` | Replace incompatible join branches with FILTER(FALSE) |
 | `pushUpBoundedFromUnion` | Hoist common bindings out of UNION branches |
+| `transformFilterToStaticBind` | Turn `FILTER(sameTerm(?v, t))` into `?v := t` substitution + `BIND(t AS ?v)` |
+| `removeDeadExtends` | Drop `BIND`s of a term whose variable is not read above them |
 | `rewriteNonRecursivePaths` | Expand property paths into BGPs |
 
 ### Blank Node Transformations

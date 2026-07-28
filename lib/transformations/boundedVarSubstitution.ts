@@ -2,6 +2,7 @@ import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformContext } from '../transformContext.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
+import { substituteTerms } from '../utils/termSubstitution.js';
 import { VariableSet } from './variableSet.js';
 
 /**
@@ -70,8 +71,8 @@ function analyzeBranch(
           (expr.term.termType === 'Literal' || expr.term.termType === 'NamedNode')) {
         result.varSets[belowChain.variable.value] = new VariableSet(expr.term);
       }
-      // Complex-expression binds are not added to varSets; applySubstitutions handles them
-      // in the EXTEND case by emitting FILTER(expr = term) when the variable is substituted.
+      // Complex-expression binds are not added to varSets; substituteTerms handles them
+      // in the EXTEND case by emitting FILTER(sameTerm(expr, term)) when the variable is substituted.
     }
     belowChain = belowChain.input;
   }
@@ -100,7 +101,7 @@ function analyzeBranch(
  *  - Another branch with `BIND(t' AS v)` where `t' ≠ t`: that branch is replaced
  *    with `FILTER(FALSE)` since the two constant assignments can never unify.
  *  - Another branch with `BIND(complexExpr AS v)`: the complex BIND is replaced
- *    with `FILTER(complexExpr = t)` to preserve the runtime constraint.
+ *    with `FILTER(sameTerm(complexExpr, t))` to preserve the runtime constraint.
  *  - Another branch with a VALUES clause for `v`: the VALUES is cleaned up by
  *    `cleanupValues` — rows not matching `t` are removed, and if no rows remain
  *    the VALUES is replaced with `FILTER(FALSE)`.
@@ -163,8 +164,8 @@ function substituteAndUnwrapExtends(c: TransformContext, projection: Algebra.Pro
   //    In case the VALUES is empty, it becomes filter false, in case the VALUES become a simple `?subVar { term }`,
   //    it can be replaced with an empty BGP.
   // 2. The variable is assigned to in a BIND clause:
-  //    2.1 the expression is complex: replace with a filter that checks whether the complex expression is equal
-  //        to the term we want to substitute with.
+  //    2.1 the expression is complex: replace with a filter that checks whether the complex expression is the
+  //        same term as the term we want to substitute with.
   //    2.2 the expression is the simple assignment between the term and the variable - Simply unpack the EXTEND
 
   const maybeSubstitutions = computeToSubstitute(stillUsedVarNames, branchAnalyses);
@@ -177,7 +178,7 @@ function substituteAndUnwrapExtends(c: TransformContext, projection: Algebra.Pro
   }
 
   // Phase 2: apply substitutions to every branch of the join
-  join.input = join.input.map(branch => applySubstitutions(c, branch, maybeSubstitutions));
+  join.input = join.input.map(branch => substituteTerms(c, branch, maybeSubstitutions));
   return projection;
 }
 
@@ -215,204 +216,4 @@ function computeToSubstitute(
   }
 
   return substitutions;
-}
-
-function substituteInExpr(
-  c: TransformContext,
-  expr: Algebra.Expression,
-  subs: Record<string, RDF.Term>,
-): Algebra.Expression {
-  const { AF } = c;
-  return algebraUtils.mapOperationSub<'unsafe', Algebra.Expression>(expr, {}, {
-    [Algebra.Types.EXPRESSION]: {
-      [Algebra.ExpressionTypes.TERM]: { transform: (term) => {
-        if (term.term.termType === 'Variable' && subs[term.term.value] !== undefined) {
-          return AF.createTermExpression(subs[term.term.value]);
-        }
-        return term;
-      } },
-      [Algebra.ExpressionTypes.EXISTENCE]: {
-        // Don't auto-traverse the input Operation; applySubstitutions handles it.
-        preVisitor: () => ({ ignoreKeys: new Set([ 'input' ]) }),
-        transform: (existence) => {
-          existence.input = applySubstitutions(c, existence.input, subs);
-          return existence;
-        },
-      },
-    },
-  });
-}
-
-/**
- * Filters a VALUES operation to keep only rows compatible with the given substitutions,
- * removes substituted variables from the column list, and collapses degenerate cases:
- * - zero remaining rows → FILTER(FALSE)
- * - zero remaining columns → empty BGP (identity for JOIN)
- */
-function cleanupValues(
-  c: TransformContext,
-  values: Algebra.Values,
-  subs: Record<string, RDF.Term>,
-): Algebra.Operation {
-  const { AF } = c;
-
-  const variablesInReplacement = values.variables.filter(v => subs[v.value] === undefined);
-  if (variablesInReplacement.length === values.variables.length) {
-    return values;
-  }
-
-  // Construct the replacement.
-  const origVars = values.variables;
-  const replacementBindings: Algebra.Values['bindings'] = [];
-  for (const binding of values.bindings) {
-    const newBinding: typeof replacementBindings[0] = {};
-    let validBinding = true;
-    for (const variable of origVars) {
-      const replacementTerm = subs[variable.value];
-      if (replacementTerm === undefined) {
-        newBinding[variable.value] = binding[variable.value];
-      } else if (!replacementTerm.equals(binding[variable.value])) {
-        validBinding = false;
-      }
-    }
-    if (validBinding) {
-      replacementBindings.push(newBinding);
-    }
-  }
-
-  if (replacementBindings.length === 0) {
-    return createFilterFalse(c);
-  }
-
-  if (variablesInReplacement.length === 0) {
-    return AF.createBgp([]);
-  }
-
-  return AF.createValues(variablesInReplacement, replacementBindings);
-}
-
-/**
- * Applies a term-substitution map to an operation sub-tree using `mapOperation` for traversal.
- *
- * - BGP / PATH: substitutes variable references in subjects, predicates and objects.
- * - EXTEND whose variable is being substituted:
- *     same term   → unwrap (case 2.2)
- *     term differ → FILTER(FALSE)
- *     complex     → FILTER(expr = term) (case 2.1)
- * - VALUES: delegated to cleanupValues.
- * - PROJECT: substituted variables are removed from the projection list; the inner body
- *   is recursed into so that outer substitutions propagate into nested subqueries.
- * - GROUP: substituted variables are removed from the GROUP BY list; aggregate expressions
- *   are rewritten via substituteInExpr.
- * - ORDER_BY: ordering expressions are rewritten via substituteInExpr.
- * - FILTER: the filter expression is excluded from automatic traversal and handled via
- *   substituteInExpr, which substitutes variables in conditions and recurses into EXISTS/NOT EXISTS
- *   sub-patterns.
- * - EXTEND expression: also excluded from automatic traversal and handled via substituteInExpr.
- * - All other operations: traversal is handled automatically by mapOperation.
- */
-function applySubstitutions(
-  c: TransformContext,
-  op: Algebra.Operation,
-  subs: Record<string, RDF.Term>,
-): Algebra.Operation {
-  const { AF } = c;
-  const subExpr = (e: Algebra.Expression): Algebra.Expression => substituteInExpr(c, e, subs);
-  const subTerm = (term: RDF.Term): RDF.Term =>
-    (term.termType === 'Variable' && subs[term.value] !== undefined) ? subs[term.value] : term;
-
-  return algebraUtils.mapOperation<'unsafe', Algebra.Operation>(op, {
-    [Algebra.Types.BGP]: { transform: (bgp) => {
-      bgp.patterns = bgp.patterns.map(p =>
-        AF.createPattern(subTerm(p.subject), subTerm(p.predicate), subTerm(p.object), subTerm(p.graph)));
-      return bgp;
-    } },
-    [Algebra.Types.PATH]: { transform: (path) => {
-      path.subject = subTerm(path.subject);
-      path.object = subTerm(path.object);
-      return path;
-    } },
-    // Exclude expression from automatic traversal; it is handled manually in the transform.
-    [Algebra.Types.EXTEND]: {
-      preVisitor: () => ({ ignoreKeys: new Set([ 'expression' ]) }),
-      transform: (extend) => {
-        const varSub = subs[extend.variable.value];
-
-        if (varSub === undefined) {
-          // Substitute vars in the expression itself.
-          extend.expression = subExpr(extend.expression);
-          return extend;
-        }
-
-        // In case the var being assigned to is in replaced:
-        // 1. the simple bind matching assignment is removed, and
-        // 2. Simple bind not matching becomes a Filter false.
-        // 3. complex bind becomes a filter,
-
-        const expr = extend.expression;
-        if (expr.subType === Algebra.ExpressionTypes.TERM && expr.term.termType !== 'Variable') {
-          if (expr.term.equals(varSub)) {
-            return extend.input;
-          }
-          return createFilterFalse(c, extend.input);
-        }
-        return AF.createFilter(
-          extend.input,
-          AF.createOperatorExpression('=', [ subExpr(expr), AF.createTermExpression(varSub) ]),
-        );
-      },
-    },
-    [Algebra.Types.VALUES]: {
-      transform: values => cleanupValues(c, values, subs),
-    },
-    // Recurse into the inner body and drop substituted variables from the projection list.
-    // This propagates outer substitutions into nested subqueries.
-    [Algebra.Types.PROJECT]: {
-      preVisitor: () => ({ ignoreKeys: new Set([ 'variables' ]) }),
-      transform: (project) => {
-        project.variables = project.variables.filter(v => subs[v.value] === undefined);
-        return project;
-      },
-    },
-    // Exclude expression from automatic traversal and apply substituteInExpr manually.
-    // substituteInExpr substitutes variables in conditions and recurses into EXISTS/NOT EXISTS
-    // sub-patterns, giving complete and correct substitution of the filter expression.
-    [Algebra.Types.FILTER]: {
-      preVisitor: () => ({ ignoreKeys: new Set([ 'expression' ]) }),
-      transform: (filter) => {
-        filter.expression = subExpr(filter.expression);
-        return filter;
-      },
-    },
-    // Drop substituted variables from the GROUP BY list and substitute inside aggregates.
-    [Algebra.Types.GROUP]: {
-      preVisitor: () => ({ ignoreKeys: new Set([ 'variables', 'aggregates' ]) }),
-      transform: (group) => {
-        group.variables = group.variables.filter(v => subs[v.value] === undefined);
-        group.aggregates = group.aggregates.map(agg => ({ ...agg, expression: subExpr(agg.expression) }));
-        return group;
-      },
-    },
-    // Substitute variables referenced in ORDER BY expressions.
-    [Algebra.Types.ORDER_BY]: {
-      preVisitor: () => ({ ignoreKeys: new Set([ 'expressions' ]) }),
-      transform: (orderBy) => {
-        orderBy.expressions = orderBy.expressions
-          .map(e => subExpr(e))
-          .filter(expr => !(expr.subType === Algebra.ExpressionTypes.TERM && expr.term.termType !== 'Variable'));
-
-        if (orderBy.expressions.length > 0) {
-          return orderBy;
-        }
-
-        return orderBy.input;
-      },
-    },
-    [Algebra.Types.GRAPH]: {
-      transform: (graph) => {
-        graph.name = <RDF.Variable | RDF.NamedNode> subTerm(graph.name);
-        return graph;
-      },
-    },
-  });
 }

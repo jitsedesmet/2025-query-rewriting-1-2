@@ -1,6 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformContext } from '../transformContext.js';
+import { certainlyBoundVariables } from '../utils/certainlyBoundVars.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
 import { unionSets } from '../utils/setUtils.js';
 
@@ -109,7 +110,7 @@ function convertJoinValues(c: TransformContext, join: Algebra.Join): Algebra.Ope
   // Other VALUES clauses are themselves being converted, so they may no longer bind anything.
   // Mapping BINDs are trusted to bind (extendBinds), matching how the rewriting pipeline produces these joins.
   const varsBoundedByRemainingJoin = unionSets(nonCandidates.map(operand =>
-    algebraUtils.certainlyBoundVariables(operand, { extendBinds: true })));
+    certainlyBoundVariables(operand, { extendBinds: true })));
 
   const equalities: Algebra.Expression[] = [];
   const keptOperands: Algebra.Operation[] = [ ...nonCandidates ];

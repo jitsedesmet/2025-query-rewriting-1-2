@@ -1,5 +1,6 @@
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformContext } from '../transformContext.js';
+import { certainlyBoundVariables } from '../utils/certainlyBoundVars.js';
 import { collectVariableNames } from '../utils.js';
 
 /**
@@ -151,7 +152,7 @@ function pushFilterThroughJoin(
 ): Algebra.Operation {
   const { AF } = c;
   const conjuncts = splitConjunction(expression);
-  const operandSafeVars = join.input.map(operand => algebraUtils.certainlyBoundVariables(operand));
+  const operandSafeVars = join.input.map(operand => certainlyBoundVariables(operand));
 
   const remaining: Algebra.Expression[] = [];
   for (const conjunct of conjuncts) {

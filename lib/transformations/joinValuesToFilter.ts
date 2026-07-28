@@ -2,7 +2,6 @@ import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { unionSets } from '../setUtils.js';
 import type { TransformContext } from '../transformContext.js';
-
 import { createFilterFalse } from '../utils/operationhelpers.js';
 
 /**

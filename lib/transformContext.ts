@@ -11,6 +11,7 @@ import { AlgebraTemplateFactory } from './AlgebraTemplateFactory.js';
 import { ClusterSolver } from './ClusterSolver.js';
 import { MyGenerator } from './generator/generator.js';
 import type { Mapping, MappingHead } from './types.js';
+import { certainlyBoundVariables } from './utils/certainlyBoundVars.js';
 import { isRdfTerm } from './utils/typeGuards.js';
 import { collectVariableNames } from './utils.js';
 
@@ -103,7 +104,9 @@ export function prefixMappingVars(
  *
  * The CONSTRUCT query must have exactly one triple in the template (head).
  * The WHERE clause becomes the mapping body, wrapped in a projection of
- * the variables used in the head.
+ * the variables used in the head. Since a CONSTRUCT only instantiates its
+ * template when all of the template's variables are bound, a FILTER(BOUND(?x))
+ * is added for every head variable that is not already certainly bound.
  *
  * @param context - Partial context with parser, AF, and astTransformer
  * @param constructQuery - SPARQL CONSTRUCT query string
@@ -142,7 +145,17 @@ ${JSON.stringify(construct.template, null, 2)}`);
   const head: MappingHead = <MappingHead> AF.createPattern(template.subject, template.predicate, template.object);
   // Get used vars to create the proper projection
   const usedVars = collectVariableNames(astTransformer, head);
-  const body = AF.createProject(construct.input, [ ...usedVars.keys() ].map(x => DF.variable(x)));
+  // A CONSTRUCT only instantiates its template when every variable in that template is bound,
+  // so solutions leaving a head variable unbound do not belong to the mapping.
+  // Variables that are certainly bound already need no filter.
+  const certainlyBound = certainlyBoundVariables(construct.input, { extendBinds: true });
+  const mustBeBound = [ ...usedVars.keys() ].filter(name => !certainlyBound.has(name));
+  const filteredInput = mustBeBound.length === 0 ?
+    construct.input :
+    AF.createFilter(construct.input, mustBeBound
+      .map(name => AF.createOperatorExpression('bound', [ AF.createTermExpression(DF.variable(name)) ]))
+      .reduce((acc, expr) => AF.createOperatorExpression('&&', [ acc, expr ])));
+  const body = AF.createProject(filteredInput, [ ...usedVars.keys() ].map(x => DF.variable(x)));
   // Body should not call bnode function (you should not create blank nodes in mapping body)
   algebraUtils.visitOperationSub(body, {}, {
     expression: { operator: { visitor: (operatorExpression) => {

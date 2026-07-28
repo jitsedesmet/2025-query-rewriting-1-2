@@ -124,7 +124,7 @@ function convertJoinValues(c: TransformContext, join: Algebra.Join): Algebra.Ope
       // Extract a constant column only when the remaining operands guarantee the variable is bound;
       // everything else (non-constant or not-certainly-bound columns) stays in a residual VALUES.
       if (term !== undefined && varsBoundedByRemainingJoin.has(variable.value)) {
-        localEqualities.push(AF.createOperatorExpression('=', [
+        localEqualities.push(AF.createOperatorExpression('sameTerm', [
           AF.createTermExpression(variable),
           AF.createTermExpression(term),
         ]));

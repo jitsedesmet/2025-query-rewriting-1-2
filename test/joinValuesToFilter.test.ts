@@ -34,7 +34,7 @@ describe('transformJoinValuesToFilter', () => {
         'SELECT * WHERE { ?s <ex://p> ?o VALUES (?s ?o) { (<ex://a> <ex://b>) } }',
         `SELECT ?o ?s WHERE {
   ?s <ex://p> ?o .
-  FILTER ( ( ( ?s = <ex://a> ) && ( ?o = <ex://b> ) ) )
+  FILTER ( ( SAMETERM( ?s , <ex://a> ) && SAMETERM( ?o , <ex://b> ) ) )
 }`,
       );
     });
@@ -45,7 +45,7 @@ describe('transformJoinValuesToFilter', () => {
         'SELECT * WHERE { ?s <ex://p> ?o VALUES (?s) { (<ex://a>) } }',
         `SELECT ?o ?s WHERE {
   ?s <ex://p> ?o .
-  FILTER ( ( ?s = <ex://a> ) )
+  FILTER ( SAMETERM( ?s , <ex://a> ) )
 }`,
       );
     });
@@ -59,7 +59,7 @@ describe('transformJoinValuesToFilter', () => {
     ?s <ex://p> ?o .
     BIND( <ex://z> AS ?b )
   }
-  FILTER ( ( ?b = <ex://z> ) )
+  FILTER ( SAMETERM( ?b , <ex://z> ) )
 }`,
       );
     });
@@ -74,7 +74,7 @@ describe('transformJoinValuesToFilter', () => {
     <ex://x>
     <ex://y>
   }
-  FILTER ( ( ?s = <ex://a> ) )
+  FILTER ( SAMETERM( ?s , <ex://a> ) )
 }`,
       );
     });
@@ -101,7 +101,7 @@ describe('transformJoinValuesToFilter', () => {
     ( <ex://a><ex://x> )
     ( <ex://b><ex://y> )
   }
-  FILTER ( ( ?s = <ex://a> ) )
+  FILTER ( SAMETERM( ?s , <ex://a> ) )
 }`,
       );
     });
@@ -117,7 +117,7 @@ describe('transformJoinValuesToFilter', () => {
   VALUES ?x {
     <ex://b>
   }
-  FILTER ( ( ?s = <ex://a> ) )
+  FILTER ( SAMETERM( ?s , <ex://a> ) )
 }`,
       );
     });
@@ -148,13 +148,13 @@ describe('transformJoinValuesToFilter', () => {
   {
     {
       ?s <ex://a> ?o .
-      FILTER ( ( ?s = <ex://x> ) )
+      FILTER ( SAMETERM( ?s , <ex://x> ) )
     }
   }
   UNION {
     {
       ?s <ex://b> ?o .
-      FILTER ( ( ?s = <ex://x> ) )
+      FILTER ( SAMETERM( ?s , <ex://x> ) )
     }
   }
 }`);

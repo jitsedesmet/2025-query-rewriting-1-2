@@ -11,7 +11,8 @@ import { AlgebraTemplateFactory } from './AlgebraTemplateFactory.js';
 import { ClusterSolver } from './ClusterSolver.js';
 import { MyGenerator } from './generator/generator.js';
 import type { Mapping, MappingHead } from './types.js';
-import { collectVariableNames, isRdfTerm } from './utils.js';
+import { isRdfTerm } from './utils/typeGuards.js';
+import { collectVariableNames } from './utils.js';
 
 /**
  * The context object passed through all transformation operations.

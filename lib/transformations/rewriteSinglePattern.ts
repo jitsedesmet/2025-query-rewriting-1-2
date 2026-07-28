@@ -5,7 +5,7 @@ import type { ClusterSolver } from '../ClusterSolver.js';
 import { objectRange, predicateRange, subjectRange } from '../RangeSet.js';
 import type { TransformContext } from '../transformContext.js';
 import type { Mapping, MappingHead } from '../types.js';
-import { isRdfQuad, isRdfVar } from '../utils.js';
+import { isRdfQuad, isRdfVar } from '../utils/typeGuards.js';
 
 /**
  * @fileoverview Core pattern rewriting logic.

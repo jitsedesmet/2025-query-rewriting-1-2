@@ -2,8 +2,8 @@ import type * as RDF from '@rdfjs/types';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { ClusterSet } from './datastructures/ClusterSet.js';
 import { objectRange, RangeSet } from './RangeSet.js';
-import type { RangedVar } from './utils.js';
-import { isRdfTerm, isRdfVar } from './utils.js';
+import type { RangedVar } from './utils/RangedVar.js';
+import { isRdfTerm, isRdfVar } from './utils/typeGuards.js';
 
 /**
  * A raw term that is either a concrete term (not a variable) or a ranged variable.

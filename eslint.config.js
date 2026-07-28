@@ -85,8 +85,6 @@ export default config([
   {
     ignores: [
       'documentation',
-      // Vendored comunica checkout, linted by its own config
-      'comunica',
     ],
   },
 ], { disableJest: true });

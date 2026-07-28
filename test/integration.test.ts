@@ -5,7 +5,6 @@ import { DataFactory, Store } from 'n3';
 import { describe, it } from 'vitest';
 import { transformFilterFalse } from '../lib/transformations/filterFalse.js';
 import { nullifyJoinOverIncompatibleBounds } from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
-import { removeProjections } from '../lib/transformations/removeProjections.js';
 import { operationTransform, queryTransform } from '../lib/transformBgp.js';
 import { transformContextFromConstructs } from '../lib/transformContext.js';
 import {
@@ -36,7 +35,6 @@ describe('integration tests', () => {
     transformFilterFalse,
     nullifyJoinOverIncompatibleBounds,
     transformFilterFalse,
-    removeProjections,
   ];
 
   async function sourceToStore(

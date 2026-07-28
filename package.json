@@ -11,6 +11,10 @@
     "type": "git",
     "url": "https://github.com/jitsedesmet/2025-query-rewriting-1-2"
   },
+  "workspaces": [
+    "./comunica/engines/**",
+    "./comunica/packages/**"
+  ],
   "bugs": {
     "url": "https://github.com/jitsedesmet/2025-query-rewriting-1-2/issues"
   },

@@ -1,3 +1,8 @@
+/**
+ * Clustering Algorithm that allows for merges. Complexity: n*log(n) .
+ * Allegedly this can be compressed down to O(invAckerman(n)):
+ *  https://claude.ai/share/8db9c2e2-918f-42ed-af83-e5564a6f80a3
+ */
 export class ClusterSet<T> {
   public groupToValues: Record<number, T[]>;
   /** Maps group ID to the expression that they need to satisfy */
@@ -51,8 +56,13 @@ export class ClusterSet<T> {
     if (fromGroup === toGroup) {
       return undefined;
     }
-    // Merge groups into the lowest number for consistency
-    const [ newGroup, oldGroup ] = fromGroup < toGroup ? [ fromGroup, toGroup ] : [ toGroup, fromGroup ];
+
+    // Union by size: the larger group survives. Ties break towards the lower ID.
+    const fromSize = this.groupToValues[fromGroup].length;
+    const toSize = this.groupToValues[toGroup].length;
+    const fromWins = fromSize > toSize || (fromSize === toSize && fromGroup < toGroup);
+    const [ newGroup, oldGroup ] = fromWins ? [ fromGroup, toGroup ] : [ toGroup, fromGroup ];
+
     // Merge values:
     const oldValues = this.groupToValues[oldGroup];
     delete this.groupToValues[oldGroup];

@@ -2,7 +2,7 @@ import type * as RDF from '@rdfjs/types';
 import type { Algebra as A, Algebra } from '@traqula/algebra-transformations-1-2';
 import { algebraUtils, ExpressionTypes, Types } from '@traqula/algebra-transformations-1-2';
 import type { SSet } from './setUtils.js';
-import { intersectSets, isSubsetOf, unionSets } from './setUtils.js';
+import { differenceSets, intersectSets, isSubsetOf, unionSets } from './setUtils.js';
 
 export interface CPMeta {
   cVars: SSet;
@@ -46,8 +46,8 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
       resOp.metadata.cVars = vars;
       return resOp;
     } case Types.PATH: {
-      const vars = unionSets([ resOp.subject, resOp.object ].map(termVars));
-      resOp.metadata.pVars = unionSets([ vars, termVars(resOp.graph) ]);
+      const vars = unionSets([ resOp.subject, resOp.object, resOp.graph ].map(termVars));
+      resOp.metadata.pVars = vars;
       resOp.metadata.cVars = vars;
       return resOp;
     } case Types.JOIN: {
@@ -90,8 +90,15 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
         intersectSets([ input.metadata.pVars, keys ]),
         new Set(resOp.aggregates.map(aggregate => aggregate.variable.value)),
       ]);
-      // TODO: I think a COUNT aggregate can also never fail and would thus be a cVar?
-      resOp.metadata.cVars = intersectSets([ input.metadata.cVars, keys ]);
+      // COUNT is the one aggregate that cannot fail: it counts the bound, non-error values of its
+      // argument, so it yields an integer.
+      // All others can end up with an error value leaving their target unbound.
+      resOp.metadata.cVars = unionSets([
+        intersectSets([ input.metadata.cVars, keys ]),
+        new Set(resOp.aggregates
+          .filter(aggregate => aggregate.aggregator === 'count')
+          .map(aggregate => aggregate.variable.value)),
+      ]);
       return resOp;
     } case Types.VALUES: {
       // A VALUES variable is certainly bound only if every row provides a value for it.
@@ -118,22 +125,22 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
     } case Types.FILTER: {
       // The variables of an EXISTS stay inside it, so a filter never adds a possible binding.
       // However: depending on the filter, we can say something on vars being present.
-      // TODO: remove from pVars is we have a `!bound` test
+      // Also filters pVars and cVars for `!bound(?x)`
+      // TODO: Filter False is a special case. How can we model it?
       const input = withCpVars(resOp.input);
-      resOp.metadata.pVars = new Set(input.metadata.pVars);
-      resOp.metadata.cVars = unionSets([
+      const unbound = variablesImpliedUnboundBy(resOp.expression);
+      resOp.metadata.pVars = differenceSets(input.metadata.pVars, unbound);
+      resOp.metadata.cVars = differenceSets(unionSets([
         input.metadata.cVars,
         variablesImpliedBoundBy(resOp.expression),
-      ]);
+      ]), unbound);
       return resOp;
     } case Types.GRAPH: {
       // Asserting on the graph variable selects one graph, so it is in scope above the GRAPH.
-      // It is left out of cVars: an operation binding nothing (e.g. a NOP body) binds no graph either.
       const input = withCpVars(resOp.input);
-      resOp.metadata.pVars = unionSets([ input.metadata.pVars, termVars(resOp.name) ]);
-      // TODO: I think it should be added to cVars since `graph ?g {}` will bind all graphs.
-      //  And the empty result would have cVars and pVars infinite.
-      resOp.metadata.cVars = new Set(input.metadata.cVars);
+      const graphVars = termVars(resOp.name);
+      resOp.metadata.pVars = unionSets([ input.metadata.pVars, graphVars ]);
+      resOp.metadata.cVars = unionSets([ input.metadata.cVars, graphVars ]);
       return resOp;
     } case Types.SERVICE: {
       // A SILENT service that fails is replaced by a single empty solution, so no variable is certain.
@@ -359,6 +366,33 @@ function variablesImpliedBoundBy(expression: A.Expression, agg = new Set<string>
     for (const arg of expression.args) {
       if (arg.subType === ExpressionTypes.TERM && arg.term.termType === 'Variable') {
         agg.add(arg.term.value);
+      }
+    }
+  }
+  return agg;
+}
+
+/**
+ * Collects the variables a filter condition can only hold for when they are *unbound*.
+ */
+function variablesImpliedUnboundBy(expression: A.Expression, agg = new Set<string>()): SSet {
+  if (expression.subType !== ExpressionTypes.OPERATOR) {
+    return agg;
+  }
+  if (expression.operator === '&&') {
+    for (const arg of expression.args) {
+      variablesImpliedUnboundBy(arg, agg);
+    }
+    return agg;
+  }
+  if (expression.operator === '!') {
+    for (const arg of expression.args) {
+      if (arg.subType === ExpressionTypes.OPERATOR && arg.operator === 'bound') {
+        for (const nested of arg.args) {
+          if (nested.subType === ExpressionTypes.TERM && nested.term.termType === 'Variable') {
+            agg.add(nested.term.value);
+          }
+        }
       }
     }
   }

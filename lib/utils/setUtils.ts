@@ -22,18 +22,28 @@ export function isSubsetOf(subset: Set<string>, superset: Set<string>): boolean 
   return true;
 }
 
-export function intersectSets(sets: Set<string>[]): Set<string> {
+export function intersectSets(sets: SSet[]): SSet {
   if (sets.length === 0) {
     return new Set<string>();
   }
-  const agg = sets[0];
-  for (const idx = 1; idx < sets.length; idx++) {
-    const set = sets[idx];
-    for (const value of set) {
-      agg.delete(value);
-      if (agg.size === 0) {
-        return set;
-      }
+  const [ first, ...rest ] = sets;
+  const agg = new Set<string>();
+  for (const value of first) {
+    if (rest.every(set => set.has(value))) {
+      agg.add(value);
+    }
+  }
+  return agg;
+}
+
+/**
+ * The elements of `set` that do not occur in `remove`.
+ */
+export function differenceSets(set: SSet, remove: SSet): SSet {
+  const agg = new Set<string>();
+  for (const value of set) {
+    if (!remove.has(value)) {
+      agg.add(value);
     }
   }
   return agg;

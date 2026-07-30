@@ -216,7 +216,7 @@ FILTER ( ( <https://example.com/name> = PREDICATE( ?m_o ) ) )
         BIND( <<( ?mi_s ?mi_p ?mi_o )>> AS ?m_o )
       }
       VALUES( ?m_p ?m_s ){
-        ( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies><https://example.com/t> )
+        ( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <https://example.com/t> )
       }
       FILTER ( ( <https://example.com/me> = SUBJECT( ?m_o ) ) )
     }
@@ -235,7 +235,7 @@ FILTER ( ( <https://example.com/name> = PREDICATE( ?m_o ) ) )
         BIND( ?mi_o AS ?m_o )
       }
       VALUES( ?m_p ?m_s ){
-        ( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies><https://example.com/t> )
+        ( <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <https://example.com/t> )
       }
       FILTER ( ( <https://example.com/me> = SUBJECT( ?m_o ) ) )
     }

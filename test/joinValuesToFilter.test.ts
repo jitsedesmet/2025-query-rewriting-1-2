@@ -98,8 +98,8 @@ describe('transformJoinValuesToFilter', () => {
         `SELECT ?o ?s WHERE {
   ?s <ex://p> ?o .
   VALUES( ?s ?o ){
-    ( <ex://a><ex://x> )
-    ( <ex://b><ex://y> )
+    ( <ex://a> <ex://x> )
+    ( <ex://b> <ex://y> )
   }
   FILTER ( SAMETERM( ?s , <ex://a> ) )
 }`,

@@ -1,8 +1,108 @@
 import type * as RDF from '@rdfjs/types';
 import { algebraUtils, ExpressionTypes, Types } from '@traqula/algebra-transformations-1-2';
-import type { Algebra as A } from '@traqula/algebra-transformations-1-2';
+import type { Algebra as A, Algebra } from '@traqula/algebra-transformations-1-2';
+import type { SSet } from './setUtils.js';
+import { unionSets } from './setUtils.js';
 
-// TODO: upstream this into TRAQULA
+export interface CPMeta {
+  cVars: SSet;
+  pVars: SSet;
+}
+
+export type CPOp<T extends Algebra.Operation = Algebra.Operation> = T & { metadata: CPMeta };
+
+/**
+ * Return Algebra Operations but with certain and possible vars assigned.
+ * We use Dynamic programming and assert that the metadata is kept up to date when manipulated.
+ */
+export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
+  function asCPVars<T extends Algebra.Operation>(op: T): CPOp<T> {
+    const casted = <CPOp<T>> op;
+    if (!Object.hasOwn(op, 'metadata')) {
+      casted.metadata = <any> {};
+      if (!casted.metadata.cVars) {
+        casted.metadata.cVars = new Set<string>();
+      }
+      if (!casted.metadata.pVars) {
+        casted.metadata.pVars = new Set<string>();
+      }
+    }
+    return casted;
+  }
+  const casted = <T & { metadata?: Partial<CPMeta> }> op;
+  if (casted.metadata !== undefined && casted.metadata.cVars !== undefined && casted.metadata.pVars !== undefined) {
+    return <CPOp<T>> casted;
+  }
+  const result = asCPVars<T>(op);
+  switch (result.type) {
+    case Types.BGP: {
+      const vars = unionSets(result.patterns.map(pattern => withCpVars(pattern).metadata.cVars));
+      result.metadata.pVars = vars;
+      result.metadata.cVars = vars;
+      return result;
+    } case Types.PATTERN: {
+      const vars = unionSets([ result.subject, result.predicate, result.object, result.graph ].map(termVars));
+      result.metadata.pVars = vars;
+      result.metadata.cVars = vars;
+      return result;
+    } case Types.PATH: {
+      const vars = unionSets([ result.subject, result.object ].map(termVars));
+      result.metadata.pVars = vars;
+      result.metadata.cVars = vars;
+      return result;
+    } case Types.JOIN: {
+      // TODO: continue for the other operators.
+      return unionSets(op.input.map(input => certainlyBoundVariables(input, options)));
+    }
+    case Types.UNION:
+      return intersectSets(op.input.map(input => certainlyBoundVariables(input, options)));
+    case Types.MINUS:
+    case Types.LEFT_JOIN:
+      // MINUS / OPTIONAL only certainly bind whatever their left-hand (required) side binds.
+      return certainlyBoundVariables(op.input[0], options);
+    case Types.PROJECT: {
+      const projected = new Set(op.variables.map(variable => variable.value));
+      return intersectSets([ certainlyBoundVariables(op.input, options), projected ]);
+    }
+    case Types.GROUP:
+      return new Set(op.variables.map(variable => variable.value));
+    case Types.VALUES:
+      // A VALUES variable is certainly bound only if every row provides a value for it.
+      return new Set(op.variables
+        .filter(variable => op.bindings.every(binding => binding[variable.value] !== undefined))
+        .map(variable => variable.value));
+    case Types.EXTEND: {
+      const inputBound = certainlyBoundVariables(op.input, options);
+      if (options.extendBinds &&
+          op.expression.subType === ExpressionTypes.TERM &&
+          // A triple-term construction may raise an evaluation error, so it is not certainly bound.
+          op.expression.term.termType !== 'Quad' &&
+          isSubsetOf(termVars(op.expression.term), inputBound)) {
+        inputBound.add(op.variable.value);
+      }
+      return inputBound;
+    }
+    case Types.FILTER: {
+      const inputBound = certainlyBoundVariables(op.input, options);
+      if (options.filterImpliesBound) {
+        for (const name of variablesImpliedBoundBy(op.expression)) {
+          inputBound.add(name);
+        }
+      }
+      return inputBound;
+    }
+    case Types.GRAPH:
+    case Types.SERVICE:
+    case Types.DISTINCT:
+    case Types.REDUCED:
+    case Types.SLICE:
+    case Types.ORDER_BY:
+    case Types.FROM:
+      return certainlyBoundVariables((<A.Single> op).input, options);
+    default:
+      return new Set<string>();
+  }
+}
 
 /**
  * Options controlling how {@link certainlyBoundVariables} decides whether a variable is certainly
@@ -166,33 +266,25 @@ export function isVariableCertainlyBound(
  * See {@link BoundVariablesOptions.filterImpliesBound} for why these positions - and only these - are
  * safe to conclude boundness from.
  */
-function variablesImpliedBoundBy(expression: A.Expression): Set<string> {
+function variablesImpliedBoundBy(expression: A.Expression, agg = new Set<string>()): Set<string> {
   if (expression.subType !== ExpressionTypes.OPERATOR) {
-    return new Set<string>();
+    return agg;
   }
   // Every conjunct of a `&&` has to hold, so each of them contributes.
   if (expression.operator === '&&') {
-    return unionSets(expression.args.map(arg => variablesImpliedBoundBy(arg)));
+    for (const arg of expression.args) {
+      variablesImpliedBoundBy(arg, agg);
+    }
+    return agg;
   }
   if (expression.operator === 'bound' || expression.operator === 'sameterm') {
-    return unionSets(expression.args.map(arg =>
-      arg.subType === ExpressionTypes.TERM && arg.term.termType === 'Variable' ?
-        new Set([ arg.term.value ]) :
-        new Set<string>()));
+    for (const arg of expression.args) {
+      if (arg.subType === ExpressionTypes.TERM && arg.term.termType === 'Variable') {
+        agg.add(arg.term.value);
+      }
+    }
   }
-  return new Set<string>();
-}
-
-/**
- * Collects the variables appearing in a single triple/quad pattern (including nested quoted triples).
- */
-function patternVars(pattern: A.Pattern): Set<string> {
-  return unionSets([
-    termVars(pattern.subject),
-    termVars(pattern.predicate),
-    termVars(pattern.object),
-    termVars(pattern.graph),
-  ]);
+  return agg;
 }
 
 /**
@@ -218,16 +310,6 @@ function isSubsetOf(subset: Set<string>, superset: Set<string>): boolean {
     }
   }
   return true;
-}
-
-function unionSets(sets: Set<string>[]): Set<string> {
-  const result = new Set<string>();
-  for (const set of sets) {
-    for (const value of set) {
-      result.add(value);
-    }
-  }
-  return result;
 }
 
 function intersectSets(sets: Set<string>[]): Set<string> {

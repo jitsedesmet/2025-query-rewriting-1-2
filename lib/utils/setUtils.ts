@@ -1,4 +1,6 @@
-export function unionSets(sets: Set<string>[]): Set<string> {
+export type SSet = Set<string>;
+
+export function unionSets(sets: SSet[]): SSet {
   const result = new Set<string>();
   for (const set of sets) {
     for (const value of set) {

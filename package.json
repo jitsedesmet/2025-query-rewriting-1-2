@@ -7,6 +7,10 @@
   "description": "Query rewriting for a SPARQL 1.2 query on RDF 1.1 data ",
   "lsd:module": true,
   "license": "MIT",
+  "workspaces": [
+    "./traqula/engines/**",
+    "./traqula/packages/**"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/jitsedesmet/2025-query-rewriting-1-2"

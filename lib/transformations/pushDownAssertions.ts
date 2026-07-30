@@ -21,56 +21,12 @@ import { createFilterFalse } from '../utils/operationhelpers.js';
  * An earlier rewriting stage produces queries carrying *assertion filters* of the form
  * `FILTER(sameTerm(?x, <ex://p>))` - each stating that one variable is fixed to one term. Left where
  * they are, they only discard rows at the end. Pushed down, they eliminate work: they substitute into
- * BGPs (fewer triple matches), prune VALUES rows, delete whole UNION branches, and can turn an
- * OPTIONAL into a plain join.
+ * BGPs (fewer triple matches), prune VALUES rows, etc.
  *
- * We use: https://arxiv.org/pdf/0812.3788 (Schmidt et al., "Foundations of SPARQL Query Optimization").
+ * We use: https://dl.acm.org/doi/pdf/10.1145/1804669.1804675
+ * (Schmidt et al., "Foundations of SPARQL Query Optimization").
  * Rule names in parentheses refer to Figure 2 of that paper. Writing A⟨?x ≡ c⟩ for `σ_{sameTerm(?x,c)}`,
  * two properties drive the whole design:
- *
- * 1. **The assertion implies `bnd(?x)`**, so (FBndII) applies directly:
- *    `?x ∉ pVars(A) ⟹ σ_{?x≡c}(A) ≡ ∅`. Every empty-result outcome below falls out of that single
- *    rule; no per-operator emptiness rules are needed. It is also why `bound(?x)` folds to `true`
- *    during substitution.
- * 2. **`sameTerm`, not `=`.** Under `sameTerm`, `μ ↦ μ|_{V∖{?x}}` is a multiplicity-preserving
- *    bijection between `{μ ∈ ⟦BGP⟧ | μ(?x) = c}` and `⟦BGP[?x↦c]⟧`, which is what makes substituting a
- *    term into a pattern sound. Under `=` it is not: `?x = "01"^^xsd:integer` holds of the term
- *    `"1"^^xsd:integer`. Never generalise this pass to `=`.
- *
- * The licence to push into an operand, (FJPush)/(FLPush) specialised to a single variable condition, is
- * `L(?x, A₁, A₂) ≔ ?x ∈ cVars(A₁) ∨ ?x ∉ pVars(A₂)` - see {@link certainlyBoundVariables} and
- * {@link possiblyBoundVariables}. The second disjunct is easy to forget and does a lot of work: it is
- * what gets an assertion on a UNION-bound variable below an enclosing join, and what makes GRAPH
- * transparent.
- *
- * Per-operator rules:
- *
- * | Node | Rule | Needs |
- * |---|---|---|
- * | any `A` | `?x ∉ pVars(A)` ⟹ empty | pVars (FBndII) |
- * | `A₁ ∪ A₂` | `σ(A₁) ∪ σ(A₂)` - always, both branches, no precondition | - (FUPush) |
- * | `A₁ ⋈ A₂` | into every operand `L` holds for - possibly **both** at once | cVars+pVars (FJPush) |
- * | `A₁ ⟕ A₂` | to a join, or into `A₁` and maybe `A₂` - {@link pushIntoLeftJoin} | cVars+pVars (FLPush) |
- * | `A₁ ∖ A₂` | `σ(A₁) ∖ σ_W(A₂)` - both sides, unconditional | - (FMPush) |
- * | `σ_R(A)` | `σ_{simplify(R[?x↦c])}(σ_{?x≡c}(A))` | - (FReord) |
- * | `π_S(A)` | `?x ∉ S` ⟹ empty; else `π_S(σ(A))` | - |
- * | `Extend(A,?y,e)` | `Extend(σ(A), ?y, simplify(e[?x↦c]))` - see {@link pushIntoExtend} for `?y = ?x` | - |
- * | `Graph(g,P)` | `Graph(g, σ(P))` unconditionally; asserting on the graph variable selects one graph | - |
- * | `Distinct` / `Reduced` / `OrderBy` / `From` | push through (congruence) | - |
- * | `Group`, `?x` a grouping key | push below the grouping | - |
- * | `Slice`, `Group` (non-key), `Service` | **stop** - keep the filter above | - |
- *
- * `Slice` and non-key `Group` are genuine barriers: filtering before a slice changes which rows fall in
- * the window, filtering before aggregation changes the aggregate. `Service` is a barrier by choice
- * rather than for soundness: pushing into a `SERVICE` body is the highest-value push available (it cuts
- * network transfer, not just CPU), but it has to be a *replication* rather than a move, because
- * `SILENT` turns endpoint failure into a single empty solution that a moved filter would fail to
- * discard. Tracked separately.
- *
- * Every rewrite here preserves `pVars` exactly, never shrinks `cVars`, and preserves the multiplicity
- * of every surviving mapping - all rules used carry from set to bag algebra by Theorem 7 of the paper,
- * and the rules that do not, (UIdem) and (FDecompII), are not used. Consequently a licence computed at
- * one node stays valid while its descendants are rewritten, which is what allows a single traversal.
  */
 
 /** How this pass approximates `cVars`; see {@link BoundVariablesOptions}. */

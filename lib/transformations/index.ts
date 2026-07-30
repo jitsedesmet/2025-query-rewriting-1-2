@@ -35,14 +35,9 @@
  *
  * @module transformations
  */
-export { substituteVarsThatArePreBoundToTerms } from './boundedVarSubstitution.js';
 export { transformFilterFalse } from './filterFalse.js';
 export { nullifyJoinOverIncompatibleBounds } from './nullifyJoinOverIncompatibleBounds.js';
 export { pushUpBoundedFromUnion } from './pushUpBoundedFromUnion.js';
 export { rewriteSinglePattern } from './rewriteSinglePattern.js';
 export { removeProjections } from './removeProjections.js';
-export {
-  pushDownRestrictors,
-} from './pushDownRestrictors.js';
-export { pushDownAssertions } from './pushDownAssertions.js';
 export { transformJoinValuesToFilter } from './joinValuesToFilter.js';

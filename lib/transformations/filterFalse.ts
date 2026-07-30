@@ -8,12 +8,6 @@ import { createFilterFalse, isFilterFalse, termFalse } from '../utils/operationh
  * In SPARQL algebra, FILTER(FALSE) represents an empty result set.
  * This module provides transformations that simplify algebra expressions
  * containing FILTER(FALSE) based on algebraic identities:
- *
- * - **UNION identity**: FILTER(FALSE) can be removed from unions
- * - **JOIN absorbing**: Any JOIN containing FILTER(FALSE) is FILTER(FALSE)
- * - **Single operations**: Operations over FILTER(FALSE) propagate emptiness
- *
- * @see https://www.w3.org/TR/sparql11-query/#sparqlSimplification
  */
 
 /**

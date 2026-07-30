@@ -5,6 +5,9 @@ import { datatypeBoolean, DF } from './rdfDatatypes.js';
 /** The literal `false` with xsd:boolean datatype, used for FILTER(FALSE) patterns */
 export const termFalse = DF.literal('false', datatypeBoolean);
 
+/** The literal `true` with xsd:boolean datatype, the condition of a filter that constrains nothing */
+export const termTrue = DF.literal('true', datatypeBoolean);
+
 /**
  * Checks if an operation is a FILTER(FALSE) pattern.
  * FILTER(FALSE) is used as a sentinel to represent patterns that will never match.

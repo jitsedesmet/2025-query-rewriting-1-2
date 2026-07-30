@@ -85,6 +85,8 @@ export default config([
   {
     ignores: [
       'documentation',
+      // A local TRAQULA checkout (the workspaces of package.json) brings its own lint configuration.
+      'traqula',
     ],
   },
 ], { disableJest: true });

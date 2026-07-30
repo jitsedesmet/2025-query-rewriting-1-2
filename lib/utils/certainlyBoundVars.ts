@@ -1,5 +1,5 @@
 import type * as RDF from '@rdfjs/types';
-import { ExpressionTypes, Types } from '@traqula/algebra-transformations-1-2';
+import { algebraUtils, ExpressionTypes, Types } from '@traqula/algebra-transformations-1-2';
 import type { Algebra as A } from '@traqula/algebra-transformations-1-2';
 
 // TODO: upstream this into TRAQULA
@@ -27,6 +27,24 @@ export interface BoundVariablesOptions {
    * @defaultValue false
    */
   extendBinds?: boolean;
+  /**
+   * When `true`, a FILTER is treated as making a variable certainly bound whenever its condition can
+   * only hold for solutions that bind it: `cVars(σ_R(A)) := cVars(A) ∪ boundImpliedBy(R)`.
+   *
+   * This strengthens the definition of Schmidt et al., which has `cVars(σ_R(A)) := cVars(A)` - sound,
+   * but blind to conditions implying boundness. It is sound because an expression applied to an
+   * unbound variable raises an evaluation error, and a FILTER discards the solutions whose condition
+   * errors. Only the positions where that reasoning is immediate are used: the argument of `BOUND`
+   * (which is *defined* to hold only for bound variables), the plain variable arguments of
+   * `sameTerm`, and the conjuncts of a `&&` (all of which must hold).
+   *
+   * Worth enabling for a filter pushdown: it can license the push of an assertion at an enclosing
+   * JOIN, where `?y ∈ cVars(A₁)` only holds once `A₁`'s own `FILTER(sameTerm(?y, c))` is recognised
+   * as making `?y` certain.
+   *
+   * @defaultValue false
+   */
+  filterImpliesBound?: boolean;
 }
 
 /**
@@ -82,8 +100,16 @@ export function certainlyBoundVariables(op: A.Operation, options: BoundVariables
       }
       return inputBound;
     }
+    case Types.FILTER: {
+      const inputBound = certainlyBoundVariables(op.input, options);
+      if (options.filterImpliesBound) {
+        for (const name of variablesImpliedBoundBy(op.expression)) {
+          inputBound.add(name);
+        }
+      }
+      return inputBound;
+    }
     case Types.GRAPH:
-    case Types.FILTER:
     case Types.SERVICE:
     case Types.DISTINCT:
     case Types.REDUCED:
@@ -94,6 +120,27 @@ export function certainlyBoundVariables(op: A.Operation, options: BoundVariables
     default:
       return new Set<string>();
   }
+}
+
+/**
+ * Computes a sound over-approximation of the variables an operation can bind: the `pVars` ("possibly
+ * bound", a.k.a. "may be bound") set of Schmidt et al., which for SPARQL coincides with the
+ * [in-scope variables](https://www.w3.org/TR/sparql11-query/#variableScope) of the operation.
+ *
+ * The counterpart of {@link certainlyBoundVariables}: a variable outside this set is bound by no
+ * solution at all, which is what licenses replacing `FILTER(sameTerm(?x, c))` over such an operation
+ * by the empty result (FBndII), and what licenses pushing a filter into the other operand of a JOIN.
+ *
+ * The result is an over-approximation on two counts: {@link algebraUtils.inScopeVariables} descends
+ * into the pattern of an `EXISTS`, whose variables are not really in scope outside of it, and into the
+ * input of a GROUP, which only outputs its keys and aggregates. Over-approximating `pVars` is sound
+ * (Proposition 2 of Schmidt et al.) - both uses above become more conservative, never less.
+ *
+ * @param op - The operation whose possibly-bound variables are computed
+ * @returns The set of possibly-bound variable names
+ */
+export function possiblyBoundVariables(op: A.Operation): Set<string> {
+  return new Set(algebraUtils.inScopeVariables(op).map(variable => variable.value));
 }
 
 /**
@@ -111,6 +158,29 @@ export function isVariableCertainlyBound(
 ): boolean {
   const name = typeof variable === 'string' ? variable : variable.value;
   return certainlyBoundVariables(op, options).has(name);
+}
+
+/**
+ * Collects the variables a filter condition can only hold for when they are bound.
+ *
+ * See {@link BoundVariablesOptions.filterImpliesBound} for why these positions - and only these - are
+ * safe to conclude boundness from.
+ */
+function variablesImpliedBoundBy(expression: A.Expression): Set<string> {
+  if (expression.subType !== ExpressionTypes.OPERATOR) {
+    return new Set<string>();
+  }
+  // Every conjunct of a `&&` has to hold, so each of them contributes.
+  if (expression.operator === '&&') {
+    return unionSets(expression.args.map(arg => variablesImpliedBoundBy(arg)));
+  }
+  if (expression.operator === 'bound' || expression.operator === 'sameterm') {
+    return unionSets(expression.args.map(arg =>
+      arg.subType === ExpressionTypes.TERM && arg.term.termType === 'Variable' ?
+        new Set([ arg.term.value ]) :
+        new Set<string>()));
+  }
+  return new Set<string>();
 }
 
 /**

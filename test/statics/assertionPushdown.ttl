@@ -1,0 +1,16 @@
+PREFIX : <ex://>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+# `:p` and `:q` share the object `:shared`, so `{ ?x :p ?y } MINUS { ?z :q ?y }` is empty on this graph.
+# That is what tells a strong prune of the MINUS right hand side apart from the (correct) weak one.
+:a :p :shared .
+:b :q :shared .
+
+# Two intermediate witnesses for the same pair, so `:a :step/:onwards :end` has multiplicity two.
+:a :step :m1 , :m2 .
+:m1 :onwards :end .
+:m2 :onwards :end .
+
+# A literal in a non-canonical lexical form: `sameTerm(?o, "01"^^xsd:integer)` does not match it,
+# although `?o = "01"^^xsd:integer` does.
+:a :value "1"^^xsd:integer .

@@ -1,8 +1,8 @@
 import type * as RDF from '@rdfjs/types';
-import { algebraUtils, ExpressionTypes, Types } from '@traqula/algebra-transformations-1-2';
 import type { Algebra as A, Algebra } from '@traqula/algebra-transformations-1-2';
+import { algebraUtils, ExpressionTypes, Types } from '@traqula/algebra-transformations-1-2';
 import type { SSet } from './setUtils.js';
-import { unionSets } from './setUtils.js';
+import { intersectSets, isSubsetOf, unionSets } from './setUtils.js';
 
 export interface CPMeta {
   cVars: SSet;
@@ -33,74 +33,152 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
   if (casted.metadata !== undefined && casted.metadata.cVars !== undefined && casted.metadata.pVars !== undefined) {
     return <CPOp<T>> casted;
   }
-  const result = asCPVars<T>(op);
-  switch (result.type) {
+  const resOp = asCPVars<T>(op);
+  switch (resOp.type) {
     case Types.BGP: {
-      const vars = unionSets(result.patterns.map(pattern => withCpVars(pattern).metadata.cVars));
-      result.metadata.pVars = vars;
-      result.metadata.cVars = vars;
-      return result;
+      const vars = unionSets(resOp.patterns.map(pattern => withCpVars(pattern).metadata.cVars));
+      resOp.metadata.pVars = vars;
+      resOp.metadata.cVars = vars;
+      return resOp;
     } case Types.PATTERN: {
-      const vars = unionSets([ result.subject, result.predicate, result.object, result.graph ].map(termVars));
-      result.metadata.pVars = vars;
-      result.metadata.cVars = vars;
-      return result;
+      const vars = unionSets([ resOp.subject, resOp.predicate, resOp.object, resOp.graph ].map(termVars));
+      resOp.metadata.pVars = vars;
+      resOp.metadata.cVars = vars;
+      return resOp;
     } case Types.PATH: {
-      const vars = unionSets([ result.subject, result.object ].map(termVars));
-      result.metadata.pVars = vars;
-      result.metadata.cVars = vars;
-      return result;
+      const vars = unionSets([ resOp.subject, resOp.object ].map(termVars));
+      resOp.metadata.pVars = unionSets([ vars, termVars(resOp.graph) ]);
+      resOp.metadata.cVars = vars;
+      return resOp;
     } case Types.JOIN: {
-      // TODO: continue for the other operators.
-      return unionSets(op.input.map(input => certainlyBoundVariables(input, options)));
-    }
-    case Types.UNION:
-      return intersectSets(op.input.map(input => certainlyBoundVariables(input, options)));
-    case Types.MINUS:
-    case Types.LEFT_JOIN:
-      // MINUS / OPTIONAL only certainly bind whatever their left-hand (required) side binds.
-      return certainlyBoundVariables(op.input[0], options);
-    case Types.PROJECT: {
-      const projected = new Set(op.variables.map(variable => variable.value));
-      return intersectSets([ certainlyBoundVariables(op.input, options), projected ]);
-    }
-    case Types.GROUP:
-      return new Set(op.variables.map(variable => variable.value));
-    case Types.VALUES:
+      const inputs = resOp.input.map(input => withCpVars(input));
+      resOp.metadata.pVars = unionSets(inputs.map(input => input.metadata.pVars));
+      resOp.metadata.cVars = unionSets(inputs.map(input => input.metadata.cVars));
+      return resOp;
+    } case Types.UNION: {
+      // A variable is only certain when every branch binds it, but any branch may bind it.
+      const inputs = resOp.input.map(input => withCpVars(input));
+      resOp.metadata.pVars = unionSets(inputs.map(input => input.metadata.pVars));
+      resOp.metadata.cVars = intersectSets(inputs.map(input => input.metadata.cVars));
+      return resOp;
+    } case Types.MINUS: {
+      // The right-hand side of a MINUS contributes no binding at all to the result, not even a
+      // possible one - its variables are out of scope above it.
+      const left = withCpVars(resOp.input[0]);
+      resOp.metadata.pVars = new Set(left.metadata.pVars);
+      resOp.metadata.cVars = new Set(left.metadata.cVars);
+      return resOp;
+    } case Types.LEFT_JOIN: {
+      // OPTIONAL only certainly binds whatever its left-hand (required) side binds.
+      const [ left, right ] = resOp.input.map(input => withCpVars(input));
+      resOp.metadata.pVars = unionSets([ left.metadata.pVars, right.metadata.pVars ]);
+      resOp.metadata.cVars = new Set(left.metadata.cVars);
+      return resOp;
+    } case Types.PROJECT: {
+      const projected = new Set(resOp.variables.map(variable => variable.value));
+      const input = withCpVars(resOp.input);
+      resOp.metadata.pVars = intersectSets([ input.metadata.pVars, projected ]);
+      resOp.metadata.cVars = intersectSets([ input.metadata.cVars, projected ]);
+      return resOp;
+    } case Types.GROUP: {
+      // Only the grouping keys and the aggregate targets survive the grouping. A key is certain only
+      // when the input binds it certainly: grouping on an unbound variable yields a group in which it
+      // stays unbound. An aggregate may raise an evaluation error, so its target is never certain.
+      const keys = new Set(resOp.variables.map(variable => variable.value));
+      const input = withCpVars(resOp.input);
+      resOp.metadata.pVars = unionSets([
+        intersectSets([ input.metadata.pVars, keys ]),
+        new Set(resOp.aggregates.map(aggregate => aggregate.variable.value)),
+      ]);
+      // TODO: I think a COUNT aggregate can also never fail and would thus be a cVar?
+      resOp.metadata.cVars = intersectSets([ input.metadata.cVars, keys ]);
+      return resOp;
+    } case Types.VALUES: {
       // A VALUES variable is certainly bound only if every row provides a value for it.
-      return new Set(op.variables
-        .filter(variable => op.bindings.every(binding => binding[variable.value] !== undefined))
+      resOp.metadata.pVars = new Set(resOp.variables.map(variable => variable.value));
+      resOp.metadata.cVars = new Set(resOp.variables
+        .filter(variable => resOp.bindings.every(binding => binding[variable.value] !== undefined))
         .map(variable => variable.value));
-    case Types.EXTEND: {
-      const inputBound = certainlyBoundVariables(op.input, options);
-      if (options.extendBinds &&
-          op.expression.subType === ExpressionTypes.TERM &&
+      return resOp;
+    } case Types.EXTEND: {
+      const input = withCpVars(resOp.input);
+      const certain = new Set(input.metadata.cVars);
+      // Maybe the var we will create is also certain:
+      if (resOp.expression.subType === ExpressionTypes.TERM &&
           // A triple-term construction may raise an evaluation error, so it is not certainly bound.
-          op.expression.term.termType !== 'Quad' &&
-          isSubsetOf(termVars(op.expression.term), inputBound)) {
-        inputBound.add(op.variable.value);
+          resOp.expression.term.termType !== 'Quad' &&
+          // If it is a var, and that var is certain, we also certain
+          isSubsetOf(termVars(resOp.expression.term), certain)) {
+        certain.add(resOp.variable.value);
       }
-      return inputBound;
+      resOp.metadata.pVars = new Set<string>(input.metadata.pVars);
+      resOp.metadata.pVars.add(resOp.variable.value);
+      resOp.metadata.cVars = certain;
+      return resOp;
+    } case Types.FILTER: {
+      // The variables of an EXISTS stay inside it, so a filter never adds a possible binding.
+      // However: depending on the filter, we can say something on vars being present.
+      // TODO: remove from pVars is we have a `!bound` test
+      const input = withCpVars(resOp.input);
+      resOp.metadata.pVars = new Set(input.metadata.pVars);
+      resOp.metadata.cVars = unionSets([
+        input.metadata.cVars,
+        variablesImpliedBoundBy(resOp.expression),
+      ]);
+      return resOp;
+    } case Types.GRAPH: {
+      // Asserting on the graph variable selects one graph, so it is in scope above the GRAPH.
+      // It is left out of cVars: an operation binding nothing (e.g. a NOP body) binds no graph either.
+      const input = withCpVars(resOp.input);
+      resOp.metadata.pVars = unionSets([ input.metadata.pVars, termVars(resOp.name) ]);
+      // TODO: I think it should be added to cVars since `graph ?g {}` will bind all graphs.
+      //  And the empty result would have cVars and pVars infinite.
+      resOp.metadata.cVars = new Set(input.metadata.cVars);
+      return resOp;
+    } case Types.SERVICE: {
+      // A SILENT service that fails is replaced by a single empty solution, so no variable is certain.
+      const input = withCpVars(resOp.input);
+      resOp.metadata.pVars = unionSets([ input.metadata.pVars, termVars(resOp.name) ]);
+      resOp.metadata.cVars = resOp.silent ? new Set<string>() : new Set(input.metadata.cVars);
+      return resOp;
     }
-    case Types.FILTER: {
-      const inputBound = certainlyBoundVariables(op.input, options);
-      if (options.filterImpliesBound) {
-        for (const name of variablesImpliedBoundBy(op.expression)) {
-          inputBound.add(name);
-        }
-      }
-      return inputBound;
-    }
-    case Types.GRAPH:
-    case Types.SERVICE:
     case Types.DISTINCT:
     case Types.REDUCED:
     case Types.SLICE:
     case Types.ORDER_BY:
-    case Types.FROM:
-      return certainlyBoundVariables((<A.Single> op).input, options);
-    default:
-      return new Set<string>();
+    case Types.FROM: {
+      // These only drop or reorder solutions, they never change which variables a solution binds.
+      const input = withCpVars((<A.Single> <A.Operation> resOp).input);
+      resOp.metadata.pVars = new Set(input.metadata.pVars);
+      resOp.metadata.cVars = new Set(input.metadata.cVars);
+      return resOp;
+    }
+    case Types.ASK:
+    case Types.INV:
+    case Types.NPS:
+    case Types.ADD:
+    case Types.COMPOSITE_UPDATE:
+    case Types.CLEAR:
+    case Types.CONSTRUCT:
+    case Types.COPY:
+    case Types.DELETE_INSERT:
+    case Types.CREATE:
+    case Types.DESCRIBE:
+    case Types.DROP:
+    case Types.EXPRESSION:
+    case Types.LINK:
+    case Types.LOAD:
+    case Types.MOVE:
+    case Types.ONE_OR_MORE_PATH:
+    case Types.ALT:
+    case Types.ZERO_OR_MORE_PATH:
+    case Types.ZERO_OR_ONE_PATH:
+    case Types.NOP:
+    case Types.SEQ:
+      // Everything without solution mappings of its own.
+      resOp.metadata.pVars = new Set<string>();
+      resOp.metadata.cVars = new Set<string>();
+      return resOp;
   }
 }
 
@@ -288,6 +366,18 @@ function variablesImpliedBoundBy(expression: A.Expression, agg = new Set<string>
 }
 
 /**
+ * Collects the variables appearing in a single triple/quad pattern (including nested quoted triples).
+ */
+function patternVars(pattern: A.Pattern): Set<string> {
+  return unionSets([
+    termVars(pattern.subject),
+    termVars(pattern.predicate),
+    termVars(pattern.object),
+    termVars(pattern.graph),
+  ]);
+}
+
+/**
  * Collects the variables in an RDF term, recursing into quoted triples.
  */
 function termVars(term: RDF.Term): Set<string> {
@@ -298,23 +388,4 @@ function termVars(term: RDF.Term): Set<string> {
     return unionSets([ termVars(term.subject), termVars(term.predicate), termVars(term.object) ]);
   }
   return new Set<string>();
-}
-
-/**
- * Tests whether every element of `subset` is contained in `superset`.
- */
-function isSubsetOf(subset: Set<string>, superset: Set<string>): boolean {
-  for (const value of subset) {
-    if (!superset.has(value)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function intersectSets(sets: Set<string>[]): Set<string> {
-  if (sets.length === 0) {
-    return new Set<string>();
-  }
-  return sets.reduce((acc, set) => new Set([ ...acc ].filter(value => set.has(value))));
 }

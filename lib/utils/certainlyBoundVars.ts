@@ -14,6 +14,9 @@ export type CPOp<T extends Algebra.Operation = Algebra.Operation> = T & { metada
 /**
  * Return Algebra Operations but with certain and possible vars assigned.
  * We use Dynamic programming and assert that the metadata is kept up to date when manipulated.
+ *
+ * We do not explicitly handle filter false here since it can be rewritten/ removed cheaply already by
+ * {@link transformFilterFalse}.
  */
 export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
   function asCPVars<T extends Algebra.Operation>(op: T): CPOp<T> {
@@ -126,7 +129,7 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
       // The variables of an EXISTS stay inside it, so a filter never adds a possible binding.
       // However: depending on the filter, we can say something on vars being present.
       // Also filters pVars and cVars for `!bound(?x)`
-      // TODO: Filter False is a special case. How can we model it?
+      // Keep in mind: Filter False is a special case.
       const input = withCpVars(resOp.input);
       const unbound = variablesImpliedUnboundBy(resOp.expression);
       resOp.metadata.pVars = differenceSets(input.metadata.pVars, unbound);

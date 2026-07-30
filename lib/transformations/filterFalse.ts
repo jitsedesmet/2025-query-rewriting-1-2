@@ -41,6 +41,7 @@ export function transformFilterFalse(c: TransformContext, op: Algebra.Operation)
       [Algebra.Types.FROM]: absorbSingle,
       [Algebra.Types.DISTINCT]: absorbSingle,
       [Algebra.Types.FILTER]: absorbSingle,
+      // TODO: wrong in case of silent!!!
       [Algebra.Types.SERVICE]: absorbSingle,
       [Algebra.Types.REDUCED]: absorbSingle,
       [Algebra.Types.SLICE]: absorbSingle,
@@ -63,8 +64,13 @@ export function transformFilterFalse(c: TransformContext, op: Algebra.Operation)
         }
         return leftJoin;
       } },
+      [Algebra.Types.VALUES]: { transform: (values) => {
+        if (values.bindings.length === 0) {
+          return createFilterFalse(c);
+        }
+        return values;
+      } },
       // TODO: the projection of an empty query is the empty query (if not outer project)
-      // TODO: expression, minus, leftjoin, group? of empty is empty
       // TODO: exists and not exists
     },
   );

@@ -34,7 +34,9 @@ import { createFilterFalse } from '../utils/operationhelpers.js';
  * - **The assertion implies `bnd(?x)`**, so (FBndII) - `?x ∉ pVars(A) ⟹ σ_{?x≡c}(A) ≡ ∅` - is the only
  *   emptiness rule needed, and `bound(?x)` folds to `true` during substitution.
  * - **It is `sameTerm`, not `=`**, which is what makes substituting the term into a pattern sound:
- *   `?x = "01"^^xsd:integer` holds of the term `"1"^^xsd:integer`, so `=` would drop solutions.
+ *   `?x = "01"^^xsd:integer` holds of the term `"1"^^xsd:integer`, so `=` would drop solutions. An `=`
+ *   against an IRI is the exception the rule allows: `=` cannot raise a type error unless both of its
+ *   arguments are literals, so against an IRI it *is* `sameTerm`, and it travels as an assertion.
  *
  * The pass is a pre-order traversal, so an assertion filter is handled *before* what is below it, and
  * each step only describes how the filter swaps places with the operation it sits on. The result of

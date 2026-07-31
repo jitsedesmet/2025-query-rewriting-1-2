@@ -164,7 +164,8 @@ export function isAssertableTerm(term: RDF.Term): boolean {
  *
  * `sameTerm` - not `=` - is what makes the substitution this pass performs sound: `?x = "01"^^xsd:integer`
  * holds of the *term* `"1"^^xsd:integer`, so substituting under `=` would drop solutions. Never
- * generalise this to `=`.
+ * generalise this to `=`. An `=` against an IRI is not such a generalisation - the two functions
+ * coincide there - and {@link foldOperator} has already rewritten it into the `sameTerm` this reads.
  *
  * @param expression - The conjunct to inspect
  * @returns The asserted variable and term, or `undefined` when the conjunct is not an assertion
@@ -465,6 +466,17 @@ function foldOperator(c: TransformContext, operator: string, args: Algebra.Expre
     }
     case '=': {
       const [ left, right ] = args;
+      // `=` is RDFterm-equal, which raises a type error only when *both* of its arguments are literals.
+      // An IRI on either side rules that out, and what is left is term identity - so there `=` *is*
+      // `sameTerm`. Since an IRI is also a term an assertion may travel with, that makes the ordinary
+      // `FILTER(?x = <ex://c>)` an assertion, which reaches the patterns below like any other.
+      //
+      // This is not the forbidden generalisation of the pass to `=`: it recognizes the arguments for
+      // which the two are the same function, and leaves the literal case - the one that makes them
+      // differ - to value comparison.
+      if (args.length === 2 && (isIriExpression(left) || isIriExpression(right))) {
+        return foldOperator(c, 'sameterm', args);
+      }
       if (args.length === 2 &&
         left.subType === Algebra.ExpressionTypes.TERM && isAssertableTerm(left.term) &&
         right.subType === Algebra.ExpressionTypes.TERM && isAssertableTerm(right.term) &&
@@ -495,6 +507,11 @@ function foldOperator(c: TransformContext, operator: string, args: Algebra.Expre
       break;
   }
   return c.AF.createOperatorExpression(operator, args);
+}
+
+/** Whether an expression is an IRI spelled out as a term. */
+function isIriExpression(expression: Algebra.Expression): boolean {
+  return expression.subType === Algebra.ExpressionTypes.TERM && expression.term.termType === 'NamedNode';
 }
 
 /**

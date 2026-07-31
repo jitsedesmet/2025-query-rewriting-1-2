@@ -512,6 +512,66 @@ GROUP BY ?x`,
     });
   });
 
+  describe('equality against an IRI', () => {
+    // `=` raises a type error only when both of its arguments are literals, so against an IRI it is
+    // term identity - the very function `sameTerm` is - and it may travel as an assertion.
+    it('is an assertion, and reaches the pattern like sameTerm does', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?x :p ?y FILTER(?x = :c) }',
+        `SELECT ( <ex://c> AS ?x ) ?y WHERE {
+  <ex://c> <ex://p> ?y .
+}`,
+      );
+    });
+
+    it('reads the IRI on either side', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?x :p ?y FILTER(:c = ?x) }',
+        `SELECT ( <ex://c> AS ?x ) ?y WHERE {
+  <ex://c> <ex://p> ?y .
+}`,
+      );
+    });
+
+    it('joins the conjunction, and contradicts it like any other assertion', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?x :p ?y FILTER(?x = :c && sameTerm(?x, :d)) }',
+        `SELECT ?x ?y WHERE {
+  ?x <ex://p> ?y .
+  FILTER ( FALSE )
+}`,
+      );
+    });
+
+    it('decides two IRIs against each other, false included', ({ expect }) => {
+      // The general `=` may only fold to true: comparing literals of unsupported datatypes raises an
+      // error, and an error is not false everywhere. Between IRIs it may fold either way.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?x :p ?y FILTER(:c = :d) }',
+        `SELECT ?x ?y WHERE {
+  ?x <ex://p> ?y .
+  FILTER ( FALSE )
+}`,
+      );
+    });
+
+    it('leaves an equality against a literal alone', ({ expect }) => {
+      // The case the two functions genuinely differ in, so it stays a value comparison on top.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s :value ?o FILTER(?o = "01"^^xsd:integer) }',
+        `SELECT ?o ?s WHERE {
+  ?s <ex://value> ?o .
+  FILTER ( ( ?o = "01"^^<http://www.w3.org/2001/XMLSchema#integer> ) )
+}`,
+      );
+    });
+  });
+
   describe('the conjunction that travels', () => {
     it('substitutes a conjunction of assertions in one go', ({ expect }) => {
       expectTransform(
@@ -752,6 +812,22 @@ GROUP BY ?x`,
         ?s :value ?o
         FILTER(?o = "01"^^xsd:integer)
       }`)).toHaveLength(1);
+    });
+
+    it('keeps the row an equality against a literal matches', async({ expect }) => {
+      // The regression the IRI case has to stay clear of: reading this `=` as an assertion would
+      // substitute "01"^^xsd:integer into the pattern and lose the row holding "1"^^xsd:integer.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :value ?o
+        FILTER(?o = "01"^^xsd:integer)
+      }`, 1);
+    });
+
+    it('matches what an equality against an IRI matched', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :p ?y
+        FILTER(?x = :a)
+      }`, 1);
     });
 
     it('keeps an OPTIONAL turned into a join equivalent', async({ expect }) => {

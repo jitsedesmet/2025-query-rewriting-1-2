@@ -10,7 +10,7 @@ To be clear: you should start from the most high up sameterm filter (or sameTerm
 Whenever you pass a filter, and that filter conatins other sameTerm filter in top level conjunction, add them to this one and push down the sameTerm filter. When a piece of the sameTerm conjunction filter you manage is split of (that sameFilter is absobed or needs to stay behind or whethever), you should not forget to continue with the remaining part of your conjunction.
 To make management of the sameterm conjunction filter easier,
 you can attach metadata to it in the same way `CPOp` does it.
-Meaning in your mapOperationPreOrder, you have a callBack on 'filter', but using `withSametermConjuntion` (or whatever) you can see if the filter has a `SameTermConjunctionMeta` or not. Maintaining this metadata is also not expensive since the function checks whether it is there, or computes it otherwise. You could even make it a guard function such that you can simply fail fast if the filter is not the one we are interested in and have a smart cast if it is!   
+Meaning in your mapOperationPreOrder, you have a callBack on 'filter', but using `withSametermConjuntion` (or whatever) you can see if the filter has a `SameTermConjunctionMeta` or not. Maintaining this metadata is also not expensive since the function checks whether it is there, or computes it otherwise. You could even make it a guard function such that you can simply fail fast if the filter is not the one we are interested in and have a smart cast if it is!
 
 # Assertion Filter Pushdown for SPARQL Algebra
 

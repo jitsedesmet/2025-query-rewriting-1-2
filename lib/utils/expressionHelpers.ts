@@ -1,6 +1,7 @@
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformContext } from '../transformContext.js';
 import { termVars } from './certainlyBoundVars.js';
+import { termFalse, termTrue } from './operationhelpers.js';
 
 /**
  * Splits a filter expression on top level logical conjunctions (`&&`), implementing (SDecompI):
@@ -18,6 +19,31 @@ export function splitConjunction(expression: Algebra.Expression): Algebra.Expres
  */
 export function conjunctionOf(c: TransformContext, expressions: Algebra.Expression[]): Algebra.Expression {
   return expressions.reduce((acc, expr) => c.AF.createOperatorExpression('&&', [ acc, expr ]));
+}
+
+/**
+ * Recognizes an expression that is the constant `true` or `false`.
+ * @param expression - The expression to inspect
+ * @returns The boolean the expression is a constant for, or `undefined` when it is not a constant
+ */
+export function booleanConstantOf(expression: Algebra.Expression): boolean | undefined {
+  if (expression.subType !== Algebra.ExpressionTypes.TERM) {
+    return undefined;
+  }
+  if (expression.term.equals(termTrue)) {
+    return true;
+  }
+  return expression.term.equals(termFalse) ? false : undefined;
+}
+
+/**
+ * Creates the constant `true` or `false` expression.
+ * @param c - The transformation context
+ * @param value - The boolean to create an expression for
+ * @returns The `xsd:boolean` term expression
+ */
+export function createBooleanExpression(c: TransformContext, value: boolean): Algebra.Expression {
+  return c.AF.createTermExpression(value ? termTrue : termFalse);
 }
 
 export function isStaticExpression(c: TransformContext, expression: Algebra.Expression[]): boolean {

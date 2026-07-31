@@ -1,6 +1,6 @@
 import type * as RDF from '@rdfjs/types';
 import type { Algebra as A, Algebra } from '@traqula/algebra-transformations-1-2';
-import { ExpressionTypes, Types } from '@traqula/algebra-transformations-1-2';
+import { algebraUtils, ExpressionTypes, Types } from '@traqula/algebra-transformations-1-2';
 import type { SSet } from './setUtils.js';
 import { differenceSets, intersectSets, isSubsetOf, unionSets } from './setUtils.js';
 
@@ -10,6 +10,33 @@ export interface CPMeta {
 }
 
 export type CPOp<T extends Algebra.Operation = Algebra.Operation> = T & { metadata: CPMeta };
+
+/** Drops the `metadata` of the operation it is applied to, whatever that metadata holds. */
+const dropMetadata = { transform: (copy: { metadata?: unknown }): unknown => {
+  delete copy.metadata;
+  return copy;
+} };
+
+/** Drops the metadata of every operation, no matter its type. */
+const dropAllMetadata = Object.fromEntries(Object.values(Types).map(type => [ type, dropMetadata ]));
+
+/**
+ * Returns a copy of `op` without any cached metadata, the state {@link withCpVars} recomputes from.
+ *
+ * Two reasons to start a pass with this. Metadata is a cache of what the *current* shape of the plan
+ * implies, so metadata another pass left behind may describe an operation that has since been rewritten.
+ * And the sets it holds do not survive a generic traversal: a `Set` shallow copied by
+ * {@link algebraUtils.mapOperation} keeps its prototype but loses its contents, so any traversal that
+ * does not know to leave `metadata` alone silently breaks it. Dropping it first means neither can bite.
+ *
+ * Since every operation is copied, this also leaves the tree it is given untouched.
+ *
+ * @param op - The operation to copy
+ * @returns The copy, with no operation in it carrying metadata
+ */
+export function withoutCpVars<T extends Algebra.Operation>(op: T): T {
+  return algebraUtils.mapOperation<'unsafe', T>(op, dropAllMetadata);
+}
 
 /**
  * Return Algebra Operations but with certain and possible vars assigned.

@@ -40,4 +40,5 @@ export { nullifyJoinOverIncompatibleBounds } from './nullifyJoinOverIncompatible
 export { pushUpBoundedFromUnion } from './pushUpBoundedFromUnion.js';
 export { rewriteSinglePattern } from './rewriteSinglePattern.js';
 export { removeProjections } from './removeProjections.js';
+export { pushDownAssertions } from './pushDownAssertions.js';
 export { transformJoinValuesToFilter } from './joinValuesToFilter.js';

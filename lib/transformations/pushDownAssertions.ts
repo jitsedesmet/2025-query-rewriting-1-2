@@ -3,7 +3,16 @@ import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { PreOrderMappingReturn } from '@traqula/core';
 import type { TransformContext } from '../transformContext.js';
 import type { Assertions, SameTermFilter, WeakSameTermFilter } from '../utils/assertions.js';
-import { isAssertableTerm, assertionsExpression, collectAssertions, isSameTermFilter, isWeakSameTermFilter, substituteInPattern, substituteInTerm, weakAssertionsExpression } from '../utils/assertions.js';
+import {
+  assertionsExpression,
+  collectAssertions,
+  isAssertableTerm,
+  isSameTermFilter,
+  isWeakSameTermFilter,
+  substituteInPattern,
+  substituteInTerm,
+  weakAssertionsExpression,
+} from '../utils/assertions.js';
 import type { CPMeta } from '../utils/certainlyBoundVars.js';
 import { withCpVars, withoutCpVars } from '../utils/certainlyBoundVars.js';
 import { sameTermExpression } from '../utils/expressionHelpers.js';
@@ -285,8 +294,8 @@ function pruneValues(c: TransformContext, values: Algebra.Values, assertions: As
       }
     }
     // Also prune rows that did not bind a required variable
-    if (!isPruned || boundAssertions === assertions.size) {
-      newBindings.push(binding);
+    if (!isPruned && boundAssertions === assertions.size) {
+      newBindings.push(newRow);
     }
   }
   // Zero rows means empty sequence which we write as the empty operation.
@@ -595,7 +604,7 @@ function pushWeakAssertions(
     }
     case Algebra.Types.GRAPH: {
       const graphVar = op.name.termType === 'Variable' ? op.name.value : undefined;
-      // After evaluation of the graph operation, it's variable is certainly bound.
+      // TODO: after evaluation of the graph operation, it's variable is certainly bound.
       //  -> We never weak assert the target of graph (has been handled above) -> Can just push down
       return keep(weakAssertionFilter(c, AF.createGraph(
         weakAssertionFilter(c, op.input, restrict(assertions, name => name !== graphVar)),
@@ -606,13 +615,11 @@ function pushWeakAssertions(
       // Row-level W: a row keeps a column that is UNDEF, and drops one holding another term.
       const newBindings: Algebra.Values['bindings'] = [];
       for (const binding of op.bindings) {
-        const newRow: typeof newBindings[0] = {};
+        // W keeps every column, so the row travels as it is - only whole rows are dropped.
         let isPruned = false;
         for (const [ variable, value ] of Object.entries(binding)) {
           const assertion = assertions.get(variable);
-          if (assertion === undefined) {
-            newRow[variable] = value;
-          } else if (!assertion.equals(value)) {
+          if (assertion !== undefined && !assertion.equals(value)) {
             isPruned = true;
             break;
           }

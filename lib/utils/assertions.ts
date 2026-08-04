@@ -145,7 +145,8 @@ export function isWeakSameTermFilter(c: TransformContext, op: Algebra.Operation)
  * @returns True when an assertion may fix a variable to this term
  */
 export function isAssertableTerm(term: RDF.Term): boolean {
-  // Blank nodes cannot appear as an expression, so that's not a problem.
+  // Blank nodes need no exclusion here: by the time this pass runs, the ones in a WHERE clause have
+  // already been converted to variables, so no assertion can ever carry one.
   // Simply check whether a variable appears in a quad.
   if (term.termType === 'Quad') {
     return [ term.subject, term.predicate, term.object, term.graph ].every(x => isAssertableTerm(x));

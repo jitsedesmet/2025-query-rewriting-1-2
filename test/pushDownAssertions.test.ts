@@ -95,6 +95,22 @@ describe('pushDownAssertions', () => {
       );
     });
 
+    it('drops the asserted column from the surviving VALUES rows, not just from its variables', ({ expect }) => {
+      // The generator only prints the declared variables, so a row still carrying the asserted column
+      // reads correctly while the algebra is malformed. Check the rows themselves.
+      const pushed = pushDownAssertions(c, parseQuery(
+        c,
+        `${prefixes}SELECT * WHERE { VALUES (?x ?y) { (:c :a) (:c :b) (:d :e) } FILTER(sameTerm(?x, :c)) }`,
+      ));
+      const values: AlgebraTypes.Values[] = [];
+      algebraUtils.visitOperation(pushed, { [Algebra.Types.VALUES]: { visitor: (op) => {
+        values.push(op);
+      } }});
+      expect(values).toHaveLength(1);
+      expect(values[0].variables.map(variable => variable.value)).toEqual([ 'y' ]);
+      expect(values[0].bindings.map(binding => Object.keys(binding))).toEqual([[ 'y' ], [ 'y' ]]);
+    });
+
     it('empties a VALUES no row of which satisfies the assertion', ({ expect }) => {
       expectTransform(
         expect,

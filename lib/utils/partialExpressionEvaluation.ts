@@ -34,7 +34,10 @@ export function substituteInExpression(
     case Algebra.ExpressionTypes.OPERATOR: {
       // MANDATORY, not cosmetic: the grammar of BOUND takes a Var, so the term may not be substituted.
       if (expression.operator === 'bound' &&
-                assertions.has((<Algebra.TermExpression>expression.args[0]).term.value)) {
+        expression.args.length === 1 &&
+        expression.args[0].subType === Algebra.ExpressionTypes.TERM &&
+        expression.args[0].term.termType === 'Variable' &&
+        assertions.has(expression.args[0].term.value)) {
         return createBooleanExpression(c, true);
       }
       return constantFoldOperator(c, expression.operator, expression.args

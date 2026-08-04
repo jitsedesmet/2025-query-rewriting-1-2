@@ -111,6 +111,29 @@ describe('pushDownAssertions', () => {
       expect(values[0].bindings.map(binding => Object.keys(binding))).toEqual([[ 'y' ], [ 'y' ]]);
     });
 
+    it('replaces a VALUES the assertions leave one empty row of by the empty BGP', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { VALUES (?x) { (:c) (:d) } FILTER(sameTerm(?x, :c)) }',
+        `SELECT ( <ex://c> AS ?x ) WHERE {
+}`,
+      );
+    });
+
+    it('keeps a VALUES the assertions leave several empty rows of, one solution per row', ({ expect }) => {
+      // `VALUES () { () () }` is two empty solution mappings, which the empty BGP cannot express.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { VALUES (?x) { (:c) (:c) (:d) } FILTER(sameTerm(?x, :c)) }',
+        `SELECT ( <ex://c> AS ?x ) WHERE {
+  VALUES( ){
+    ( )
+    ( )
+  }
+}`,
+      );
+    });
+
     it('empties a VALUES no row of which satisfies the assertion', ({ expect }) => {
       expectTransform(
         expect,
@@ -783,6 +806,21 @@ GROUP BY ?x`,
       expect(transformed).toEqual(original);
       expect(original).toHaveLength(expectedRows);
     }
+
+    it('still yields one solution when the VALUES collapses to the empty BGP', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        VALUES (?x) { (:a) (:b) }
+        FILTER(sameTerm(?x, :a))
+      }`, 1);
+    });
+
+    it('keeps one solution per row of a VALUES the assertion strips every column from', async({ expect }) => {
+      // The empty BGP is one empty solution mapping, so it may only replace a *single* remaining row.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        VALUES (?x) { (:a) (:a) (:b) }
+        FILTER(sameTerm(?x, :a))
+      }`, 2);
+    });
 
     it('keeps the multiplicities a UNION produces', async({ expect }) => {
       await assertEquivalent(expect, `SELECT * WHERE {

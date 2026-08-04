@@ -303,8 +303,7 @@ function pruneValues(c: TransformContext, values: Algebra.Values, assertions: As
     return emptyOperation(c, values);
   }
   // Zero columns is allowed: `VALUES () { () () () }` - it contributes one empty solution mapping per
-  // row. With exactly one row that is the join identity, which the empty BGP says more directly; with
-  // more rows the VALUES has to stay, or those multiplicities are lost.
+  // row. With exactly one row thta is the same as the empty BGP.
   const remaining = values.variables.filter(variable => !assertions.has(variable.value));
   const pruned = remaining.length === 0 && newBindings.length === 1 ?
     c.AF.createBgp([]) :

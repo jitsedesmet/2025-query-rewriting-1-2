@@ -1,3 +1,4 @@
+import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformContext } from '../transformContext.js';
 import { termVars } from './certainlyBoundVars.js';
@@ -7,11 +8,18 @@ import { termFalse, termTrue } from './operationhelpers.js';
  * Splits a filter expression on top level logical conjunctions (`&&`), implementing (SDecompI):
  * `FILTER_{R1 && R2}(A) == FILTER_R1(FILTER_R2(A))`.
  */
-export function splitConjunction(expression: Algebra.Expression): Algebra.Expression[] {
+export function splitConjunction(
+  expression: Algebra.Expression,
+  accumulator: Algebra.Expression[] = [],
+): Algebra.Expression[] {
   if (expression.subType === Algebra.ExpressionTypes.OPERATOR && expression.operator === '&&') {
-    return expression.args.flatMap(arg => splitConjunction(arg));
+    for (const agg of expression.args) {
+      splitConjunction(agg, accumulator);
+    }
+  } else {
+    accumulator.push(expression);
   }
-  return [ expression ];
+  return accumulator;
 }
 
 /**
@@ -75,4 +83,25 @@ export function isStaticExpression(c: TransformContext, expression: Algebra.Expr
     wildcard: neverStatic,
   }});
   return isStatic;
+}
+
+/** Whether an expression is an IRI spelled out as a term. */
+export function isIriExpression(expression: Algebra.Expression):
+    expression is Algebra.Expression & { term: { termType: 'NamedNode' }} {
+  return expression.subType === Algebra.ExpressionTypes.TERM && expression.term.termType === 'NamedNode';
+}
+
+/**
+ * Creates `sameTerm(expression, term)`.
+ * @param c - The transformation context
+ * @param expression - The expression that has to evaluate to `term`
+ * @param term - The term to compare against
+ * @returns The `sameTerm` operator expression
+ */
+export function sameTermExpression(
+  c: TransformContext,
+  expression: Algebra.Expression,
+  term: RDF.Term,
+): Algebra.Expression {
+  return c.AF.createOperatorExpression('sameterm', [ expression, c.AF.createTermExpression(term) ]);
 }

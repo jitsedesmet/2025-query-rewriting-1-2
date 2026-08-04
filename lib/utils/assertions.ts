@@ -3,14 +3,9 @@ import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformContext } from '../transformContext.js';
 import type { CPMeta } from './certainlyBoundVars.js';
 import { withoutCpVars } from './certainlyBoundVars.js';
-import {
-  booleanConstantOf,
-  conjunctionOf,
-  createBooleanExpression,
-  splitConjunction,
-} from './expressionHelpers.js';
+import { booleanConstantOf, conjunctionOf, sameTermExpression, splitConjunction } from './expressionHelpers.js';
+import { substituteInExpression } from './partialExpressionEvaluation.js';
 import { DF } from './rdfDatatypes.js';
-import { termIsStaticTerm } from './typeGuards.js';
 
 /**
  * @fileoverview The assertion (`FILTER(sameTerm(?x, c))`) toolbox: recognizing the assertions a filter
@@ -147,16 +142,15 @@ export function isWeakSameTermFilter(c: TransformContext, op: Algebra.Operation)
 
 /**
  * Decides whether a term can be substituted for a variable by this pass.
- *
- * Everything ground qualifies, except a blank node: a blank node label inside an expression is a
- * fresh label rather than a reference to a blank node in the data, so nothing can be concluded from
- * `sameTerm(?x, _:b)`.
- *
- * @param term - The term to check
  * @returns True when an assertion may fix a variable to this term
  */
 export function isAssertableTerm(term: RDF.Term): boolean {
-  return term.termType !== 'BlankNode' && termIsStaticTerm(term);
+  // Blank nodes cannot appear as an expression, so that's not a problem.
+  // Simply check whether a variable appears in a quad.
+  if (term.termType === 'Quad') {
+    return [ term.subject, term.predicate, term.object, term.graph ].every(x => isAssertableTerm(x));
+  }
+  return term.termType !== 'Variable';
 }
 
 /**
@@ -165,7 +159,7 @@ export function isAssertableTerm(term: RDF.Term): boolean {
  * `sameTerm` - not `=` - is what makes the substitution this pass performs sound: `?x = "01"^^xsd:integer`
  * holds of the *term* `"1"^^xsd:integer`, so substituting under `=` would drop solutions. Never
  * generalise this to `=`. An `=` against an IRI is not such a generalisation - the two functions
- * coincide there - and {@link foldOperator} has already rewritten it into the `sameTerm` this reads.
+ * coincide there - and {@link constantFoldOperator} has already rewritten it into the `sameTerm` this reads.
  *
  * @param expression - The conjunct to inspect
  * @returns The asserted variable and term, or `undefined` when the conjunct is not an assertion
@@ -261,21 +255,6 @@ export function collectWeakAssertions(
 }
 
 /**
- * Creates `sameTerm(expression, term)`.
- * @param c - The transformation context
- * @param expression - The expression that has to evaluate to `term`
- * @param term - The term to compare against
- * @returns The `sameTerm` operator expression
- */
-export function sameTermExpression(
-  c: TransformContext,
-  expression: Algebra.Expression,
-  term: RDF.Term,
-): Algebra.Expression {
-  return c.AF.createOperatorExpression('sameterm', [ expression, c.AF.createTermExpression(term) ]);
-}
-
-/**
  * Creates the strong assertion A⟨?x ≡ c⟩: `sameTerm(?x, c)`.
  * @param c - The transformation context
  * @param name - The name of the asserted variable
@@ -333,6 +312,8 @@ export function weakAssertionsExpression(c: TransformContext, assertions: Assert
  * `σ_R(A) == σ_{simplify(R[θ])}(σ_θ(A))`. Substituting can turn a leftover into an assertion of its
  * own - `sameTerm(?y, ?x)` becomes `sameTerm(?y, c)` - so this repeats until no new assertion appears,
  * making assertions propagate through equalities between variables.
+ * We do this both here and in Extend push up since,
+ * doing it here ensures we do all we can in one pass and do not need many passes, including generating filter-false.
  *
  * @param c - The transformation context
  * @param expression - The filter condition to split
@@ -345,18 +326,24 @@ export function collectAssertions(
   expression: Algebra.Expression,
   known: Assertions = new Map(),
 ): { assertions: Assertions; residual: Algebra.Expression | undefined; contradictory: false } | undefined {
+  // Make copy and perform substitution
   const assertions = new Map(known);
   let conjuncts = splitConjunction(substituteInExpression(c, expression, assertions));
 
-  for (;;) {
-    const residual: Algebra.Expression[] = [];
-    let learned = false;
+  let learned = true;
+  let residual: Algebra.Expression[] = [];
+  while (learned) {
+    residual = [];
+    learned = false;
+
     for (const conjunct of conjuncts) {
       const constant = booleanConstantOf(conjunct);
       if (constant === false) {
+        // Filter is filter false
         return undefined;
       }
       if (constant === true) {
+        // Conjunct does not add anything
         continue;
       }
       const assertion = asAssertion(conjunct);
@@ -364,6 +351,7 @@ export function collectAssertions(
         residual.push(conjunct);
         continue;
       }
+      // Check what we already know about this var.
       const previous = assertions.get(assertion.name);
       if (previous === undefined) {
         assertions.set(assertion.name, assertion.term);
@@ -373,165 +361,17 @@ export function collectAssertions(
         return undefined;
       }
     }
-    if (!learned) {
-      return {
-        assertions,
-        residual: residual.length === 0 ? undefined : conjunctionOf(c, residual),
-        contradictory: false,
-      };
-    }
-    // What we just learned may collapse a leftover into an assertion, so go around once more.
-    conjuncts = residual.flatMap(conjunct => splitConjunction(substituteInExpression(c, conjunct, assertions)));
-  }
-}
 
-/**
- * Substitutes assertions into an expression and folds what becomes constant: `simplify(R[θ])`.
- *
- * Substitution is *not* uniform textual replacement. `BOUND` is the only SPARQL built-in whose grammar
- * takes a bare `Var` instead of an `Expression`, so replacing the variable by a term would produce the
- * ungrammatical `BOUND(<ex://p>)` - which an internal algebra tolerates until the plan is serialised
- * back to SPARQL. Since an assertion implies the variable is bound, `bound(?x)` becomes `true`.
- *
- * @param c - The transformation context
- * @param expression - The expression to substitute into
- * @param assertions - The assertions to substitute (θ)
- * @returns The substituted and folded expression
- */
-export function substituteInExpression(
-  c: TransformContext,
-  expression: Algebra.Expression,
-  assertions: Assertions,
-): Algebra.Expression {
-  const { AF } = c;
-  switch (expression.subType) {
-    case Algebra.ExpressionTypes.TERM: {
-      const term = expression.term;
-      const asserted = term.termType === 'Variable' ? assertions.get(term.value) : undefined;
-      return asserted === undefined ? expression : AF.createTermExpression(asserted);
+    if (learned) {
+      // What we just learned may collapse a leftover into an assertion, so go around once more.
+      conjuncts = residual.flatMap(conjunct => splitConjunction(substituteInExpression(c, conjunct, assertions)));
     }
-    case Algebra.ExpressionTypes.OPERATOR: {
-      // MANDATORY, not cosmetic: the grammar of BOUND takes a Var, so the term may not be substituted.
-      if (expression.operator === 'bound' &&
-        expression.args.length === 1 &&
-        expression.args[0].subType === Algebra.ExpressionTypes.TERM &&
-        expression.args[0].term.termType === 'Variable' &&
-        assertions.has(expression.args[0].term.value)) {
-        return createBooleanExpression(c, true);
-      }
-      return foldOperator(c, expression.operator, expression.args
-        .map(arg => substituteInExpression(c, arg, assertions)));
-    }
-    case Algebra.ExpressionTypes.EXISTENCE:
-      // EXISTS substitutes the current solution into its pattern anyway, and every solution reaching
-      // this expression has ?x bound to c, so this is a propagation route rather than a repair.
-      return AF.createExistenceExpression(
-        expression.not,
-        substituteAssertedVariables(c, expression.input, assertions),
-      );
-    case Algebra.ExpressionTypes.NAMED:
-      return AF.createNamedExpression(
-        expression.name,
-        expression.args.map(arg => substituteInExpression(c, arg, assertions)),
-      );
-    case Algebra.ExpressionTypes.AGGREGATE:
-      return {
-        ...expression,
-        expression: substituteInExpression(c, expression.expression, assertions),
-      };
-    default:
-      return expression;
   }
-}
-
-/**
- * Folds an operator expression whose arguments are (partly) constant.
- *
- * Only the folds that are sound under SPARQL's error handling are applied. Notably `=` folds to `true`
- * for two identical terms - RDF term equality is the fallback for unsupported datatypes - but never to
- * `false`, since comparing terms of unsupported datatypes raises an error, and an error is not `false`
- * everywhere (`!(error)` is an error, not `true`).
- */
-function foldOperator(c: TransformContext, operator: string, args: Algebra.Expression[]): Algebra.Expression {
-  const constants = args.map(arg => booleanConstantOf(arg));
-  switch (operator) {
-    case 'sameterm': {
-      const [ left, right ] = args;
-      if (args.length === 2 &&
-        left.subType === Algebra.ExpressionTypes.TERM && isAssertableTerm(left.term) &&
-        right.subType === Algebra.ExpressionTypes.TERM && isAssertableTerm(right.term)) {
-        return createBooleanExpression(c, left.term.equals(right.term));
-      }
-      break;
-    }
-    case '=': {
-      const [ left, right ] = args;
-      // `=` is RDFterm-equal, which raises a type error only when *both* of its arguments are literals.
-      // An IRI on either side rules that out, and what is left is term identity - so there `=` *is*
-      // `sameTerm`. Since an IRI is also a term an assertion may travel with, that makes the ordinary
-      // `FILTER(?x = <ex://c>)` an assertion, which reaches the patterns below like any other.
-      //
-      // This is not the forbidden generalisation of the pass to `=`: it recognizes the arguments for
-      // which the two are the same function, and leaves the literal case - the one that makes them
-      // differ - to value comparison.
-      if (args.length === 2 && (isIriExpression(left) || isIriExpression(right))) {
-        return foldOperator(c, 'sameterm', args);
-      }
-      if (args.length === 2 &&
-        left.subType === Algebra.ExpressionTypes.TERM && isAssertableTerm(left.term) &&
-        right.subType === Algebra.ExpressionTypes.TERM && isAssertableTerm(right.term) &&
-        left.term.equals(right.term)) {
-        return createBooleanExpression(c, true);
-      }
-      break;
-    }
-    case '!':
-      if (args.length === 1 && constants[0] !== undefined) {
-        return createBooleanExpression(c, !constants[0]);
-      }
-      break;
-    case '&&':
-      // `false && error` is false, and `true && X` is X (an erroring X keeps erroring), so both the
-      // absorbing and the neutral element may be folded away.
-      if (constants.includes(false)) {
-        return createBooleanExpression(c, false);
-      }
-      return neutralFold(c, args, constants, true);
-    case '||':
-      // Mirrors `&&`: `true || error` is true, and `false || X` is X.
-      if (constants.includes(true)) {
-        return createBooleanExpression(c, true);
-      }
-      return neutralFold(c, args, constants, false);
-    default:
-      break;
-  }
-  return c.AF.createOperatorExpression(operator, args);
-}
-
-/** Whether an expression is an IRI spelled out as a term. */
-function isIriExpression(expression: Algebra.Expression): boolean {
-  return expression.subType === Algebra.ExpressionTypes.TERM && expression.term.termType === 'NamedNode';
-}
-
-/**
- * Drops the arguments of an `&&` / `||` that are its neutral element, keeping the operator only when
- * more than one argument is left.
- */
-function neutralFold(
-  c: TransformContext,
-  args: Algebra.Expression[],
-  constants: (boolean | undefined)[],
-  neutral: boolean,
-): Algebra.Expression {
-  const remaining = args.filter((_, index) => constants[index] !== neutral);
-  if (remaining.length === 0) {
-    return createBooleanExpression(c, neutral);
-  }
-  if (remaining.length === 1) {
-    return remaining[0];
-  }
-  return c.AF.createOperatorExpression(neutral ? '&&' : '||', remaining);
+  return {
+    assertions,
+    residual: residual.length === 0 ? undefined : conjunctionOf(c, residual),
+    contradictory: false,
+  };
 }
 
 /**

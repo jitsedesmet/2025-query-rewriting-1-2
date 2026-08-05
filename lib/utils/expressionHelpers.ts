@@ -22,18 +22,12 @@ export function splitConjunction(
   return accumulator;
 }
 
-/**
- * Combines a non-empty list of expressions into a single conjunction (`&&`).
- */
+/** Combines a non-empty list of expressions into a single conjunction (`&&`). */
 export function conjunctionOf(c: TransformContext, expressions: Algebra.Expression[]): Algebra.Expression {
   return expressions.reduce((acc, expr) => c.AF.createOperatorExpression('&&', [ acc, expr ]));
 }
 
-/**
- * Recognizes an expression that is the constant `true` or `false`.
- * @param expression - The expression to inspect
- * @returns The boolean the expression is a constant for, or `undefined` when it is not a constant
- */
+/** The boolean an expression is the constant for, or `undefined` when it is not a boolean constant. */
 export function booleanConstantOf(expression: Algebra.Expression): boolean | undefined {
   if (expression.subType !== Algebra.ExpressionTypes.TERM) {
     return undefined;
@@ -44,12 +38,7 @@ export function booleanConstantOf(expression: Algebra.Expression): boolean | und
   return expression.term.equals(termFalse) ? false : undefined;
 }
 
-/**
- * Creates the constant `true` or `false` expression.
- * @param c - The transformation context
- * @param value - The boolean to create an expression for
- * @returns The `xsd:boolean` term expression
- */
+/** Creates the constant `true` or `false` expression, as an `xsd:boolean` term. */
 export function createBooleanExpression(c: TransformContext, value: boolean): Algebra.Expression {
   return c.AF.createTermExpression(value ? termTrue : termFalse);
 }
@@ -91,13 +80,7 @@ export function isIriExpression(expression: Algebra.Expression):
   return expression.subType === Algebra.ExpressionTypes.TERM && expression.term.termType === 'NamedNode';
 }
 
-/**
- * Creates `sameTerm(expression, term)`.
- * @param c - The transformation context
- * @param expression - The expression that has to evaluate to `term`
- * @param term - The term to compare against
- * @returns The `sameTerm` operator expression
- */
+/** Creates `sameTerm(expression, term)`. */
 export function sameTermExpression(
   c: TransformContext,
   expression: Algebra.Expression,

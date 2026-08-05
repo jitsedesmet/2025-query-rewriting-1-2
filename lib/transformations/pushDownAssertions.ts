@@ -35,41 +35,32 @@ import { substituteInExpression } from '../utils/partialExpressionEvaluation.js'
  * BGPs (fewer triple matches), prune VALUES rows, delete whole UNION branches, and can turn an OPTIONAL
  * into a plain join.
  *
- * We use: https://dl.acm.org/doi/pdf/10.1145/1804669.1804675
- * (Schmidt et al., "Foundations of SPARQL Query Optimization"). Rule names in parentheses refer to
- * Figure 2 of that paper. Writing A⟨?x ≡ c⟩ for `σ_{sameTerm(?x, c)}`, two properties drive the design:
+ * Rule names in parentheses refer to Figure 2 of Schmidt et al., "Foundations of SPARQL Query
+ * Optimization" (https://dl.acm.org/doi/pdf/10.1145/1804669.1804675). Writing A⟨?x ≡ c⟩ for
+ * `σ_{sameTerm(?x, c)}`, two properties drive the design:
  *
  * - **The assertion implies `bnd(?x)`**, so (FBndII) - `?x ∉ pVars(A) ⟹ σ_{?x≡c}(A) ≡ ∅` - is the only
  *   emptiness rule needed, and `bound(?x)` folds to `true` during substitution.
  * - **It is `sameTerm`, not `=`**, which is what makes substituting the term into a pattern sound:
  *   `?x = "01"^^xsd:integer` holds of the term `"1"^^xsd:integer`, so `=` would drop solutions. An `=`
- *   against an IRI is the exception the rule allows: `=` cannot raise a type error unless both of its
- *   arguments are literals, so against an IRI it *is* `sameTerm`, and it travels as an assertion.
+ *   against an IRI is the one exception - `=` only raises a type error when both arguments are literals,
+ *   so against an IRI it *is* `sameTerm` - and it travels as an assertion.
  *
- * Assertions travel in three forms. Next to A⟨?x ≡ c⟩ there is the **weak** form
- * W⟨?x ≡ c⟩ ≔ `!bound(?x) || sameTerm(?x, c)`, which is what an assertion becomes when it moves
- * somewhere that may leave `?x` unbound: the right hand side of a MINUS, the operand of a join the
- * licence does not cover, the left hand side of an OPTIONAL. And there is the **unbound** form
- * U⟨?x⟩ ≔ `!bound(?x)`, which is both what SPARQL's negation idiom writes and what the conjunction of
- * two weak assertions about one variable comes to - see {@link Assertion}.
- *
- * All three travel in the *same* conjunction ({@link AssertionConjunction}) and are handled by the same
- * swap, because their rules differ per operation rather than per pass, and because carrying them
- * together is what lets one variable's assertion be strong while another's is not.
- * {@link normalise} converts between them at every step: where `?x` is certainly bound, `!bound(?x)` is
- * unsatisfiable, so W *is* A and U is the empty operation; where `?x` can never be bound, A is the
- * empty operation and W and U are simply `true`.
+ * Assertions travel in three forms - strong, weak and unbound, see {@link Assertion} - all in the *same*
+ * conjunction ({@link AssertionConjunction}) and handled by the same swap, since their rules differ per
+ * operation rather than per pass, and one variable's assertion may be strong while another's is not.
+ * {@link normalise} converts between them at every step.
  *
  * The pass is a pre-order traversal, so an assertion filter is handled *before* what is below it, and
- * each step only describes how the filter swaps places with the operation it sits on. The result of
- * that swap is traversed in turn, so a filter that sank into a union branch is met again there, and
- * keeps sinking on its own. What travels is the whole conjunction of assertions that still holds - an
- * {@link AssertionFilter} - so a plan with several assertions is rewritten in one traversal, and each
- * BGP is substituted into once. A filter the conjunction passes is *absorbed* into it rather than
- * swapped with, which is what keeps re-running the pass from stacking a second copy of what it derived.
+ * each step only describes how the filter swaps places with the operation it sits on. The result of that
+ * swap is traversed in turn, so a filter that sank into a union branch is met again there and keeps
+ * sinking on its own. What travels is the whole conjunction that still holds - an {@link AssertionFilter}
+ * - so a plan with several assertions is rewritten in one traversal, substituting into each BGP once. A
+ * filter the conjunction passes is *absorbed* into it rather than swapped with, which is what keeps
+ * re-running the pass from stacking a second copy of what it derived.
  *
- * Every rewrite here preserves `pVars` exactly, never shrinks `cVars`, and preserves the multiplicity
- * of every surviving mapping. That invariant is what lets the licences be read off the metadata of the
+ * Every rewrite here preserves `pVars` exactly, never shrinks `cVars`, and preserves the multiplicity of
+ * every surviving mapping. That invariant is what lets the licences be read off the metadata of the
  * operations below without recomputing anything as they are rewritten.
  */
 
@@ -79,10 +70,6 @@ const keepMetadata = { shallowKeys: new Set([ 'metadata' ]) };
 /**
  * Pushes every assertion filter (`FILTER(sameTerm(?x, c))`) in `op` as deep as possible, and into every
  * branch that permits it - for a join, that may be both sides at once.
- *
- * @param c - The transformation context
- * @param op - The operation to transform
- * @returns The operation with all assertions pushed down
  *
  * @example
  * // Before:
@@ -103,10 +90,7 @@ export function pushDownAssertions<T extends Algebra.Operation>(c: TransformCont
 }
 
 /**
- * Handles one filter met by the traversal.
- *
- * A filter carrying no assertion is left where it is, which keeps the traversal descending into it in
- * search of the ones deeper down. One that does carry assertions is split first (SDecompI): the
+ * Handles one filter met by the traversal. One carrying assertions is split first (SDecompI): the
  * assertions travel on their own, and what is left of the condition stays on top with the strong ones
  * substituted into it (FReord).
  */
@@ -126,14 +110,7 @@ function pushFilter(c: TransformContext, filter: Algebra.Filter): PreOrderMappin
   return pushAssertions(c, assertions, filter.input);
 }
 
-/**
- * Swaps an assertion filter with the operation `op` right below it, per the rules of Figure 2.
- *
- * @param c - The transformation context
- * @param assertions - The assertions the filter carries (θ)
- * @param op - The operation the filter sits on
- * @returns What takes the place of the filter, and how to traverse into it
- */
+/** Swaps an assertion filter carrying θ with the operation `op` right below it, per Figure 2. */
 function pushAssertions(
   c: TransformContext,
   assertions: AssertionConjunction,
@@ -150,10 +127,11 @@ function pushAssertions(
 }
 
 /**
- * Reads the conjunction in terms of what `op` binds, e.g. promotes weak over cVars to strong.
- * @param assertions - The conjunction as it arrives
- * @param op - The operation it is about to be pushed into
- * @returns The conjunction as it reads below, or `undefined` when it makes `op` empty
+ * Reads the conjunction in terms of what `op` binds - e.g. promoting a weak assertion over a cVar to a
+ * strong one - or `undefined` when it makes `op` empty.
+ *
+ * Where `?x` is certainly bound, `!bound(?x)` is unsatisfiable, so W *is* A and U is empty; where `?x`
+ * can never be bound, A is empty and W and U are simply `true`.
  */
 function normalise(assertions: AssertionConjunction, op: Algebra.Operation): Map<string, Assertion> | undefined {
   const { cVars, pVars } = cpVars(op);
@@ -179,10 +157,10 @@ function normalise(assertions: AssertionConjunction, op: Algebra.Operation): Map
 /**
  * The rule per operation, for a conjunction {@link normalise} has already read in terms of that operation.
  *
- * An assertion that cannot travel in the strong form is *demoted* rather than left behind wherever the
- * weak form is licensed - that is the difference between reaching a BGP and stopping at the join above
- * it - and is kept on top only where no form may pass.
- * The unbound form is never demoted, since there is nothing below it; it either passes as itself or stays.
+ * Wherever the weak form is licensed, an assertion that cannot travel strongly is *demoted* rather than
+ * left behind - that is the difference between reaching a BGP and stopping at the join above it. Only
+ * where no form may pass does it stay on top. The unbound form has nothing below it to demote to, so it
+ * either passes as itself or stays.
  */
 function swapWith(
   c: TransformContext,
@@ -294,15 +272,11 @@ function swapWith(
 }
 
 /**
- * Substitutes the assertions into a BGP (or a bare pattern), re-binding the substituted variables.
+ * Substitutes the assertions into a BGP, re-binding the substituted variables.
  *
- * All variables of a BGP are certainly bound, so there is nothing to check beyond whether the terms can
- * occupy the positions they land in: no triple has a literal or a triple term as subject, predicate or
- * graph, so such a substitution makes the whole BGP match nothing.
- *
- * BGPs are duplicate-free (each triple pattern has multiplicity one, and the decomposition of a
- * solution over a join of patterns is unique), and substituting only restricts which solutions exist,
- * so multiplicities are preserved.
+ * All variables of a BGP are certainly bound, so the only thing left to check is whether the terms can
+ * occupy the positions they land in. BGPs are duplicate-free and substituting only restricts which
+ * solutions exist, so multiplicities are preserved.
  */
 function substituteIntoPatterns(
   c: TransformContext,
@@ -325,9 +299,8 @@ function substituteIntoPatterns(
  * Substitutes the assertions into a property path, re-binding the substituted variables.
  *
  * Unlike a BGP, a path may legitimately have a literal in its subject slot (`?lit ^:p ?s`), so only the
- * graph position is checked. Paths are not duplicate-free - `?x :p/:q ?y` yields one solution per
- * intermediate witness - but substituting only restricts the set of start nodes and leaves the witness
- * count of every surviving pair untouched, so multiplicities are preserved.
+ * graph position is checked. Paths are not duplicate-free, but substituting only restricts the set of
+ * start nodes and leaves the witness count of every surviving pair untouched.
  */
 function substituteIntoPath(c: TransformContext, path: Algebra.Path, assertions: Assertions): Algebra.Operation {
   const subject = substituteInTerm(path.subject, assertions, 'object');
@@ -393,13 +366,13 @@ function pruneValues(c: TransformContext, values: Algebra.Values, assertions: As
  * Pushes the assertions through an EXTEND (BIND).
  *
  * Asserting the variable the BIND targets is the interesting case:
- * `σ_{?x≡c}(Extend(A,?x,e)) ≡ Extend(σ_{sameTerm(e,c)}(A), ?x, c)`.
- * Both sides keep exactly the solutions of `A` for which `e` evaluates to the term `c`
- * - an error in `e` makes `sameTerm(e,c)` error, which a filter treats as false, matching the dropped unbound case.
+ * `σ_{?x≡c}(Extend(A,?x,e)) ≡ Extend(σ_{sameTerm(e,c)}(A), ?x, c)`. Both sides keep exactly the solutions
+ * of `A` for which `e` evaluates to `c` - an error in `e` makes `sameTerm(e,c)` error, which a filter
+ * treats as false, matching the dropped unbound case.
  *
- * This is deliberately not shortcut to constant folding, because the important case is *renaming*:
- * for `BIND(?z AS ?x)`, `sameTerm(?z, c)` is itself an assertion, so the conjunction continues on `?z` and
- * may reach a BGP and fire the substitution there. Assertions propagate through renamings.
+ * This is deliberately not shortcut to constant folding, because the important case is *renaming*: for
+ * `BIND(?z AS ?x)`, `sameTerm(?z, c)` is itself an assertion, so the conjunction continues on `?z` and
+ * may reach a BGP. Assertions propagate through renamings.
  *
  * Only the strong form does any of that. W⟨?x ≡ c⟩ on the BIND target is also satisfied by the solutions
  * where `e` errored and left `?x` unbound, so it says nothing about `e` and stays above the EXTEND.
@@ -484,25 +457,23 @@ function pushIntoExtend(
  * Pushes the assertions through a GRAPH, which is transparent rather than a barrier.
  *
  * SPARQL evaluates it as a union over the named graphs, each joined with the binding of the graph
- * variable (§18.5): `Graph(?g,P) ≡ ⋃_{(uᵢ,Gᵢ) ∈ named} ( ⟦P⟧_{Gᵢ} ⋈ {?g↦uᵢ} )`. Every rule below is
+ * variable (§18.5): `Graph(?g,P) ≡ ⋃_{(uᵢ,Gᵢ) ∈ named} ( ⟦P⟧_{Gᵢ} ⋈ {?g↦uᵢ} )`, and every rule below is
  * read off that.
  *
  * An assertion on a variable other than `?g` distributes over the union by (FUPush) and then into the
- * left argument of each join by (FJPush) - licensed by the *second* disjunct of the licence, since
- * `?x ∉ pVars({?g↦uᵢ}) = {?g}`. No precondition survives, so that push is unconditional, and it holds
- * for the weak and unbound forms for the same reason.
+ * left argument of each join by (FJPush), licensed by the *second* disjunct since
+ * `?x ∉ pVars({?g↦uᵢ}) = {?g}`. That leaves no precondition, and holds for all three forms alike.
  *
- * An assertion on `?g` itself selects the single named graph `c`: every other `uᵢ` contributes only
- * solutions binding `?g` to `uᵢ ≠ c`, all of which the assertion drops. What is left is the single term
- * `⟦P⟧_c ⋈ {?g↦c}`, and both halves of it need care.
+ * An assertion on `?g` itself selects the single named graph `c` - every other `uᵢ` only contributes
+ * solutions binding `?g` to `uᵢ ≠ c` - leaving `⟦P⟧_c ⋈ {?g↦c}`. Both halves need care:
  *
- * - `?g` may occur *inside* `P` too, and it is the join that would have dropped the solutions binding
- *   it to another term. So the pattern gets the assertion as well, in the **weak** form: `P` need not
- *   bind `?g`, and where it binds it certainly, normalisation promotes it back on arrival.
+ * - `?g` may occur *inside* `P`, where it was the join that dropped the solutions binding it to another
+ *   term. So `P` gets the assertion too, in the **weak** form: it need not bind `?g`, and where it binds
+ *   it certainly, normalisation promotes it back on arrival.
  * - `{?g↦c}` has to be put back, since `Graph(c,P)` over an IRI binds nothing and `?g` would otherwise
- *   leave `pVars`/`cVars` and break the invariant. Which construct expresses that join depends on what
- *   `P` binds, and getting it wrong is an error rather than a wrong answer: `Extend` raises on a
- *   variable that is already bound, so it may only be used where `P` cannot bind `?g` at all.
+ *   leave `pVars`/`cVars`. Which construct expresses that join depends on what `P` binds, and getting it
+ *   wrong is an error rather than a wrong answer: `Extend` raises on an already bound variable, so it may
+ *   only be used where `P` cannot bind `?g` at all.
  *
  * If `c` is not an IRI nothing matches, since graph names are IRIs.
  */
@@ -555,21 +526,18 @@ function pushIntoGraph(
 /**
  * Pushes the assertions into the operands of a JOIN their licence holds for (FJPush).
  *
- * Specialised to a single variable, that licence is `L(?x, A₁, A₂) ≔ ?x ∈ cVars(A₁) ∨ ?x ∉ pVars(A₂)`.
- * The second disjunct is easy to forget, but is still important
+ * Specialised to a single variable, that licence is `L(?x, A₁, A₂) ≔ ?x ∈ cVars(A₁) ∨ ?x ∉ pVars(A₂)`;
+ * the second disjunct is easy to forget but does real work.
  *
- * An assertion goes into *every* operand it is licensed for - the join already enforces that all
- * operands agree on the variable, so an assertion certain on one side is free on the others and shrinks
- * both inputs. That is sideways information passing rather than a push.
+ * An assertion goes into *every* operand it is licensed for - the join already enforces that all operands
+ * agree on the variable, so an assertion certain on one side is free on the others and shrinks both
+ * inputs. That is sideways information passing rather than a push.
  *
- * What no operand is licensed for is not left behind, but **demoted**: `σ_W(A₁ ⋈ A₂) ≡ σ_W(A₁) ⋈ σ_W(A₂)`
+ * What no operand is licensed for is **demoted** rather than left behind: `σ_W(A₁ ⋈ A₂) ≡ σ_W(A₁) ⋈ σ_W(A₂)`
  * holds unconditionally, since a merged mapping binds `?x` exactly when one of its halves does. So the
- * weak form enters every operand no matter what, and only the strong assertion no operand is licensed
- * for stays on top. That is what gets an assertion below a join over two optional-bound variables, where
- * it can still collapse back to the strong form deeper down.
- *
- * The unbound form rides along on the very same identity - `?x` is unbound in the merged mapping
- * exactly when it is unbound in both halves - so it enters every operand as itself, and is consumed.
+ * weak form enters every operand regardless, and only a strong assertion no operand is licensed for stays
+ * on top. That is what gets an assertion below a join over two optional-bound variables, where it can
+ * still collapse back to the strong form deeper down. The unbound form rides along on the same identity.
  */
 function pushIntoJoin(
   c: TransformContext,
@@ -621,10 +589,10 @@ function pushIntoJoin(
  * additionally licenses replicating into `A₂`: any `μ₂` compatible with a surviving `μ₁` binds `?x`
  * (certain) to `c`, so the pruned rows of `A₂` never removed anything.
  *
- * The left hand side always takes at least the weak form: `σ_W(A₁ ⟕ A₂) ≡ σ_W(σ_W(A₁) ⟕ A₂)`, because a
- * `μ₁` violating W produces output violating W in both halves. The right hand side does not - if `A₁`
- * leaves `?x` unbound and `A₂` binds it to another term, the merged solution is the one W discards, and
- * pruning `A₂` would instead let the unmatched `μ₁` through the anti-join half.
+ * The LHS always takes at least the weak form: `σ_W(A₁ ⟕ A₂) ≡ σ_W(σ_W(A₁) ⟕ A₂)`, because a `μ₁`
+ * violating W produces output violating W in both halves. The RHS does not - if `A₁` leaves `?x` unbound
+ * and `A₂` binds it to another term, the merged solution is the one W discards, and pruning `A₂` would
+ * instead let the unmatched `μ₁` through the anti-join half.
  */
 function pushIntoLeftJoin(
   c: TransformContext,
@@ -696,8 +664,8 @@ function strongOf(assertions: AssertionConjunction): Map<string, Assertion> {
 }
 
 /**
- * The same assertion, in the strongest form that survives a move somewhere the variable may be
- * unbound: A⟨?x ≡ c⟩ becomes W⟨?x ≡ c⟩, and the other two are already that weak.
+ * The same assertion, in the strongest form that survives a move somewhere the variable may be unbound:
+ * A⟨?x ≡ c⟩ becomes W⟨?x ≡ c⟩, the other two are already that weak.
  */
 function weakened(assertion: Assertion): Assertion {
   return assertion.subType === 'strong' ? assertWeak(assertion.term) : assertion;
@@ -725,10 +693,9 @@ function empty(c: TransformContext, replaced: Algebra.Operation): PreOrderMappin
  * Builds the empty solution multiset that replaces an operation the assertions rule out.
  *
  * `FILTER(FALSE)` is this codebase's empty operation ({@link createFilterFalse}). Keeping the replaced
- * operation as its input is what makes the node carry the `pVars` of what it replaced, as the invariant
- * requires: `pVars(Empty_S) := S`, never `∅`, or `SELECT *` scoping and the in-scope variable set
- * change silently. {@link transformFilterFalse} does the structural normalisation afterwards
- * (`Empty ∪ A ≡ A`, `Empty ⋈ A ≡ Empty`, ...).
+ * operation as its input is what makes the node carry its `pVars`, as the invariant requires:
+ * `pVars(Empty_S) := S`, never `∅`, or `SELECT *` scoping changes silently.
+ * {@link transformFilterFalse} does the structural normalisation afterwards (`Empty ∪ A ≡ A`, ...).
  */
 function emptyOperation(c: TransformContext, replaced: Algebra.Operation): Algebra.Operation {
   return createFilterFalse(c, replaced);
@@ -752,9 +719,7 @@ function bindAssertedTerms(
 
 /**
  * The assertion filter over `op`, carrying the conjunction it stands for as its metadata so that the
- * traversal does not have to read it back out of the condition it builds. Each assertion is written in
- * the form it carries: `sameTerm(?x, c)` for the strong ones, `!bound(?x) || sameTerm(?x, c)` for the
- * weak ones.
+ * traversal does not have to read it back out of the condition it builds.
  */
 function assertionFilter(
   c: TransformContext,

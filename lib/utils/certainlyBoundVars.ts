@@ -22,28 +22,21 @@ const dropAllMetadata = Object.fromEntries(Object.values(Types).map(type => [ ty
 
 /**
  * Returns a copy of `op` without any cached metadata, the state {@link withCpVars} recomputes from.
+ * Since every operation is copied, the tree it is given is left untouched.
  *
- * Two reasons to start a pass with this. Metadata is a cache of what the *current* shape of the plan
- * implies, so metadata another pass left behind may describe an operation that has since been rewritten.
- * And the sets it holds do not survive a generic traversal: a `Set` shallow copied by
- * {@link algebraUtils.mapOperation} keeps its prototype but loses its contents, so any traversal that
- * does not know to leave `metadata` alone silently breaks it. Dropping it first means neither can bite.
- *
- * Since every operation is copied, this also leaves the tree it is given untouched.
- *
- * @param op - The operation to copy
- * @returns The copy, with no operation in it carrying metadata
+ * Two reasons to start a pass with this. Metadata another pass left behind may describe an operation that
+ * has since been rewritten. And the sets it holds do not survive a generic traversal: a `Set` shallow
+ * copied by {@link algebraUtils.mapOperation} keeps its prototype but loses its contents.
  */
 export function withoutCpVars<T extends Algebra.Operation>(op: T): T {
   return algebraUtils.mapOperation<'unsafe', T>(op, dropAllMetadata);
 }
 
 /**
- * Return Algebra Operations but with certain and possible vars assigned.
- * We use Dynamic programming and assert that the metadata is kept up to date when manipulated.
+ * The operation with its certain and possible vars assigned, computed by dynamic programming: callers
+ * are responsible for keeping the metadata up to date when they manipulate the operation.
  *
- * We do not explicitly handle filter false here since it can be rewritten/ removed cheaply already by
- * {@link transformFilterFalse}.
+ * Filter false is not handled explicitly, since {@link transformFilterFalse} already rewrites it cheaply.
  */
 export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
   function asCPVars<T extends Algebra.Operation>(op: T): CPOp<T> {
@@ -220,10 +213,8 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
 }
 
 /**
- * Collects the variables a filter condition can only hold for when they are bound.
- *
- * See {@link BoundVariablesOptions.filterImpliesBound} for why these positions - and only these - are
- * safe to conclude boundness from.
+ * Collects the variables a filter condition can only hold for when they are bound. See
+ * {@link BoundVariablesOptions.filterImpliesBound} for why only these positions are safe to conclude that from.
  */
 function variablesImpliedBoundBy(expression: A.Expression, agg = new Set<string>()): Set<string> {
   if (expression.subType !== ExpressionTypes.OPERATOR) {
@@ -246,9 +237,7 @@ function variablesImpliedBoundBy(expression: A.Expression, agg = new Set<string>
   return agg;
 }
 
-/**
- * Collects the variables a filter condition can only hold for when they are *unbound*.
- */
+/** Collects the variables a filter condition can only hold for when they are *unbound*. */
 function variablesImpliedUnboundBy(expression: A.Expression, agg = new Set<string>()): SSet {
   if (expression.subType !== ExpressionTypes.OPERATOR) {
     return agg;
@@ -273,9 +262,7 @@ function variablesImpliedUnboundBy(expression: A.Expression, agg = new Set<strin
   return agg;
 }
 
-/**
- * Collects the variables in an RDF term, recursing into quoted triples.
- */
+/** Collects the variables in an RDF term, recursing into quoted triples. */
 export function termVars(term: RDF.Term): Set<string> {
   if (term.termType === 'Variable') {
     return new Set([ term.value ]);

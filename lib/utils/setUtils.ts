@@ -10,9 +10,7 @@ export function unionSets(sets: SSet[]): SSet {
   return result;
 }
 
-/**
- * Tests whether every element of `subset` is contained in `superset`.
- */
+/** Tests whether every element of `subset` is contained in `superset`. */
 export function isSubsetOf(subset: Set<string>, superset: Set<string>): boolean {
   for (const value of subset) {
     if (!superset.has(value)) {
@@ -36,9 +34,7 @@ export function intersectSets(sets: SSet[]): SSet {
   return agg;
 }
 
-/**
- * The elements of `set` that do not occur in `remove`.
- */
+/** The elements of `set` that do not occur in `remove`. */
 export function differenceSets(set: SSet, remove: SSet): SSet {
   const agg = new Set<string>();
   for (const value of set) {

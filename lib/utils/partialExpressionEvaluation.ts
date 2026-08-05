@@ -5,17 +5,12 @@ import { isAssertableTerm } from './assertions.js';
 import { booleanConstantOf, createBooleanExpression, isIriExpression } from './expressionHelpers.js';
 
 /**
- * Substitutes assertions into an expression and folds what becomes constant: `simplify(R[θ])`.
+ * Substitutes assertions (θ) into an expression and folds what becomes constant: `simplify(R[θ])`.
  *
  * Substitution is *not* uniform textual replacement. `BOUND` is the only SPARQL built-in whose grammar
  * takes a bare `Var` instead of an `Expression`, so replacing the variable by a term would produce the
- * ungrammatical `BOUND(<ex://p>)` - which an internal algebra tolerates until the plan is serialised
- * back to SPARQL. Since an assertion implies the variable is bound, `bound(?x)` becomes `true`.
- *
- * @param c - The transformation context
- * @param expression - The expression to substitute into
- * @param assertions - The assertions to substitute (θ)
- * @returns The substituted and folded expression
+ * ungrammatical `BOUND(<ex://p>)` once the plan is serialised back to SPARQL. Since an assertion implies
+ * the variable is bound, `bound(?x)` becomes `true` instead.
  */
 export function substituteInExpression(
   c: TransformContext,
@@ -64,14 +59,13 @@ export function substituteInExpression(
 /**
  * Constant-folds an operator expression whose arguments are (partly) constant.
  *
- * Only operators that are deterministic and side-effect free may be folded here. Notably absent are
- * `rand`, `uuid`, `struuid`, `bnode` and `now`, which must survive to evaluation; anything not listed
- * below is rebuilt unchanged.
+ * Only deterministic, side-effect free operators may be folded: `rand`, `uuid`, `struuid`, `bnode` and
+ * `now` must survive to evaluation, and anything not listed below is rebuilt unchanged.
  *
- * Only the folds that are sound under SPARQL's error handling are applied.
- * Notably `=` folds to `true` for two identical terms - RDF term equality is the fallback for unsupported datatypes -
- * but never to `false`, since comparing terms of unsupported datatypes raises an error, and an error is not `false`
- * in every context: COALESCE(Error, false, true) ≡ false.
+ * Only the folds sound under SPARQL's error handling are applied. Notably `=` folds to `true` for two
+ * identical terms - RDF term equality is the fallback for unsupported datatypes - but never to `false`,
+ * since comparing unsupported datatypes raises an error, and an error is not `false` in every context:
+ * `COALESCE(Error, false, true) ≡ false`.
  */
 export function constantFoldOperator(
   c: TransformContext,

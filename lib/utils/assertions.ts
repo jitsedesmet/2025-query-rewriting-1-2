@@ -51,7 +51,7 @@ interface BaseAssertion {
   type: 'assertion';
   subType: string;
 }
-interface StrongAssertion<T extends RDF.Term = RDF.Term> extends BaseAssertion {
+export interface StrongAssertion<T extends RDF.Term = RDF.Term> extends BaseAssertion {
   subType: 'strong';
   term: T;
 }

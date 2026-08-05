@@ -1,7 +1,13 @@
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { PreOrderMappingReturn } from '@traqula/core';
 import type { TransformContext } from '../transformContext.js';
-import type { Assertion, AssertionConjunction, AssertionFilter, Assertions } from '../utils/assertions.js';
+import type {
+  Assertion,
+  AssertionConjunction,
+  AssertionFilter,
+  Assertions,
+  StrongAssertion,
+} from '../utils/assertions.js';
 import {
   assertionsExpression,
   assertStrong,
@@ -251,7 +257,6 @@ function swapWith(
       const groupsOn = new Set(op.variables.map(variable => variable.value));
       const groupsWeAssert = restrict(assertions, name => groupsOn.has(name));
       if (groupsWeAssert.size === 0) {
-        // TODO: do we not need continue: false? do we not have endless loop otherwise?
         return keep(assertionFilter(c, op, assertions));
       }
       return keep(assertionFilter(
@@ -478,16 +483,28 @@ function pushIntoExtend(
 /**
  * Pushes the assertions through a GRAPH, which is transparent rather than a barrier.
  *
- * With `Graph(?g,P) ≡ ⋃_{(uᵢ,Gᵢ) ∈ named} ( ⟦P⟧_{Gᵢ} ⋈ {?g↦uᵢ} )`, an assertion on a variable other
- * than `?g` distributes over that union by (FUPush) and then into the left argument of each join by
- * (FJPush) - licensed by the *second* disjunct of the licence, since `?x ∉ pVars({?g↦uᵢ}) = {?g}`. No
- * precondition survives, so that push is unconditional, and it holds for the weak form for the same
- * reason.
+ * SPARQL evaluates it as a union over the named graphs, each joined with the binding of the graph
+ * variable (§18.5): `Graph(?g,P) ≡ ⋃_{(uᵢ,Gᵢ) ∈ named} ( ⟦P⟧_{Gᵢ} ⋈ {?g↦uᵢ} )`. Every rule below is
+ * read off that.
  *
- * An assertion on `?g` itself selects the single named graph `c`.
+ * An assertion on a variable other than `?g` distributes over the union by (FUPush) and then into the
+ * left argument of each join by (FJPush) - licensed by the *second* disjunct of the licence, since
+ * `?x ∉ pVars({?g↦uᵢ}) = {?g}`. No precondition survives, so that push is unconditional, and it holds
+ * for the weak and unbound forms for the same reason.
+ *
+ * An assertion on `?g` itself selects the single named graph `c`: every other `uᵢ` contributes only
+ * solutions binding `?g` to `uᵢ ≠ c`, all of which the assertion drops. What is left is the single term
+ * `⟦P⟧_c ⋈ {?g↦c}`, and both halves of it need care.
+ *
+ * - `?g` may occur *inside* `P` too, and it is the join that would have dropped the solutions binding
+ *   it to another term. So the pattern gets the assertion as well, in the **weak** form: `P` need not
+ *   bind `?g`, and where it binds it certainly, normalisation promotes it back on arrival.
+ * - `{?g↦c}` has to be put back, since `Graph(c,P)` over an IRI binds nothing and `?g` would otherwise
+ *   leave `pVars`/`cVars` and break the invariant. Which construct expresses that join depends on what
+ *   `P` binds, and getting it wrong is an error rather than a wrong answer: `Extend` raises on a
+ *   variable that is already bound, so it may only be used where `P` cannot bind `?g` at all.
+ *
  * If `c` is not an IRI nothing matches, since graph names are IRIs.
- * Otherwise, the EXTEND is mandatory for the same reason as in the BGP case:
- * without it `?g` would leave `pVars`/`cVars` and break the invariant.
  */
 function pushIntoGraph(
   c: TransformContext,
@@ -497,36 +514,42 @@ function pushIntoGraph(
   const { AF } = c;
   const graphName = graph.name;
   const graphVar = graphName.termType === 'Variable' ? graphName.value : undefined;
-  // Whatever is asserted about `?g` should still be asserted underneath the graph operation too
-  // (similar to join semantics):
-  //   Ω = U(Ω, Join(Ω', μ)), where μ = { x -> GraphName }
-  // TODO: implement as such
-  //  (current is correct, but can lickly be better in case some cases where we look a cvars/pvars of inner op)
-  const inside = restrict(assertions, name => name !== graphVar);
 
-  if (graphName.termType === 'Variable') {
-    const asserted = assertions.get(graphName.value);
-    // Selecting the single graph needs the strong form. A GRAPH binds `?g` certainly, so normalisation
-    // has in fact already promoted any weak assertion on it - and emptied the plan for an unbound one -
-    // so the other branch keeps nothing.
-    if (asserted?.subType === 'strong') {
-      if (asserted.term.termType !== 'NamedNode') {
-        return empty(c, graph);
-      }
-      // TODO: here is definitely wrong in case inner op has our graph in pvars since we
-      //  then cannot perform the extend then
-      return keep(bindAssertedTerms(
-        c,
-        AF.createGraph(assertionFilter(c, graph.input, inside), asserted.term),
-        new Map([[ graphName.value, asserted.term ]]),
-      ));
-    }
+  // Selecting the single graph needs the strong form.
+  if (graphVar === undefined) {
+    return keep(AF.createGraph(assertionFilter(c, graph.input, assertions), graphName));
   }
-  return keep(assertionFilter(
-    c,
-    AF.createGraph(assertionFilter(c, graph.input, inside), graphName),
-    restrict(assertions, name => name === graphVar),
-  ));
+
+  const assertedGraphName = <StrongAssertion> assertions.get(graphVar);
+  if (assertedGraphName.term.termType !== 'NamedNode') {
+    return empty(c, graph);
+  }
+
+  // Read before the rewrite, which preserves `pVars` exactly and never shrinks `cVars`.
+  const { cVars, pVars } = cpVars(graph.input);
+  // `?g` travels on into the pattern, in the *weak* form: `P` need not bind it at all, and the join
+  // with `{?g ↦ c}` is what would have dropped the solutions binding it to anything else.
+  const inside = new Map(assertions);
+  inside.set(graphVar, assertWeak(assertedGraphName.term));
+  const selected = AF.createGraph(assertionFilter(c, graph.input, inside), assertedGraphName.term);
+
+  if (cVars.has(graphVar)) {
+    // Every solution of `P` binds `?g` - and the weak assertion, promoted to the strong one down there,
+    // has already fixed it to `c` - so joining `{?g ↦ c}` back on would change nothing.
+    return keep(selected);
+  }
+  if (pVars.has(graphVar)) {
+    // `P` binds `?g` in some solutions and not others, so the join has to stay one: an EXTEND raises an
+    // error on a variable that is already bound. A single row binding `?g` to `c` *is* `{?g ↦ c}`.
+    return keep(AF.createJoin([ selected, AF.createExtend(
+      AF.createBgp([]),
+      c.DF.variable(graphVar),
+      AF.createTermExpression(assertedGraphName.term),
+    ) ], false));
+  }
+  // `P` never binds `?g`, so the join only ever adds the binding, which is what an EXTEND does.
+
+  return keep(bindAssertedTerms(c, selected, new Map([[ graphVar, assertedGraphName.term ]])));
 }
 
 /**
@@ -669,11 +692,6 @@ function restrict(
 /** The strong assertions of `assertions`, as a conjunction. */
 function strongOf(assertions: AssertionConjunction): Map<string, Assertion> {
   return new Map([ ...assertions ].filter(([ , assertion ]) => assertion.subType === 'strong'));
-}
-
-/** The assertions of `assertions` that may not be substituted into a pattern. */
-function notStrongOf(assertions: AssertionConjunction): Map<string, Assertion> {
-  return new Map([ ...assertions ].filter(([ , assertion ]) => assertion.subType !== 'strong'));
 }
 
 /**

@@ -462,7 +462,9 @@ function pushIntoExtend(
  *
  * An assertion on a variable other than `?g` distributes over the union by (FUPush) and then into the
  * left argument of each join by (FJPush), licensed by the *second* disjunct since
- * `?x ∉ pVars({?g↦uᵢ}) = {?g}`. That leaves no precondition, and holds for all three forms alike.
+ * `?x ∉ pVars({?g↦uᵢ}) = {?g}`. That leaves no precondition, and holds for all three forms alike - so a
+ * conjunction saying nothing about `?g`, which is the common case, travels into `P` whole and leaves the
+ * GRAPH itself alone.
  *
  * An assertion on `?g` itself selects the single named graph `c` - every other `uᵢ` only contributes
  * solutions binding `?g` to `uᵢ ≠ c` - leaving `⟦P⟧_c ⋈ {?g↦c}`. Both halves need care:
@@ -486,11 +488,21 @@ function pushIntoGraph(
   const graphName = graph.name;
   const graphVar = graphName.termType === 'Variable' ? graphName.value : undefined;
 
-  // Selecting the single graph needs the strong form.
+  // The name is already a single graph, so every assertion simply travels into the pattern.
   if (graphVar === undefined) {
     return keep(AF.createGraph(assertionFilter(c, graph.input, assertions), graphName));
   }
-
+  // If something is asserted about the var, we know it is a Strong assertion. Other cases would already be handled.
+  if (assertions.get(graphVar) === undefined) {
+    return keep(assertionFilter(
+      c,
+      AF.createGraph(
+        assertionFilter(c, graph.input, restrict(assertions, name => name !== graphVar)),
+        graphName,
+      ),
+      restrict(assertions, name => name === graphVar),
+    ));
+  }
   const assertedGraphName = <StrongAssertion> assertions.get(graphVar);
   if (assertedGraphName.term.termType !== 'NamedNode') {
     return empty(c, graph);

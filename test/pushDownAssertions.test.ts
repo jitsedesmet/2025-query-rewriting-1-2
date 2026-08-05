@@ -1,5 +1,5 @@
 import { QueryEngine } from '@comunica/query-sparql-file';
-import { toAst } from '@traqula/algebra-sparql-1-2';
+import { toAlgebra, toAst } from '@traqula/algebra-sparql-1-2';
 import type { Algebra as AlgebraTypes } from '@traqula/algebra-transformations-1-2';
 import * as arrayifyStreamNS from 'arrayify-stream';
 import type { expect as Expect } from 'vitest';
@@ -35,6 +35,20 @@ describe('pushDownAssertions', () => {
 
   function expectTransform(expect: typeof Expect, query: string, expected: string): void {
     expect(transform(query)).toEqual(expected.trim());
+  }
+
+  /**
+   * Transforms a query parsed *without* quads, so that a GRAPH survives as an operation of its own
+   * rather than as the graph component of every pattern below it - the only way to reach the GRAPH
+   * rule, since {@link parseQuery} always asks for quads.
+   */
+  function transformGraphOperation(query: string): string {
+    const parsed = toAlgebra(c.parser.parse(prefixes + query), { quads: false, blankToVariable: true });
+    return c.generator.generate(toAst(pushDownAssertions(c, parsed))).trim();
+  }
+
+  function expectTransformGraphOperation(expect: typeof Expect, query: string, expected: string): void {
+    expect(transformGraphOperation(query)).toEqual(expected.trim());
   }
 
   describe('base cases', () => {
@@ -313,6 +327,48 @@ describe('pushDownAssertions', () => {
   GRAPH <ex://g1> {
     ?x <ex://p> ?y .
   }
+}`,
+      );
+    });
+
+    it('travels into a GRAPH operation the conjunction says nothing about the name of', ({ expect }) => {
+      // A GRAPH that is an operation of its own, rather than the graph component of the quads below
+      // it: the conjunction has no assertion on `?g` to read, and every rule here is about the ones
+      // it does carry.
+      expectTransformGraphOperation(
+        expect,
+        'SELECT * WHERE { GRAPH ?g { ?x :p ?y } FILTER(sameTerm(?x, :c)) }',
+        `SELECT ?g ( <ex://c> AS ?x ) ?y WHERE {
+  GRAPH ?g {
+    <ex://c> <ex://p> ?y .
+  }
+}`,
+      );
+    });
+
+    it('selects the single graph of a GRAPH operation whose name is asserted', ({ expect }) => {
+      // `?g` is certainly bound by the GRAPH, so it leaves the pattern in the weak form and is
+      // promoted back on arrival - and the binding it stood for has to be put back on top.
+      expectTransformGraphOperation(
+        expect,
+        'SELECT * WHERE { GRAPH ?g { ?x :p ?y } FILTER(sameTerm(?g, :g1)) }',
+        `SELECT ( <ex://g1> AS ?g ) ?x ?y WHERE {
+  GRAPH <ex://g1> {
+    ?x <ex://p> ?y .
+  }
+}`,
+      );
+    });
+
+    it('empties a GRAPH operation whose name is asserted to be a literal', ({ expect }) => {
+      expectTransformGraphOperation(
+        expect,
+        'SELECT * WHERE { GRAPH ?g { ?x :p ?y } FILTER(sameTerm(?g, "lit")) }',
+        `SELECT ?g ?x ?y WHERE {
+  GRAPH ?g {
+    ?x <ex://p> ?y .
+  }
+  FILTER ( FALSE )
 }`,
       );
     });
@@ -756,7 +812,12 @@ GROUP BY ?x`,
     });
 
     it('re-serialises to valid SPARQL, never emitting BOUND of a term', ({ expect }) => {
-      // TODO: where did the || BOUND go? ?z is not always bound so this is wrong?
+      // What may not happen is substituting the term into the `BOUND` - `BOUND(<ex://c>)` does not parse -
+      // so it folds to `true` instead, and that is what takes the whole `BOUND(?z) || BOUND(?x)` conjunct
+      // with it: `X || true` is `true` whatever `X` is. That ?z may be unbound is precisely what does not
+      // matter here; the fold is licensed by the *sibling* conjunct `sameTerm(?x, :c)`, since a solution
+      // this filter keeps has to satisfy that one too, and it implies `bound(?x)`. The test below shows
+      // the disjunction surviving where no assertion decides one of its sides.
       const result = transform(`SELECT * WHERE {
         ?x :p ?y
         OPTIONAL { ?y :q ?z }
@@ -780,6 +841,29 @@ GROUP BY ?x`,
 }`);
       // A round trip over the whole plan is the real check: the generated query has to parse again.
       expect(() => parseQuery(c, result)).not.toThrow();
+    });
+
+    it('leaves a BOUND the assertions do not decide alone', ({ expect }) => {
+      // The counterpart of the fold above: nothing is asserted about ?y, so neither disjunct is decided
+      // and the condition stays exactly as it was written.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          ?x :p ?y
+          OPTIONAL { ?y :q ?z }
+          FILTER(sameTerm(?x, :c) && (BOUND(?z) || BOUND(?y)))
+        }`,
+        `SELECT ?x ?y ?z WHERE {
+  {
+    <ex://c> <ex://p> ?y .
+    BIND( <ex://c> AS ?x )
+  }
+  OPTIONAL {
+    ?y <ex://q> ?z .
+  }
+  FILTER ( ( BOUND( ?z ) || BOUND( ?y ) ) )
+}`,
+      );
     });
   });
 

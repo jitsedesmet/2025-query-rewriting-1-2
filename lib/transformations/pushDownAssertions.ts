@@ -669,6 +669,7 @@ function pushIntoLeftJoin(
   const expression = leftJoin.expression === undefined ?
     undefined :
     substituteInExpression(c, leftJoin.expression, strongTermsOf(intoLeft));
+  // TODO: the substitution in the filter might reveal more information that we could use!
   return keep(assertionFilter(
     c,
     AF.createLeftJoin(assertionFilter(c, left, intoLeft), assertionFilter(c, right, intoRight), expression),

@@ -442,6 +442,237 @@ GROUP BY ?x`,
     });
   });
 
+  describe('the weak form', () => {
+    it('demotes into the join operand the strong form may not enter', ({ expect }) => {
+      // L fails for the union: ?x is not certain in it, and it is possible in the subquery. Left at
+      // that, the union keeps both of its branches. Demoted, the assertion reaches them, becomes strong
+      // again in the branch that binds ?x certainly, and is dropped by the one that cannot bind it.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          { { ?x :p ?y } UNION { ?z :q ?w } }
+          { SELECT ?x ?d WHERE { ?x :r ?d } }
+          FILTER(sameTerm(?x, :c))
+        }`,
+        `SELECT ?d ?w ?x ?y ?z WHERE {
+  {
+    <ex://c> <ex://p> ?y .
+    BIND( <ex://c> AS ?x )
+  }
+  UNION {
+    ?z <ex://q> ?w .
+  }
+  {
+    SELECT ( <ex://c> AS ?x ) ?d WHERE {
+      <ex://c> <ex://r> ?d .
+    }
+  }
+}`,
+      );
+    });
+
+    it('demotes into the left hand side of an OPTIONAL that may bind the variable', ({ expect }) => {
+      // The strong assertion stays on top - the OPTIONAL can still bind ?x to something else - but the
+      // weak one reaches the union below and prunes it.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          { { ?x :p ?y } UNION { ?u :s ?v } }
+          OPTIONAL { ?x :q ?z }
+          FILTER(sameTerm(?x, :c))
+        }`,
+        `SELECT ?u ?v ?x ?y ?z WHERE {
+  {
+    <ex://c> <ex://p> ?y .
+    BIND( <ex://c> AS ?x )
+  }
+  UNION {
+    ?u <ex://s> ?v .
+  }
+  OPTIONAL {
+    ?x <ex://q> ?z .
+  }
+  FILTER ( SAMETERM( ?x , <ex://c> ) )
+}`,
+      );
+    });
+
+    it('promotes back to the strong form at a GRAPH, which binds its variable certainly', ({ expect }) => {
+      // The right hand side of the MINUS takes the weak form. A GRAPH binds ?g certainly, so it is the
+      // strong assertion again by the time it gets there - which is what lets it select the graph
+      // rather than park on top of it.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          GRAPH ?g { ?x :p ?y }
+          MINUS { GRAPH ?g { ?x :q ?z } }
+          FILTER(sameTerm(?g, :g1))
+        }`,
+        `SELECT ?g ?x ?y WHERE {
+  GRAPH <ex://g1> {
+    {
+      ?x <ex://p> ?y .
+      BIND( <ex://g1> AS ?g )
+    }
+    MINUS {
+      {
+        ?x <ex://q> ?z .
+        BIND( <ex://g1> AS ?g )
+      }
+    }
+  }
+}`,
+      );
+    });
+
+    it('reads two weak assertions about one variable as `!bound`', ({ expect }) => {
+      // `(¬b ∨ ?x ≡ :c) ∧ (¬b ∨ ?x ≡ :d)` is `¬b ∨ (?x ≡ :c ∧ ?x ≡ :d)`, and for two distinct terms
+      // that is exactly `!bound(?x)`. Without the unbound form there would be nothing to merge the
+      // second conjunct into - it has no term - and it would be stranded as a residual.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          ?a :p ?b
+          OPTIONAL { ?a :q ?x }
+          FILTER((!bound(?x) || sameTerm(?x, :c)) && (!bound(?x) || sameTerm(?x, :d)))
+        }`,
+        `SELECT ?a ?b ?x WHERE {
+  ?a <ex://p> ?b .
+  OPTIONAL {
+    ?a <ex://q> ?x .
+  }
+  FILTER ( ! BOUND( ?x ) )
+}`,
+      );
+    });
+
+    it('empties the plan where that `!bound` meets a variable that is certainly bound', ({ expect }) => {
+      // The inference the residual used to lose: a BGP binds ?x certainly, so `!bound(?x)` cannot hold
+      // and the whole plan is empty. Before the merge this substituted :c and stranded the second
+      // conjunct above it - correct, but a plan that does work to return nothing.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          ?x :p ?y
+          FILTER((!bound(?x) || sameTerm(?x, :c)) && (!bound(?x) || sameTerm(?x, :d)))
+        }`,
+        `SELECT ?x ?y WHERE {
+  ?x <ex://p> ?y .
+  FILTER ( FALSE )
+}`,
+      );
+    });
+
+    it('empties the plan where `!bound` meets a strong assertion', ({ expect }) => {
+      // The strong form implies `bound(?x)`, so the two cannot both hold whatever the operation binds.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          ?a :p ?b
+          OPTIONAL { ?a :q ?x }
+          FILTER(!bound(?x) && sameTerm(?x, :c))
+        }`,
+        `SELECT ?a ?b ?x WHERE {
+  ?a <ex://p> ?b .
+  OPTIONAL {
+    ?a <ex://q> ?x .
+  }
+  FILTER ( FALSE )
+}`,
+      );
+    });
+
+    it('contradicts a weak assertion it meets on a variable it knows is bound', ({ expect }) => {
+      // Inside the MINUS the conjunction is weak, but the pattern binds ?x certainly, so it is the
+      // strong `?x ≡ :c` there - and `!bound(?x) || ?x ≡ :d` cannot hold of that.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          ?x :p ?y
+          MINUS { ?x :q ?z FILTER(!bound(?x) || sameTerm(?x, :d)) }
+          FILTER(sameTerm(?x, :c))
+        }`,
+        `SELECT ?x ?y WHERE {
+  {
+    <ex://c> <ex://p> ?y .
+    BIND( <ex://c> AS ?x )
+  }
+  MINUS {
+    {
+      {
+        ?x <ex://q> ?z .
+        FILTER ( ( ! BOUND( ?x ) || SAMETERM( ?x , <ex://d> ) ) )
+      }
+      FILTER ( FALSE )
+    }
+  }
+}`,
+      );
+    });
+  });
+
+  describe('the unbound form', () => {
+    it('empties the union branch that binds the variable certainly', ({ expect }) => {
+      // `FILTER(!bound(?x))` is SPARQL's negation idiom, so this is the form assertions most often
+      // start in. It distributes over a union like the others, and the branch that cannot leave ?x
+      // unbound is empty.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          { { ?a :p ?b OPTIONAL { ?a :q ?x } } UNION { ?c :r ?x } }
+          FILTER(!bound(?x))
+        }`,
+        `SELECT ?a ?b ?c ?x WHERE {
+  {
+    ?a <ex://p> ?b .
+    OPTIONAL {
+      ?a <ex://q> ?x .
+    }
+    FILTER ( ! BOUND( ?x ) )
+  }
+  UNION {
+    ?c <ex://r> ?x .
+    FILTER ( FALSE )
+  }
+}`,
+      );
+    });
+
+    it('drops the VALUES rows that bind the variable, and its column with them', ({ expect }) => {
+      // The column has to go: a VALUES declares its own `pVars`, so leaving an all-UNDEF column would
+      // put ?x back in scope - which is what `!bound(?x)` took it out of.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          VALUES (?x ?y) { (:a 1) (UNDEF 2) (UNDEF 3) }
+          FILTER(!bound(?x))
+        }`,
+        `SELECT ?x ?y WHERE {
+  VALUES ?y {
+    "2"^^<http://www.w3.org/2001/XMLSchema#integer>
+    "3"^^<http://www.w3.org/2001/XMLSchema#integer>
+  }
+}`,
+      );
+    });
+
+    it('stays where the negation idiom put it when nothing below can take it', ({ expect }) => {
+      // The plain shape: the OPTIONAL is the only thing that binds ?x, and pushing into the right hand
+      // side of a left join is exactly what no form of assertion may do.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?a :p ?b OPTIONAL { ?a :q ?x } FILTER(!bound(?x)) }',
+        `SELECT ?a ?b ?x WHERE {
+  ?a <ex://p> ?b .
+  OPTIONAL {
+    ?a <ex://q> ?x .
+  }
+  FILTER ( ! BOUND( ?x ) )
+}`,
+      );
+    });
+  });
+
   describe('condition handling', () => {
     it('propagates the assertion through a renaming BIND', ({ expect }) => {
       expectTransform(
@@ -522,7 +753,11 @@ GROUP BY ?x`,
       );
     });
 
-    it('substitutes into the pattern of an EXISTS', ({ expect }) => {
+    it('leaves the pattern of an EXISTS alone', ({ expect }) => {
+      // Nothing travels into an EXISTS. The assertion still holds of every solution the condition is
+      // evaluated against - the BIND keeps ?x bound to :c - and `substitute()` inlines it at evaluation
+      // time, so this is a missed optimisation rather than a missed rewrite. See the TODO in
+      // `substituteInExpression` for why neither obvious way of doing it is right.
       expectTransform(
         expect,
         'SELECT * WHERE { ?x :p ?y FILTER(sameTerm(?x, :c) && EXISTS { ?x :q ?w }) }',
@@ -532,7 +767,7 @@ GROUP BY ?x`,
     BIND( <ex://c> AS ?x )
   }
   FILTER ( EXISTS {
-    <ex://c> <ex://q> ?w .
+    ?x <ex://q> ?w .
   }
   )
 }`,
@@ -635,6 +870,44 @@ GROUP BY ?x`,
       );
     });
 
+    it('absorbs the weak form of something it already knows strongly', ({ expect }) => {
+      // A ∧ W is A for the same term, so the weak conjunct adds nothing and disappears rather than
+      // staying behind as a residual.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?x :p ?y FILTER(sameTerm(?x, :c) && (!bound(?x) || sameTerm(?x, :c))) }',
+        `SELECT ( <ex://c> AS ?x ) ?y WHERE {
+  <ex://c> <ex://p> ?y .
+}`,
+      );
+    });
+
+    it('empties the plan where the weak form contradicts what it knows strongly', ({ expect }) => {
+      // The strong assertion says ?x is bound to :c; the weak one allows only unbound or :d. Neither
+      // form alone is contradictory, which is why the two have to be read as one conjunction.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?x :p ?y FILTER(sameTerm(?x, :c) && (!bound(?x) || sameTerm(?x, :d))) }',
+        `SELECT ?x ?y WHERE {
+  ?x <ex://p> ?y .
+  FILTER ( FALSE )
+}`,
+      );
+    });
+
+    it('re-running it changes nothing', ({ expect }) => {
+      // A filter the conjunction passes is absorbed, not swapped with, so a second run re-derives the
+      // same conjunction and merges it away instead of stacking a second copy of it.
+      const query = `${prefixes}SELECT * WHERE {
+        { { ?x :p ?y } UNION { ?z :q ?w } }
+        { SELECT ?x ?d WHERE { ?x :r ?d } }
+        FILTER(sameTerm(?x, :c))
+      }`;
+      const once = pushDownAssertions(c, parseQuery(c, query));
+      const twice = pushDownAssertions(c, once);
+      expect(c.generator.generate(toAst(twice))).toEqual(c.generator.generate(toAst(once)));
+    });
+
     it('empties the plan where a passed assertion contradicts the conjunction', ({ expect }) => {
       // ?x cannot be both, so everything below is skipped rather than rewritten - the inner filter is
       // left exactly as it was.
@@ -720,9 +993,11 @@ GROUP BY ?x`,
   });
 
   describe('soundness guards', () => {
-    it('does not push into a join operand whose BIND may leave the variable unbound', ({ expect }) => {
+    it('demotes rather than pushes into a join operand whose BIND may leave the variable unbound', ({ expect }) => {
       // ?x is not certainly bound in the left operand (`?a / ?b` errors when ?b is 0), and it is
-      // possible in the right one, so L fails for the left: only the right operand may take it.
+      // possible in the right one, so L fails for the left: only the right operand may take the strong
+      // assertion. The left still gets the weak one, which is what prunes it - and which stops above
+      // the BIND, since it does not say `?a / ?b` evaluated to anything.
       expectTransform(
         expect,
         `SELECT * WHERE {
@@ -732,8 +1007,12 @@ GROUP BY ?x`,
         }`,
         `SELECT ?a ?b ?d ?x WHERE {
   {
-    SELECT ( ( ?a / ?b ) AS ?x ) ?a ?b WHERE {
-      ?a <ex://p> ?b .
+    SELECT ?x ?a ?b WHERE {
+      {
+        ?a <ex://p> ?b .
+        BIND( ( ?a / ?b ) AS ?x )
+      }
+      FILTER ( ( ! BOUND( ?x ) || SAMETERM( ?x , <ex://c> ) ) )
     }
   }
   {
@@ -743,6 +1022,43 @@ GROUP BY ?x`,
   }
 }`,
       );
+    });
+
+    it('keeps a weak assertion above the OPTIONAL that may bind its variable', ({ expect }) => {
+      // The weak form goes into the left hand side of a left join, never into the right: if the left
+      // leaves ?z unbound and the right binds it to another term, the merged solution is the one the
+      // assertion discards - and pruning the right would instead let the unmatched left row through.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          ?x :p ?y
+          OPTIONAL { ?x :q ?z }
+          FILTER((!bound(?z) || sameTerm(?z, :c)) && sameTerm(?x, :a))
+        }`,
+        `SELECT ?x ?y ?z WHERE {
+  {
+    <ex://a> <ex://p> ?y .
+    BIND( <ex://a> AS ?x )
+  }
+  OPTIONAL {
+    {
+      <ex://a> <ex://q> ?z .
+      BIND( <ex://a> AS ?x )
+    }
+  }
+  FILTER ( ( ! BOUND( ?z ) || SAMETERM( ?z , <ex://c> ) ) )
+}`,
+      );
+    });
+
+    it('meets no blank node, because the parse turned them into variables', ({ expect }) => {
+      // What lets `isAssertableTerm` admit a blank node - and so lets the constant folding decide
+      // `sameTerm` between two of them. A blank node label in an expression would be a fresh label
+      // rather than a reference to one in the data, so nothing could be concluded from it.
+      expect(transform(`SELECT * WHERE {
+        ?x :p [ :q ?y ]
+        FILTER(sameTerm(?x, :c))
+      }`)).toMatch(/<ex:\/\/c> <ex:\/\/p> \?\w+ \./u);
     });
 
     it('keeps the projected variables of a plan a branch of which becomes empty', ({ expect }) => {
@@ -854,6 +1170,43 @@ GROUP BY ?x`,
         MINUS { VALUES (?x ?y) { (:d :shared) (UNDEF :shared) } }
         FILTER(sameTerm(?x, :a))
       }`, 0);
+    });
+
+    it('keeps the join rows whose operand never bound the asserted variable', async({ expect }) => {
+      // The trap the demotion has to avoid: the right branch of the union does not bind ?x, so a
+      // *strong* push into the union would empty it by (FBndII) and lose the row it contributes. The
+      // weak form keeps it, because an unbound ?x satisfies it.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        { { ?x :p ?y } UNION { ?z :q ?w } }
+        { SELECT ?x ?d WHERE { ?x :r ?d } }
+        FILTER(sameTerm(?x, :a))
+      }`, 2);
+    });
+
+    it('keeps the OPTIONAL rows whose left hand side never bound the asserted variable', async({ expect }) => {
+      // The same trap on the left of a left join, where the row survives by being completed from the
+      // right hand side instead.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        { { ?x :p ?y } UNION { ?z :q ?w } }
+        OPTIONAL { ?x :r ?d }
+        FILTER(sameTerm(?x, :a))
+      }`, 2);
+    });
+
+    it('keeps the union branch an `!bound` leaves alone while emptying the other', async({ expect }) => {
+      // The left branch binds ?y certainly and becomes empty; the right one cannot bind it at all and
+      // is untouched. Getting either direction of that backwards changes the answer.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        { { ?x :p ?y } UNION { ?a :r ?d } }
+        FILTER(!bound(?y))
+      }`, 1);
+    });
+
+    it('keeps the UNDEF rows when `!bound` takes the column out of a VALUES', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        VALUES (?x ?y) { (:a 1) (UNDEF 2) }
+        FILTER(!bound(?x))
+      }`, 1);
     });
 
     it('does not match a literal with another lexical form (sameTerm, not =)', async({ expect }) => {

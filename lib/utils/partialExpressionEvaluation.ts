@@ -1,7 +1,7 @@
 import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { TransformContext } from '../transformContext.js';
 import type { Assertions } from './assertions.js';
-import { isAssertableTerm, substituteAssertedVariables } from './assertions.js';
+import { isAssertableTerm } from './assertions.js';
 import { booleanConstantOf, createBooleanExpression, isIriExpression } from './expressionHelpers.js';
 
 /**
@@ -44,14 +44,8 @@ export function substituteInExpression(
         .map(arg => substituteInExpression(c, arg, assertions)));
     }
     case Algebra.ExpressionTypes.EXISTENCE:
-      // EXISTS substitutes the current solution into its pattern anyway, and every solution reaching
-      // this expression has ?x bound to c, so this is a propagation route rather than a repair.
-      return AF.createExistenceExpression(
-        expression.not,
-        // TODO: can we not push down the filter instead?
-        //  The existence expression is again a whole 'subquery' so it has the expressibility of it.
-        substituteAssertedVariables(c, expression.input, assertions),
-      );
+      // TODO: work out how to propagate an assertion into the pattern of an EXISTS.
+      return expression;
     case Algebra.ExpressionTypes.NAMED:
       return AF.createNamedExpression(
         expression.name,
@@ -97,18 +91,20 @@ export function constantFoldOperator(
       break;
     }
     case '=': {
+      if (args.length !== 2) {
+        break;
+      }
       const [ left, right ] = args;
       // `=` is, worst case RDFterm-equal/ sameValue -- which raises a type error when *both* of its arguments
       // are literals, and of different types. But, for IRIs, if not sameTerm, then false.
-      if (args.length === 2 && (isIriExpression(left) || isIriExpression(right))) {
-        return constantFoldOperator(c, 'sameterm', [ left, right ]);
+      if (isIriExpression(left) || isIriExpression(right)) {
+        return constantFoldOperator(c, 'sameterm', args);
       }
-      // TODO: I think we have done this somewhere else to... (repetition)
-      if (args.length === 2 &&
-                left.subType === Algebra.ExpressionTypes.TERM && isAssertableTerm(left.term) &&
-                right.subType === Algebra.ExpressionTypes.TERM && isAssertableTerm(right.term) &&
-                left.term.equals(right.term)) {
-        return createBooleanExpression(c, true);
+      // Everywhere else only the *positive* answer of `sameTerm` carries over: identical terms are
+      // equal, but distinct ones may be equal by value, or raise the type error `sameTerm` never does.
+      const identical = constantFoldOperator(c, 'sameterm', args);
+      if (booleanConstantOf(identical) === true) {
+        return identical;
       }
       break;
     }

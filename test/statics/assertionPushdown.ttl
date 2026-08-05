@@ -6,6 +6,10 @@ PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 :a :p :shared .
 :b :q :shared .
 
+# Reached only through `:r`, which is what the operand a demoted (weak) assertion travels into joins
+# with: the solutions that leave `?x` unbound have to survive that demotion.
+:a :r :rd .
+
 # Two intermediate witnesses for the same pair, so `:a :step/:onwards :end` has multiplicity two.
 :a :step :m1 , :m2 .
 :m1 :onwards :end .

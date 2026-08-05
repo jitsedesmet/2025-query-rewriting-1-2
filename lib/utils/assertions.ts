@@ -1,8 +1,7 @@
 import type * as RDF from '@rdfjs/types';
-import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
+import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { TransformContext } from '../transformContext.js';
 import type { CPMeta } from './certainlyBoundVars.js';
-import { withoutCpVars } from './certainlyBoundVars.js';
 import { booleanConstantOf, conjunctionOf, sameTermExpression, splitConjunction } from './expressionHelpers.js';
 import { substituteInExpression } from './partialExpressionEvaluation.js';
 import { DF } from './rdfDatatypes.js';
@@ -11,8 +10,9 @@ import { DF } from './rdfDatatypes.js';
  * @fileoverview The assertion (`FILTER(sameTerm(?x, c))`) toolbox: recognizing the assertions a filter
  * condition carries, building them, and substituting them into expressions and patterns.
  *
- * Used by {@link pushDownAssertions}; kept separate from the traversal so that the expression level
- * reasoning (which is where the SPARQL subtleties are) can be read and tested on its own.
+ * Both forms live here - the strong A⟨?x ≡ c⟩ and the weak W⟨?x ≡ c⟩ ≔ `!bound(?x) || sameTerm(?x, c)`
+ * - and a filter condition is read for both at once, into the single {@link AssertionConjunction} the
+ * pushdown moves around.
  */
 
 /**
@@ -21,22 +21,105 @@ import { DF } from './rdfDatatypes.js';
  *
  * A variable never maps to two terms - a condition asserting one is contradictory and yields the empty
  * result instead of an entry in this map.
+ *
+ * This is the *substitutable* form: the map every `substituteIn...` helper takes, and the reason the
+ * weak assertions of an {@link AssertionConjunction} are kept out of it. See {@link strongTermsOf}.
  */
 export type Assertions = ReadonlyMap<string, RDF.Term>;
+
+/**
+ * One assertion about one variable, in one of the three forms this pass moves around.
+ *
+ * - `strong` is A⟨?x ≡ c⟩ ≔ `sameTerm(?x, c)`, which implies `bound(?x)`.
+ * - `weak` is W⟨?x ≡ c⟩ ≔ `!bound(?x) || sameTerm(?x, c)`, which does not - it is what survives a move
+ *   into a place that may leave the variable unbound (the right hand side of a MINUS, the unlicensed
+ *   operand of a join).
+ * - `unbound` is U⟨?x⟩ ≔ `!bound(?x)`, which says the variable is bound to nothing at all.
+ *
+ * The third one is not a stylistic addition: it is what the conjunction of two *different* weak
+ * assertions about one variable is. `(¬b ∨ ?x ≡ c) ∧ (¬b ∨ ?x ≡ d)` distributes to
+ * `¬b ∨ (?x ≡ c ∧ ?x ≡ d)`, and for `c ≠ d` the right disjunct is false, leaving exactly `¬b`. Without
+ * this form {@link mergeAssertion} would have nowhere to put that - the fact has no term - and the
+ * second conjunct would have to be left behind as a residual, taking its emptiness rule with it. It
+ * happens to be the SPARQL negation idiom (`OPTIONAL { … } FILTER(!bound(?x))`) as well, so it is the
+ * form assertions most often *start* in.
+ *
+ * Only the strong form may be substituted into a pattern: the other two do not say the variable is
+ * bound to the term, only what it is not bound to.
+ */
+interface BaseAssertion {
+  type: 'assertion';
+  subType: string;
+}
+interface StrongAssertion<T extends RDF.Term = RDF.Term> extends BaseAssertion {
+  subType: 'strong';
+  term: T;
+}
+export interface WeakAssertion<T extends RDF.Term = RDF.Term> extends BaseAssertion {
+  subType: 'weak';
+  term: T;
+}
+export interface UnboundAssertion extends BaseAssertion {
+  subType: 'unbound';
+}
+export type Assertion = StrongAssertion | WeakAssertion | UnboundAssertion;
+
+export function assertStrong<T extends RDF.Term>(term: T): StrongAssertion<T> {
+  return {
+    type: 'assertion',
+    subType: 'strong',
+    term,
+  };
+}
+export function assertWeak<T extends RDF.Term>(term: T): WeakAssertion<T> {
+  return {
+    type: 'assertion',
+    subType: 'weak',
+    term,
+  };
+}
+export function assertUnbound(): UnboundAssertion {
+  return {
+    type: 'assertion',
+    subType: 'unbound',
+  };
+}
+
+/**
+ * The conjunction of assertions that travels through the plan: one entry per variable. A variable never
+ * has two entries - {@link mergeAssertion} merges a second assertion about it into the first, and with
+ * `unbound` available it can always do so.
+ */
+export type AssertionConjunction = ReadonlyMap<string, Assertion>;
+
+/**
+ * The strong assertions of a conjunction, in the form the substitution helpers take.
+ *
+ * Dropping the other two is the whole point: substituting `c` for `?x` under W⟨?x ≡ c⟩ would claim
+ * `?x` is bound, and folding `bound(?x)` to `true` under it would be plainly wrong.
+ *
+ * @param assertions - The conjunction to take the strong part of
+ * @returns The variable to term map of its strong assertions
+ */
+export function strongTermsOf(assertions: AssertionConjunction): Assertions {
+  return new Map([ ...assertions ]
+    .filter(([ , assertion ]) => assertion.subType === 'strong')
+    .map(([ name, assertion ]) => [ name, (<{ term: RDF.Term }> assertion).term ]));
+}
 
 /**
  * What the top level conjunction of a filter condition says about single variables, cached on the filter
  * the way {@link CPMeta} is cached on any operation.
  *
- * This is the state the pushdown threads through the plan: the conjunction of `sameTerm` assertions that
- * still holds at the point the filter sits at, plus whatever is left of the condition it came from.
+ * This is the state the pushdown threads through the plan: the conjunction of assertions that still
+ * holds at the point the filter sits at, plus whatever is left of the condition it came from.
  */
-export interface SameTermConjunctionMeta {
+export interface AssertionConjunctionMeta {
   /** The assertions (θ) the top level conjunction carries, keyed by variable name. */
-  assertions: Assertions;
+  assertions: AssertionConjunction;
   /**
-   * What is left of the condition once the assertions are taken out of it, with θ substituted into it
-   * (FReord), or `undefined` when the assertions are all there was.
+   * What is left of the condition once the assertions are taken out of it, with the strong ones
+   * substituted into it (FReord), or `undefined` when the assertions are all there was.
    */
   residual: Algebra.Expression | undefined;
   /**
@@ -47,12 +130,12 @@ export interface SameTermConjunctionMeta {
 }
 
 /** A filter of which we know what its top level conjunction says about single variables. */
-export type SameTermFilter = Algebra.Filter & {
-  metadata: Partial<CPMeta> & { sameTerms: SameTermConjunctionMeta };
+export type AssertionFilter = Algebra.Filter & {
+  metadata: Partial<CPMeta> & { assertions: AssertionConjunctionMeta };
 };
 
 /**
- * Attaches - or reuses - the {@link SameTermConjunctionMeta} of a filter.
+ * Attaches - or reuses - the {@link AssertionConjunctionMeta} of a filter.
  *
  * Like {@link withCpVars}, this is dynamic programming rather than a computation: a filter this pass
  * created knows its own assertions already, and one it meets in the input tree is analysed once and
@@ -60,84 +143,41 @@ export type SameTermFilter = Algebra.Filter & {
  *
  * @param c - The transformation context
  * @param filter - The filter to analyse
- * @returns The same filter, with its `sameTerms` metadata guaranteed to be present
+ * @returns The same filter, with its `assertions` metadata guaranteed to be present
  */
-export function withSameTermConjunction(c: TransformContext, filter: Algebra.Filter): SameTermFilter {
-  const casted = <Algebra.Filter & { metadata?: Partial<SameTermFilter['metadata']> }> filter;
-  const known = casted.metadata?.sameTerms;
+export function withAssertionConjunction(c: TransformContext, filter: Algebra.Filter): AssertionFilter {
+  const casted = <Algebra.Filter & { metadata?: Partial<AssertionFilter['metadata']> }> filter;
+  const known = casted.metadata?.assertions;
   if (known === undefined) {
     const collected = collectAssertions(c, filter.expression);
     casted.metadata ??= {};
-    casted.metadata.sameTerms = collected ?? {
+    casted.metadata.assertions = collected ?? {
       assertions: new Map(),
       residual: undefined,
       contradictory: true,
     };
   }
-  return <SameTermFilter> casted;
+  return <AssertionFilter> casted;
 }
 
 /**
  * Guard recognizing the filters this pass is about: the ones whose top level conjunction fixes at least
- * one variable to one term, and the contradictory ones (which are the empty operation).
+ * one variable to one term - strongly or weakly - and the contradictory ones (which are the empty
+ * operation).
  *
  * Fails fast on anything else - a filter carrying no assertion is left where it is, and the traversal
  * simply keeps descending into it looking for the ones deeper down.
  *
  * @param c - The transformation context
  * @param op - The operation to inspect
- * @returns Whether the operation is a filter carrying assertions, narrowing it to {@link SameTermFilter}
+ * @returns Whether the operation is a filter carrying assertions, narrowing it to {@link AssertionFilter}
  */
-export function isSameTermFilter(c: TransformContext, op: Algebra.Operation): op is SameTermFilter {
+export function isAssertionFilter(c: TransformContext, op: Algebra.Operation): op is AssertionFilter {
   if (op.type !== Algebra.Types.FILTER) {
     return false;
   }
-  const { sameTerms } = withSameTermConjunction(c, op).metadata;
-  return sameTerms.contradictory || sameTerms.assertions.size > 0;
-}
-
-/** What the top level conjunction of a filter says in the *weak* form W⟨?x ≡ c⟩. */
-export interface WeakSameTermConjunctionMeta {
-  /** The weak assertions the top level conjunction carries, keyed by variable name. */
-  assertions: Assertions;
-  /** What is left of the condition once they are taken out of it. */
-  residual: Algebra.Expression | undefined;
-}
-
-/** A filter of which we know which weak assertions its top level conjunction carries. */
-export type WeakSameTermFilter = Algebra.Filter & {
-  metadata: Partial<CPMeta> & { weakSameTerms: WeakSameTermConjunctionMeta };
-};
-
-/**
- * Attaches - or reuses - the {@link WeakSameTermConjunctionMeta} of a filter,
- * the weak counterpart of {@link withSameTermConjunction}.
- *
- * @param c - The transformation context
- * @param filter - The filter to analyse
- * @returns The same filter, with its `weakSameTerms` metadata guaranteed to be present
- */
-export function withWeakSameTermConjunction(c: TransformContext, filter: Algebra.Filter): WeakSameTermFilter {
-  const casted = <Algebra.Filter & { metadata?: Partial<WeakSameTermFilter['metadata']> }> filter;
-  if (casted.metadata?.weakSameTerms === undefined) {
-    const collected = collectWeakAssertions(c, filter.expression);
-    casted.metadata ??= {};
-    casted.metadata.weakSameTerms = collected;
-  }
-  return <WeakSameTermFilter> casted;
-}
-
-/**
- * Guard recognizing a filter whose top level conjunction carries at least one weak assertion
- * W⟨?x ≡ c⟩ (`!bound(?x) || sameTerm(?x, c)`).
- *
- * @param c - The transformation context
- * @param op - The operation to inspect
- * @returns Whether it is such a filter, narrowing it to {@link WeakSameTermFilter}
- */
-export function isWeakSameTermFilter(c: TransformContext, op: Algebra.Operation): op is WeakSameTermFilter {
-  return op.type === Algebra.Types.FILTER &&
-    withWeakSameTermConjunction(c, op).metadata.weakSameTerms.assertions.size > 0;
+  const { assertions } = withAssertionConjunction(c, op).metadata;
+  return assertions.contradictory || assertions.assertions.size > 0;
 }
 
 /**
@@ -165,21 +205,20 @@ export function isAssertableTerm(term: RDF.Term): boolean {
  * @param expression - The conjunct to inspect
  * @returns The asserted variable and term, or `undefined` when the conjunct is not an assertion
  */
-export function asAssertion(expression: Algebra.Expression): { name: string; term: RDF.Term } | undefined {
-  if (expression.subType !== Algebra.ExpressionTypes.OPERATOR ||
-    expression.operator !== 'sameterm' ||
-    expression.args.length !== 2) {
-    return undefined;
-  }
-  const [ left, right ] = expression.args;
-  if (left.subType !== Algebra.ExpressionTypes.TERM || right.subType !== Algebra.ExpressionTypes.TERM) {
-    return undefined;
-  }
-  if (left.term.termType === 'Variable' && isAssertableTerm(right.term)) {
-    return { name: left.term.value, term: right.term };
-  }
-  if (right.term.termType === 'Variable' && isAssertableTerm(left.term)) {
-    return { name: right.term.value, term: left.term };
+export function asStrongAssertion(expression: Algebra.Expression):
+    { name: string; assertion: StrongAssertion } | undefined {
+  if (expression.subType === Algebra.ExpressionTypes.OPERATOR &&
+    expression.operator === 'sameterm' &&
+    expression.args.length === 2) {
+    const [ left, right ] = expression.args;
+    if (left.subType === 'term' && right.subType === 'term') {
+      if (left.term.termType === 'Variable' && isAssertableTerm(right.term)) {
+        return { name: left.term.value, assertion: assertStrong(right.term) };
+      }
+      if (right.term.termType === 'Variable' && isAssertableTerm(left.term)) {
+        return { name: right.term.value, assertion: assertStrong(left.term) };
+      }
+    }
   }
   return undefined;
 }
@@ -190,69 +229,91 @@ export function asAssertion(expression: Algebra.Expression): { name: string; ter
  * @param expression - The conjunct to inspect
  * @returns The variable and term of the weak assertion, or `undefined` when it is not one
  */
-export function asWeakAssertion(expression: Algebra.Expression): { name: string; term: RDF.Term } | undefined {
-  if (expression.subType !== Algebra.ExpressionTypes.OPERATOR ||
-    expression.operator !== '||' ||
-    expression.args.length !== 2) {
-    return undefined;
-  }
-  const unbound = expression.args.map(arg => variableOfNotBound(arg));
-  for (const [ index, name ] of unbound.entries()) {
-    if (name === undefined) {
-      continue;
-    }
-    const assertion = asAssertion(expression.args[index === 0 ? 1 : 0]);
-    if (assertion !== undefined && assertion.name === name) {
-      return assertion;
+export function asWeakAssertion(expression: Algebra.Expression):
+    { name: string; assertion: WeakAssertion } | undefined {
+  if (expression.subType === Algebra.ExpressionTypes.OPERATOR &&
+    expression.operator === '||' && expression.args.length === 2) {
+    for (const [ index, arg ] of expression.args.entries()) {
+      const bound = variableOfNotBound(arg);
+      if (bound !== undefined) {
+        const assertion = asStrongAssertion(expression.args[index === 0 ? 1 : 0]);
+        if (assertion !== undefined && assertion.name === bound) {
+          return { name: bound, assertion: assertWeak(assertion.assertion.term) };
+        }
+      }
     }
   }
   return undefined;
 }
 
+/**
+ * Recognizes the assertion a single conjunct carries, in whichever of the three forms it is written.
+ *
+ * @param expression - The conjunct to inspect
+ * @returns The variable it is about and what it says, or `undefined` when it is not an assertion
+ */
+export function assertionOf(expression: Algebra.Expression): { name: string; assertion: Assertion } | undefined {
+  const strong = asStrongAssertion(expression);
+  if (strong !== undefined) {
+    return strong;
+  }
+  const weak = asWeakAssertion(expression);
+  if (weak !== undefined) {
+    return weak;
+  }
+  const unbound = variableOfNotBound(expression);
+  return unbound === undefined ? undefined : { name: unbound, assertion: assertUnbound() };
+}
+
 /** The variable of a `!bound(?x)` expression, if that is what it is. */
 function variableOfNotBound(expression: Algebra.Expression): string | undefined {
-  if (expression.subType !== Algebra.ExpressionTypes.OPERATOR ||
-    expression.operator !== '!' ||
-    expression.args.length !== 1) {
-    return undefined;
+  if (expression.subType === Algebra.ExpressionTypes.OPERATOR && expression.operator === '!' &&
+    expression.args.length === 1) {
+    const [ bound ] = expression.args;
+    if (bound.subType === Algebra.ExpressionTypes.OPERATOR && bound.operator === 'bound' && bound.args.length === 1) {
+      const [ argument ] = bound.args;
+      if (argument.subType === Algebra.ExpressionTypes.TERM && argument.term.termType === 'Variable') {
+        return argument.term.value;
+      }
+    }
   }
-  const [ bound ] = expression.args;
-  if (bound.subType !== Algebra.ExpressionTypes.OPERATOR ||
-    bound.operator !== 'bound' ||
-    bound.args.length !== 1) {
-    return undefined;
-  }
-  const [ argument ] = bound.args;
-  return argument.subType === Algebra.ExpressionTypes.TERM && argument.term.termType === 'Variable' ?
-    argument.term.value :
-    undefined;
+  return undefined;
 }
 
 /**
- * Splits the top level conjunction of a filter condition into the *weak* assertions it carries and what
- * is left of it. The dual of {@link collectAssertions} for W⟨?x ≡ c⟩.
+ * Merges a newly met assertion about a variable into what is already known about it.
  *
- * @param c - The transformation context
- * @param expression - The filter condition to split
- * @returns The weak assertions and the residual condition (`undefined` when nothing is left)
+ * With all three forms available this is total:
+ * every conjunction of assertions about one variable is again an assertion about that variable, or it is unsatisfiable.
+ *
+ * - Same term: `A ∧ W ≡ A`, so meeting the weak form of something known strongly changes nothing,
+ *      and meeting the strong form of something known weakly *promotes* it.
+ * - Different terms, one of them strong: a contradiction - `?x` cannot be `c` and also be either unbound or `d`.
+ * - Different terms, both weak: `U⟨?x⟩`. This is the case the third form exists for.
+ * - Anything against `U⟨?x⟩`: it absorbs the weak form (`¬b ∧ (¬b ∨ …) ≡ ¬b`)
+ *     and contradicts the strong one, which implies `bound(?x)`.
+ *
+ * @param previous - What is already known about the variable, if anything
+ * @param next - The assertion just met
+ * @returns The merged assertion, or undefined when nothing satisfies both
  */
-export function collectWeakAssertions(
-  c: TransformContext,
-  expression: Algebra.Expression,
-): { assertions: Assertions; residual: Algebra.Expression | undefined } {
-  const assertions = new Map<string, RDF.Term>();
-  const residual: Algebra.Expression[] = [];
-  for (const conjunct of splitConjunction(expression)) {
-    const assertion = asWeakAssertion(conjunct);
-    // Two weak assertions on one variable are not contradictory: an unbound ?x satisfies both, so the
-    // second one has to stay in the residual rather than replace the first.
-    if (assertion === undefined || assertions.has(assertion.name)) {
-      residual.push(conjunct);
-    } else {
-      assertions.set(assertion.name, assertion.term);
-    }
+export function mergeAssertion(
+  previous: Assertion | undefined,
+  next: Assertion,
+): Assertion | undefined {
+  if (previous === undefined) {
+    return next;
   }
-  return { assertions, residual: residual.length === 0 ? undefined : conjunctionOf(c, residual) };
+  if (previous.subType === 'unbound' || next.subType === 'unbound') {
+    // Cannot be both asserted unbound and strongly asserted
+    return previous.subType === 'strong' || next.subType === 'strong' ? undefined : assertUnbound();
+  }
+  if (previous.term.equals(next.term)) {
+    return previous.subType === 'strong' || next.subType === 'strong' ?
+      assertStrong(previous.term) :
+      previous;
+  }
+  return previous.subType === 'strong' || next.subType === 'strong' ? undefined : assertUnbound();
 }
 
 /**
@@ -287,34 +348,47 @@ export function weakAssertionExpression(c: TransformContext, name: string, term:
 }
 
 /**
- * Creates the conjunction of the strong assertions in `assertions`.
+ * Creates the unbound assertion U⟨?x⟩: `!bound(?x)`.
+ * @param c - The transformation context
+ * @param name - The name of the variable that is bound to nothing
+ * @returns The unbound assertion expression
+ */
+export function unboundAssertionExpression(c: TransformContext, name: string): Algebra.Expression {
+  return c.AF.createOperatorExpression('!', [
+    c.AF.createOperatorExpression('bound', [ c.AF.createTermExpression(DF.variable(name)) ]),
+  ]);
+}
+
+/**
+ * Creates the conjunction the assertions stand for, each in the form it carries.
  * @param c - The transformation context
  * @param assertions - The (non-empty) assertions to build a condition for
  * @returns A single condition equivalent to all assertions holding
  */
-export function assertionsExpression(c: TransformContext, assertions: Assertions): Algebra.Expression {
-  return conjunctionOf(c, [ ...assertions ].map(([ name, term ]) => assertionExpression(c, name, term)));
+export function assertionsExpression(c: TransformContext, assertions: AssertionConjunction): Algebra.Expression {
+  return conjunctionOf(c, [ ...assertions ].map(([ name, assertion ]) => {
+    if (assertion.subType === 'unbound') {
+      return unboundAssertionExpression(c, name);
+    }
+    return assertion.subType === 'strong' ?
+      assertionExpression(c, name, assertion.term) :
+      weakAssertionExpression(c, name, assertion.term);
+  }));
 }
 
 /**
- * Creates the conjunction of the weak assertions in `assertions`.
- * @param c - The transformation context
- * @param assertions - The (non-empty) assertions to build a condition for
- * @returns A single condition equivalent to all weak assertions holding
- */
-export function weakAssertionsExpression(c: TransformContext, assertions: Assertions): Algebra.Expression {
-  return conjunctionOf(c, [ ...assertions ].map(([ name, term ]) => weakAssertionExpression(c, name, term)));
-}
-
-/**
- * Splits a filter condition into the assertions it carries and what is left of it.
+ * Splits a filter condition into the assertions it carries - in either form - and what is left of it.
  *
- * The leftovers have the assertions substituted into them, per (FReord):
+ * The leftovers have the *strong* assertions substituted into them, per (FReord):
  * `σ_R(A) == σ_{simplify(R[θ])}(σ_θ(A))`. Substituting can turn a leftover into an assertion of its
  * own - `sameTerm(?y, ?x)` becomes `sameTerm(?y, c)` - so this repeats until no new assertion appears,
  * making assertions propagate through equalities between variables.
  * We do this both here and in Extend push up since,
  * doing it here ensures we do all we can in one pass and do not need many passes, including generating filter-false.
+ *
+ * Meeting an assertion already known is what merges a travelling conjunction with the filters it
+ * passes, and what makes the pass idempotent: re-running it re-derives the same conjunction and
+ * absorbs it rather than stacking a second copy. See {@link mergeAssertion}.
  *
  * @param c - The transformation context
  * @param expression - The filter condition to split
@@ -325,11 +399,11 @@ export function weakAssertionsExpression(c: TransformContext, assertions: Assert
 export function collectAssertions(
   c: TransformContext,
   expression: Algebra.Expression,
-  known: Assertions = new Map(),
-): { assertions: Assertions; residual: Algebra.Expression | undefined; contradictory: false } | undefined {
+  known: AssertionConjunction = new Map(),
+): AssertionConjunctionMeta | undefined {
   // Make copy and perform substitution
   const assertions = new Map(known);
-  let conjuncts = splitConjunction(substituteInExpression(c, expression, assertions));
+  let conjuncts = splitConjunction(substituteInExpression(c, expression, strongTermsOf(assertions)));
 
   let learned = true;
   let residual: Algebra.Expression[] = [];
@@ -347,25 +421,28 @@ export function collectAssertions(
         // Conjunct does not add anything
         continue;
       }
-      const assertion = asAssertion(conjunct);
-      if (assertion === undefined) {
+      // Each form has its own top level operator, so at most one of these recognizes a conjunct.
+      const met = assertionOf(conjunct);
+      if (met === undefined) {
         residual.push(conjunct);
         continue;
       }
       // Check what we already know about this var.
-      const previous = assertions.get(assertion.name);
-      if (previous === undefined) {
-        assertions.set(assertion.name, assertion.term);
-        learned = true;
-      } else if (!previous.equals(assertion.term)) {
-        // One variable cannot be two distinct terms at once.
+      const previous = assertions.get(met.name);
+      const merged = mergeAssertion(previous, met.assertion);
+      // Shortcut contradictions
+      if (merged === undefined) {
         return undefined;
       }
+      assertions.set(met.name, merged);
+      // Only a strong assertion we did not have yet changes what can be substituted below.
+      learned ||= merged.subType === 'strong' && previous?.subType !== 'strong';
     }
 
     if (learned) {
       // What we just learned may collapse a leftover into an assertion, so go around once more.
-      conjuncts = residual.flatMap(conjunct => splitConjunction(substituteInExpression(c, conjunct, assertions)));
+      const strongTerms = strongTermsOf(assertions);
+      conjuncts = residual.flatMap(conjunct => splitConjunction(substituteInExpression(c, conjunct, strongTerms)));
     }
   }
   return {
@@ -373,111 +450,6 @@ export function collectAssertions(
     residual: residual.length === 0 ? undefined : conjunctionOf(c, residual),
     contradictory: false,
   };
-}
-
-/**
- * Substitutes assertions into a graph pattern, the way SPARQL's `substitute()` inlines a solution
- * mapping into the pattern of an `EXISTS`.
- *
- * Only *free* occurrences are replaced: a variable the pattern assigns to itself (a BIND, a VALUES
- * column, a GROUP BY key, an aggregate target or a subquery projection) is left alone. Substituting
- * those would produce an illegal pattern, and skipping a substitution is always sound.
- *
- * @param c - The transformation context
- * @param op - The pattern to substitute into
- * @param assertions - The assertions to substitute (θ)
- * @returns The pattern with the asserted variables replaced by their terms
- */
-export function substituteAssertedVariables(
-  c: TransformContext,
-  op: Algebra.Operation,
-  assertions: Assertions,
-): Algebra.Operation {
-  const assigned = variablesAssignedIn(op);
-  const free = new Map([ ...assertions ].filter(([ name ]) => !assigned.has(name)));
-  if (free.size === 0) {
-    return op;
-  }
-  // The substitution rewrites the pattern, so whatever `withCpVars` cached about it no longer describes
-  // it - and a cached set does not survive the generic traversal below to begin with.
-  const target = withoutCpVars(op);
-  const { AF } = c;
-  const subExpr = (expression: Algebra.Expression): Algebra.Expression =>
-    substituteInExpression(c, expression, free);
-
-  return algebraUtils.mapOperation<'unsafe', Algebra.Operation>(target, {
-    [Algebra.Types.BGP]: { transform: bgp => AF.createBgp(
-      // A term that cannot occupy the position it lands in leaves the pattern alone: the pattern
-      // matching nothing is expressed by this pass at the operation level, not inside an EXISTS.
-      bgp.patterns.map(pattern => substituteInPattern(c, pattern, free) ?? pattern),
-    ) },
-    [Algebra.Types.PATH]: { transform: path => AF.createPath(
-      substituteInTerm(path.subject, free, 'object') ?? path.subject,
-      path.predicate,
-      substituteInTerm(path.object, free, 'object') ?? path.object,
-      substituteInTerm(path.graph, free, 'graph') ?? path.graph,
-    ) },
-    [Algebra.Types.GRAPH]: { transform: (graph) => {
-      const name = graph.name.termType === 'Variable' ? free.get(graph.name.value) : undefined;
-      return name?.termType === 'NamedNode' ? AF.createGraph(graph.input, name) : graph;
-    } },
-    [Algebra.Types.SERVICE]: { transform: (service) => {
-      const name = service.name.termType === 'Variable' ? free.get(service.name.value) : undefined;
-      return name?.termType === 'NamedNode' ?
-        AF.createService(service.input, name, service.silent) :
-        service;
-    } },
-    [Algebra.Types.FILTER]: {
-      preVisitor: () => ({ ignoreKeys: new Set([ 'expression' ]) }),
-      transform: filter => AF.createFilter(filter.input, subExpr(filter.expression)),
-    },
-    [Algebra.Types.EXTEND]: {
-      preVisitor: () => ({ ignoreKeys: new Set([ 'expression', 'variable' ]) }),
-      transform: extend => AF.createExtend(extend.input, extend.variable, subExpr(extend.expression)),
-    },
-    [Algebra.Types.ORDER_BY]: {
-      preVisitor: () => ({ ignoreKeys: new Set([ 'expressions' ]) }),
-      transform: orderBy => AF.createOrderBy(orderBy.input, orderBy.expressions.map(subExpr)),
-    },
-    [Algebra.Types.GROUP]: {
-      preVisitor: () => ({ ignoreKeys: new Set([ 'aggregates', 'variables' ]) }),
-      transform: group => AF.createGroup(
-        group.input,
-        group.variables,
-        group.aggregates.map(aggregate => ({ ...aggregate, expression: subExpr(aggregate.expression) })),
-      ),
-    },
-  });
-}
-
-/**
- * Collects the variables an operation assigns to itself, rather than reads: BIND targets, VALUES
- * columns, GROUP BY keys, aggregate targets and projected variables.
- */
-function variablesAssignedIn(op: Algebra.Operation): Set<string> {
-  const names = new Set<string>();
-  algebraUtils.visitOperation(op, {
-    [Algebra.Types.EXTEND]: { visitor: extend => names.add(extend.variable.value) },
-    [Algebra.Types.VALUES]: { visitor: (values) => {
-      for (const variable of values.variables) {
-        names.add(variable.value);
-      }
-    } },
-    [Algebra.Types.PROJECT]: { visitor: (project) => {
-      for (const variable of project.variables) {
-        names.add(variable.value);
-      }
-    } },
-    [Algebra.Types.GROUP]: { visitor: (group) => {
-      for (const variable of group.variables) {
-        names.add(variable.value);
-      }
-      for (const aggregate of group.aggregates) {
-        names.add(aggregate.variable.value);
-      }
-    } },
-  });
-  return names;
 }
 
 /** The position a term takes in a quad pattern, which decides what kind of term may occupy it. */

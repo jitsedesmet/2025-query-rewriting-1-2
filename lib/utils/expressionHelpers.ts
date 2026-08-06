@@ -43,7 +43,7 @@ export function createBooleanExpression(c: TransformContext, value: boolean): Al
   return c.AF.createTermExpression(value ? termTrue : termFalse);
 }
 
-export function isStaticExpression(c: TransformContext, expression: Algebra.Expression[]): boolean {
+export function isStaticExpression(c: TransformContext, expression: Algebra.Expression): boolean {
   // TODO: when you have operations like `&&` or `||` you could shortcut potentially on if one branch is static.
   let isStatic = true;
   const neverStatic = { preVisitor: () => {

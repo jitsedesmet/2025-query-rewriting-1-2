@@ -2,6 +2,9 @@ import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformContext } from '../transformContext.js';
 
+/**
+ * Transforms binds around the empty BGP or around a VALUES to be a VALUES itself.
+ */
 export function transformExtendsToValues(c: TransformContext, op: Algebra.Operation): Algebra.Operation {
   const { AF } = c;
   function transformExtend(op: Algebra.Extend): Algebra.Extend | Algebra.Values {

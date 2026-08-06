@@ -47,12 +47,12 @@
     "test": "vitest test --run"
   },
   "dependencies": {
-    "@traqula/algebra-sparql-1-2": "^1.0.4",
-    "@traqula/algebra-transformations-1-2": "^1.0.4",
-    "@traqula/core": "^1.0.3",
-    "@traqula/generator-sparql-1-2": "^1.0.4",
-    "@traqula/parser-sparql-1-2": "^1.0.4",
-    "@traqula/rules-sparql-1-2": "^1.0.4",
+    "@traqula/algebra-sparql-1-2": "^1.2.0",
+    "@traqula/algebra-transformations-1-2": "^1.2.0",
+    "@traqula/core": "^1.2.0",
+    "@traqula/generator-sparql-1-2": "^1.2.0",
+    "@traqula/parser-sparql-1-2": "^1.2.0",
+    "@traqula/rules-sparql-1-2": "^1.2.0",
     "rdf-data-factory": "^2.0.2"
   },
   "devDependencies": {

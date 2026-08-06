@@ -6,6 +6,7 @@ import type {
   AssertionConjunction,
   AssertionFilter,
   Assertions,
+  StrongAssertion,
 } from '../utils/assertions.js';
 import {
   assertionsExpression,
@@ -151,8 +152,7 @@ function normalise(assertions: AssertionConjunction, op: Algebra.Operation): Map
       if (assertion.subType === 'unbound') {
         return undefined;
       }
-      // B⟨?x⟩ holds of every solution here, so it says nothing and travels no further. What it *could*
-      // still do below - promote a weak assertion - it has already done in the conjunction it is part of.
+      // B⟨?x⟩ holds of every solution here.
       if (assertion.subType !== 'bound') {
         normalised.set(name, assertStrong(assertion.term));
       }
@@ -512,10 +512,8 @@ function pushIntoGraph(
   if (graphVar === undefined) {
     return keep(AF.createGraph(assertionFilter(c, graph.input, assertions), graphName));
   }
-  // A GRAPH binds its variable certainly, so normalisation has already turned anything asserted about it
-  // into the strong form, emptied the plan (U⟨?g⟩), or dropped it (B⟨?g⟩, which holds of every solution).
-  const assertedGraphName = assertions.get(graphVar);
-  if (assertedGraphName?.subType !== 'strong') {
+  // If something is asserted about the var, we know it is a Strong assertion. Other cases would already be handled.
+  if (assertions.get(graphVar) === undefined) {
     return keep(assertionFilter(
       c,
       AF.createGraph(
@@ -525,6 +523,7 @@ function pushIntoGraph(
       restrict(assertions, name => name === graphVar),
     ));
   }
+  const assertedGraphName = <StrongAssertion> assertions.get(graphVar);
   if (assertedGraphName.term.termType !== 'NamedNode') {
     return empty(c, graph);
   }
@@ -602,6 +601,7 @@ function pushIntoJoin(
         placedStrongly = true;
       } else if (operands[index].pVars.has(name)) {
         const demoted = weakened(assertion);
+        // Bound assertion knows no weak form and cannot be pushed
         if (demoted !== undefined) {
           operandAssertions[index].set(name, demoted);
         }

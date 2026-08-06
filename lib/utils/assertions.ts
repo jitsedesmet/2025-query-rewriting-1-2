@@ -344,16 +344,21 @@ export function unboundAssertionExpression(c: TransformContext, name: string): A
 
 /** Creates the single condition the (non-empty) assertions stand for, each in the form it carries. */
 export function assertionsExpression(c: TransformContext, assertions: AssertionConjunction): Algebra.Expression {
+  // eslint-disable-next-line array-callback-return
   return conjunctionOf(c, [ ...assertions ].map(([ name, assertion ]) => {
     switch (assertion.subType) {
-      case 'unbound':
+      case 'unbound': {
         return unboundAssertionExpression(c, name);
-      case 'bound':
+      }
+      case 'bound': {
         return boundAssertionExpression(c, name);
-      case 'strong':
+      }
+      case 'strong': {
         return assertionExpression(c, name, assertion.term);
-      default:
+      }
+      case 'weak': {
         return weakAssertionExpression(c, name, assertion.term);
+      }
     }
   }));
 }

@@ -12,10 +12,12 @@ SELECT * {
 Can be optimized to:
 ```sparql
 SELECT * {
-  ?s ?p ?s .
-  BIND(?s AS ?o) .
+  ?o ?p ?o .
+  BIND(?o AS ?s) .
 }
 ```
+(the representative of a unified cluster is its lexicographically first variable, so `{?s, ?o}`
+unifies onto `?o`)
 
 Of course, this feature should interop with the term assertion. So if a unified group of variables gets asserted, this information would also travel down as such:  
 
@@ -32,7 +34,7 @@ becomes
 SELECT * {
   { <ex://x> ?p <ex://x> . BIND(<ex://x> AS ?s). BIND(<ex://x> AS ?o)}
   UNION
-  { ?s <ex://p> ?s . BIND(?s AS ?o) }
+  { ?o <ex://p> ?o . BIND(?o AS ?s) }
 }
 ```
 

@@ -103,15 +103,23 @@ export function impliesBound(assertion: Assertion): assertion is BoundAssertion 
   return assertion.subType === 'strong' || assertion.subType === 'bound';
 }
 
-/** Whether an assertion may fix a variable to this *ground* term, i.e. whether it pins a group to it. */
+/**
+ * Whether an assertion may fix a variable to this *ground* term, i.e. whether it pins a group to it.
+ *
+ * TODO: decide when a ground triple term can raise an evaluation error, and move this and the EXTEND case
+ * of {@link withCpVars} (`certainlyBoundVars.ts`) together when it does. The two make the same
+ * call from opposite sides, and today only one of them makes it: that case treats a triple-term expression
+ * as *not* certainly binding its target, since constructing one may error, while this pass discharges an
+ * assertion on a BIND target as soon as the term is decided - `BIND(e AS ?t)` under A⟨?t ≡ c⟩ becomes
+ * `Extend(σ_{sameTerm(e,c)}(A), ?t, c)`, whose `σ` folds away for a decided `e`, keeping the rows where the
+ * construction errored and left `?t` unbound. Until that is settled the two agree by both refusing, which
+ * is the conservative direction for each: this one only gives up substituting a triple term into a
+ * pattern, which is out of scope anyway.
+ */
 export function isAssertableTerm(term: RDF.Term): boolean {
   // Blank nodes need no exclusion here: by the time this pass runs, the ones in a WHERE clause have
   // already been converted to variables, so no assertion can ever carry one.
-  // Simply check whether a variable appears in a quad.
-  if (term.termType === 'Quad') {
-    return [ term.subject, term.predicate, term.object, term.graph ].every(x => isAssertableTerm(x));
-  }
-  return term.termType !== 'Variable';
+  return term.termType !== 'Variable' && term.termType !== 'Quad';
 }
 
 /**

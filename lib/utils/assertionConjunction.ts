@@ -38,13 +38,13 @@ import { DF } from './rdfDatatypes.js';
 /**
  * A set of assertions Θ, in the five states an assertion about a variable can be in:
  *
- * | state                                  | means                            | serialised as                     |
- * |----------------------------------------|----------------------------------|-----------------------------------|
- * | strong member of a pinned group        | `sameTerm(?x, c)`                | `SAMETERM(?x, c)`                 |
+ * | state                                  | means                             | serialised as                     |
+ * |----------------------------------------|-----------------------------------|-----------------------------------|
+ * | strong member of a pinned group        | `sameTerm(?x, c)`                 | `SAMETERM(?x, c)`                 |
  * | weak member of a pinned group          | `!bound(?x) \|\| sameTerm(?x, c)` | `!BOUND(?x) \|\| SAMETERM(?x, c)` |
- * | member of an anchorless group (clique) | `sameTerm(?x, ?rep)`             | `SAMETERM(?x, ?rep)`              |
- * | unbound                                | `!bound(?x)`                     | `!BOUND(?x)`                      |
- * | bound                                  | `bound(?x)`, no term             | `BOUND(?x)`                       |
+ * | member of an anchorless group (clique) | `sameTerm(?x, ?rep)`              | `SAMETERM(?x, ?rep)`              |
+ * | unbound                                | `!bound(?x)`                      | `!BOUND(?x)`                      |
+ * | bound                                  | `bound(?x)`, no term              | `BOUND(?x)`                       |
  *
  * Nothing new is serialised: every row but the third is the form the previous per-variable conjunction
  * already used, and the third is the plain `sameTerm` between two variables the parser reads straight back

@@ -1646,6 +1646,36 @@ GROUP BY ?x?y`,
       );
     });
 
+    it('does not read a triple term as an assertion, since constructing one may error', ({ expect }) => {
+      // See the TODO on `isAssertableTerm`: this pass discharges an assertion as soon as its term is
+      // decided, while `withCpVars` holds that a triple-term expression need not bind its target at all.
+      // Until the two are settled they agree by both refusing, so the condition stays a plain filter.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?t :p ?w FILTER(sameTerm(?t, <<( :a :b :c )>>)) }',
+        `SELECT ?t ?w WHERE {
+  ?t <ex://p> ?w .
+  FILTER ( SAMETERM( ?t , <<( <ex://a> <ex://b> <ex://c> )>> ) )
+}`,
+      );
+    });
+
+    it('does not let a triple term BIND pin the clique of its target', ({ expect }) => {
+      // The unsound version of the rule above it: `?y ≡ <<( :a :b :c )>>` below would keep the rows where
+      // the construction errored, `?t` was left unbound, and `sameTerm(?t, ?y)` therefore errored too.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?y :p ?w BIND(<<( :a :b :c )>> AS ?t) FILTER(sameTerm(?t, ?y)) }',
+        `SELECT ?t ?w ?y WHERE {
+  {
+    ?y <ex://p> ?w .
+    BIND( <<( <ex://a> <ex://b> <ex://c> )>> AS ?t )
+  }
+  FILTER ( SAMETERM( ?y , ?t ) )
+}`,
+      );
+    });
+
     it('meets no blank node, because the parse turned them into variables', ({ expect }) => {
       // What lets `isAssertableTerm` admit a blank node - and so lets the constant folding decide
       // `sameTerm` between two of them. A blank node label in an expression would be a fresh label

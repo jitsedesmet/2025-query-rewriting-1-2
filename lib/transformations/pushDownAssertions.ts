@@ -6,13 +6,13 @@ import type {
   AssertionConjunction,
   AssertionFilter,
   Assertions,
-  StrongAssertion,
 } from '../utils/assertions.js';
 import {
   assertionsExpression,
   assertStrong,
   assertWeak,
   collectAssertions,
+  impliesBound,
   isAssertableTerm,
   isAssertionFilter,
   mergeAssertion,
@@ -46,10 +46,14 @@ import { substituteInExpression } from '../utils/partialExpressionEvaluation.js'
  *   against an IRI is the one exception - `=` only raises a type error when both arguments are literals,
  *   so against an IRI it *is* `sameTerm` - and it travels as an assertion.
  *
- * Assertions travel in three forms - strong, weak and unbound, see {@link Assertion} - all in the *same*
- * conjunction ({@link AssertionConjunction}) and handled by the same swap, since their rules differ per
- * operation rather than per pass, and one variable's assertion may be strong while another's is not.
+ * Assertions travel in four forms - strong, weak, unbound and bound, see {@link Assertion} - all in the
+ * *same* conjunction ({@link AssertionConjunction}) and handled by the same swap, since their rules differ
+ * per operation rather than per pass, and one variable's assertion may be strong while another's is not.
  * {@link normalise} converts between them at every step.
+ *
+ * The bound form, `FILTER(bound(?x))`, is the one that fixes no term. It moves for two reasons: it decides
+ * the same emptiness and structural rules the strong form does - which is what turns an OPTIONAL binding
+ * `?x` into a plain join - and it *completes* a weak assertion it meets on the way into a strong one.
  *
  * The pass is a pre-order traversal, so an assertion filter is handled *before* what is below it, and
  * each step only describes how the filter swaps places with the operation it sits on. The result of that
@@ -130,15 +134,16 @@ function pushAssertions(
  * Reads the conjunction in terms of what `op` binds - e.g. promoting a weak assertion over a cVar to a
  * strong one - or `undefined` when it makes `op` empty.
  *
- * Where `?x` is certainly bound, `!bound(?x)` is unsatisfiable, so W *is* A and U is empty; where `?x`
- * can never be bound, A is empty and W and U are simply `true`.
+ * Where `?x` is certainly bound, `!bound(?x)` is unsatisfiable, so W *is* A, B is `true` and U is empty;
+ * where `?x` can never be bound, A and B are empty and W and U are simply `true`.
  */
 function normalise(assertions: AssertionConjunction, op: Algebra.Operation): Map<string, Assertion> | undefined {
   const { cVars, pVars } = cpVars(op);
   const normalised = new Map<string, Assertion>();
   for (const [ name, assertion ] of assertions) {
     if (!pVars.has(name)) {
-      if (assertion.subType === 'strong') {
+      // (FBndII), which both of the forms implying `bound(?x)` trigger.
+      if (impliesBound(assertion)) {
         return undefined;
       }
       // Not in pvars and weak or undef -> nothing to assert
@@ -146,7 +151,11 @@ function normalise(assertions: AssertionConjunction, op: Algebra.Operation): Map
       if (assertion.subType === 'unbound') {
         return undefined;
       }
-      normalised.set(name, assertStrong(assertion.term));
+      // B⟨?x⟩ holds of every solution here, so it says nothing and travels no further. What it *could*
+      // still do below - promote a weak assertion - it has already done in the conjunction it is part of.
+      if (assertion.subType !== 'bound') {
+        normalised.set(name, assertStrong(assertion.term));
+      }
     } else {
       normalised.set(name, assertion);
     }
@@ -159,8 +168,8 @@ function normalise(assertions: AssertionConjunction, op: Algebra.Operation): Map
  *
  * Wherever the weak form is licensed, an assertion that cannot travel strongly is *demoted* rather than
  * left behind - that is the difference between reaching a BGP and stopping at the join above it. Only
- * where no form may pass does it stay on top. The unbound form has nothing below it to demote to, so it
- * either passes as itself or stays.
+ * where no form may pass does it stay on top. The unbound and bound forms have nothing below them to
+ * demote to, so they either pass as themselves or stay.
  */
 function swapWith(
   c: TransformContext,
@@ -176,12 +185,12 @@ function swapWith(
     case Algebra.Types.PATH: {
       return keep(substituteIntoPath(c, op, strongTermsOf(assertions)));
     }
-    // The one leaf where all three forms do real work, since a VALUES column may be UNDEF.
+    // The one leaf where all four forms do real work, since a VALUES column may be UNDEF.
     case Algebra.Types.VALUES: {
       return keep(pruneValues(c, op, assertions));
     }
 
-    // (FUPush) holds unconditionally for both forms - a solution of a union comes from exactly one
+    // (FUPush) holds unconditionally for every form - a solution of a union comes from exactly one
     // branch - so every branch gets the conjunction and keeps sinking on its own.
     case Algebra.Types.UNION: {
       return keep(AF.createUnion(op.input.map(branch => assertionFilter(c, branch, assertions)), false));
@@ -229,7 +238,8 @@ function swapWith(
     case Algebra.Types.GROUP: {
       // An assertion on a grouping key selects whole groups, which is the same as selecting the
       // solutions those groups are formed from - including, for the weak and unbound forms, the group
-      // the solutions leaving the key unbound form. Anything else has to stay above: filtering before
+      // the solutions leaving the key unbound form, which is exactly the group the strong and bound
+      // forms rule out. Anything else has to stay above: filtering before
       // the aggregation would change the aggregate. A key takes its `pVars` from the input, so an
       // unbound assertion pushed below still takes the variable out of scope, as it did on top.
       const groupsOn = new Set(op.variables.map(variable => variable.value));
@@ -319,30 +329,40 @@ function substituteIntoPath(c: TransformContext, path: Algebra.Path, assertions:
  */
 function pruneValues(c: TransformContext, values: Algebra.Values, assertions: AssertionConjunction): Algebra.Operation {
   const strongAssertions = strongTermsOf(assertions);
+  // The forms that require the row to provide a value at all, counted so that a row leaving one of them
+  // UNDEF - which a row expresses by not carrying the column - is pruned below.
+  const requiredBound = [ ...assertions ].filter(([ , assertion ]) => impliesBound(assertion)).length;
   const newBindings: Algebra.Values['bindings'] = [];
   for (const binding of values.bindings) {
     const newRow: typeof newBindings[0] = {};
     let isPruned = false;
-    let boundStrongAssertions = 0;
+    let metRequiredBound = 0;
     for (const [ variable, value ] of Object.entries(binding)) {
       const assertion = assertions.get(variable);
       if (assertion === undefined) {
         // We do not assert on this var
         newRow[variable] = value;
-      } else if ((assertion.subType === 'unbound' && value !== undefined) ||
-          (assertion.subType !== 'unbound' && !assertion.term.equals(value))) {
-        // The row binds a column that has to be unbound, or binds one to a term not allowed.
+      } else if (assertion.subType === 'unbound' && value !== undefined) {
+        // The row binds a column that has to be unbound.
+        isPruned = true;
+        break;
+      } else if (assertion.subType === 'bound') {
+        // Any value satisfies B⟨?x⟩, and since the row keeps deciding which one, the column stays.
+        metRequiredBound++;
+        newRow[variable] = value;
+      } else if (assertion.subType !== 'unbound' && !assertion.term.equals(value)) {
+        // The row binds a column to a term not allowed.
         isPruned = true;
         break;
       } else if (assertion.subType === 'weak') {
         // Weak and term val is correct
         newRow[variable] = value;
       } else if (assertion.subType === 'strong') {
-        boundStrongAssertions++;
+        metRequiredBound++;
       }
     }
-    // Also prune rows that did not bind a strongly required variable
-    if (!isPruned && boundStrongAssertions === strongAssertions.size) {
+    // Also prune rows that left a variable required to be bound UNDEF.
+    if (!isPruned && metRequiredBound === requiredBound) {
       newBindings.push(newRow);
     }
   }
@@ -462,7 +482,7 @@ function pushIntoExtend(
  *
  * An assertion on a variable other than `?g` distributes over the union by (FUPush) and then into the
  * left argument of each join by (FJPush), licensed by the *second* disjunct since
- * `?x ∉ pVars({?g↦uᵢ}) = {?g}`. That leaves no precondition, and holds for all three forms alike - so a
+ * `?x ∉ pVars({?g↦uᵢ}) = {?g}`. That leaves no precondition, and holds for all four forms alike - so a
  * conjunction saying nothing about `?g`, which is the common case, travels into `P` whole and leaves the
  * GRAPH itself alone.
  *
@@ -492,8 +512,10 @@ function pushIntoGraph(
   if (graphVar === undefined) {
     return keep(AF.createGraph(assertionFilter(c, graph.input, assertions), graphName));
   }
-  // If something is asserted about the var, we know it is a Strong assertion. Other cases would already be handled.
-  if (assertions.get(graphVar) === undefined) {
+  // A GRAPH binds its variable certainly, so normalisation has already turned anything asserted about it
+  // into the strong form, emptied the plan (U⟨?g⟩), or dropped it (B⟨?g⟩, which holds of every solution).
+  const assertedGraphName = assertions.get(graphVar);
+  if (assertedGraphName?.subType !== 'strong') {
     return keep(assertionFilter(
       c,
       AF.createGraph(
@@ -503,7 +525,6 @@ function pushIntoGraph(
       restrict(assertions, name => name === graphVar),
     ));
   }
-  const assertedGraphName = <StrongAssertion> assertions.get(graphVar);
   if (assertedGraphName.term.termType !== 'NamedNode') {
     return empty(c, graph);
   }
@@ -550,6 +571,12 @@ function pushIntoGraph(
  * weak form enters every operand regardless, and only a strong assertion no operand is licensed for stays
  * on top. That is what gets an assertion below a join over two optional-bound variables, where it can
  * still collapse back to the strong form deeper down. The unbound form rides along on the same identity.
+ *
+ * B⟨?x⟩ takes the same licence as the strong form and for the same reason - under it, `?x` is bound in
+ * the merged mapping exactly when it is bound in the one operand that can bind it - but it has no weaker
+ * form to fall back on. The very identity that carries W and U through is what it fails: a merged mapping
+ * binds `?x` when *either* half does, so an operand leaving it unbound may still be part of a solution
+ * that binds it. Unlicensed, it stays on top.
  */
 function pushIntoJoin(
   c: TransformContext,
@@ -567,18 +594,22 @@ function pushIntoJoin(
     let placedStrongly = false;
     for (const [ index ] of join.input.entries()) {
       // L(?x, operand, rest): certain in this operand, or impossible in every other one.
-      const licensed = assertion.subType === 'strong' && (
+      const licensed = impliesBound(assertion) && (
         operands[index].cVars.has(name) ||
         operands.every((other, otherIndex) => otherIndex === index || !other.pVars.has(name)));
       if (licensed) {
         operandAssertions[index].set(name, assertion);
         placedStrongly = true;
       } else if (operands[index].pVars.has(name)) {
-        operandAssertions[index].set(name, weakened(assertion));
+        const demoted = weakened(assertion);
+        if (demoted !== undefined) {
+          operandAssertions[index].set(name, demoted);
+        }
       }
     }
-    // The weak and unbound forms always consumed by the join; the strong one only when some operand took it in.
-    if (assertion.subType === 'strong' && !placedStrongly) {
+    // The weak and unbound forms are always consumed by the join; the two that imply `bound(?x)` only
+    // when some operand took them in.
+    if (impliesBound(assertion) && !placedStrongly) {
       kept.set(name, assertion);
     }
   }
@@ -594,8 +625,9 @@ function pushIntoJoin(
  * Pushes the assertions into a LEFT JOIN (OPTIONAL).
  *
  * The structural win comes first: `?x ∉ pVars(A₁) ⟹ σ_{?x≡c}(A₁ ⟕ A₂) ≡ A₁ ⋈ σ_{?x≡c}(A₂)`.
- * Only the strong form triggers it - the weak one is satisfied by the solutions that leave `?x`
- * unbound, which is exactly what the anti-join half of the left join produces.
+ * Only the two forms implying `bound(?x)` trigger it - what they rule out is precisely the solutions
+ * leaving `?x` unbound, which with `?x ∉ pVars(A₁)` is every solution the anti-join half of the left join
+ * produces. The weak and unbound forms are satisfied by exactly those, so they keep the OPTIONAL.
  *
  * Otherwise (FLPush) sends the licensed assertions into `A₁`, and `?x ∈ cVars(A₁) ∩ cVars(A₂)`
  * additionally licenses replicating into `A₂`: any `μ₂` compatible with a surviving `μ₁` binds `?x`
@@ -605,6 +637,9 @@ function pushIntoJoin(
  * violating W produces output violating W in both halves. The RHS does not - if `A₁` leaves `?x` unbound
  * and `A₂` binds it to another term, the merged solution is the one W discards, and pruning `A₂` would
  * instead let the unmatched `μ₁` through the anti-join half.
+ *
+ * B⟨?x⟩ has no weak form to fall back on either, so an unlicensed one simply stays on top: `A₂` may be
+ * what binds `?x`, so a `μ₁` leaving it unbound cannot be dropped from `A₁`.
  */
 function pushIntoLeftJoin(
   c: TransformContext,
@@ -616,7 +651,7 @@ function pushIntoLeftJoin(
   const leftVars = cpVars(left);
 
   if ([ ...assertions ].some(([ name, assertion ]) =>
-    assertion.subType === 'strong' && !leftVars.pVars.has(name))) {
+    impliesBound(assertion) && !leftVars.pVars.has(name))) {
     // Our filter asserts that one of variables ONLY appearing on RHS is bound, thus, the LeftJoin becomes Join.
     const joined = AF.createJoin([ left, right ], true);
     const rebuilt = leftJoin.expression === undefined ? joined : AF.createFilter(joined, leftJoin.expression);
@@ -628,17 +663,18 @@ function pushIntoLeftJoin(
   const intoRight = new Map<string, Assertion>();
   const kept = new Map<string, Assertion>();
   for (const [ name, assertion ] of assertions) {
-    const licensed = assertion.subType === 'strong' && (leftVars.cVars.has(name) || !rightVars.pVars.has(name));
+    const licensed = impliesBound(assertion) && (leftVars.cVars.has(name) || !rightVars.pVars.has(name));
     if (licensed) {
       intoLeft.set(name, assertion);
       if (leftVars.cVars.has(name) && rightVars.cVars.has(name)) {
         intoRight.set(name, assertion);
       }
     } else {
-      // Not licensed as itself, but the weaker forms always are on the left.
+      // Not licensed as itself, but the weaker forms always are on the left - except B⟨?x⟩, which has none.
       // It stays here as well, since the right hand side can still introduce a binding that violates it.
-      if (leftVars.pVars.has(name)) {
-        intoLeft.set(name, weakened(assertion));
+      const demoted = leftVars.pVars.has(name) ? weakened(assertion) : undefined;
+      if (demoted !== undefined) {
+        intoLeft.set(name, demoted);
       }
       kept.set(name, assertion);
     }
@@ -677,15 +713,28 @@ function strongOf(assertions: AssertionConjunction): Map<string, Assertion> {
 
 /**
  * The same assertion, in the strongest form that survives a move somewhere the variable may be unbound:
- * A⟨?x ≡ c⟩ becomes W⟨?x ≡ c⟩, the other two are already that weak.
+ * A⟨?x ≡ c⟩ becomes W⟨?x ≡ c⟩, and W and U are already that weak.
+ *
+ * B⟨?x⟩ has no such form - weakening it means allowing the unbound case, and `¬b ∨ b` is `true` - so it
+ * is `undefined`: it does not travel at all, and has to stay where it is.
  */
-function weakened(assertion: Assertion): Assertion {
+function weakened(assertion: Assertion): Assertion | undefined {
+  if (assertion.subType === 'bound') {
+    return undefined;
+  }
   return assertion.subType === 'strong' ? assertWeak(assertion.term) : assertion;
 }
 
-/** The same conjunction, with every assertion in it {@link weakened}. */
+/** The same conjunction, with every assertion in it {@link weakened}, and the ones that have no weak form dropped. */
 function allWeakened(assertions: AssertionConjunction): Map<string, Assertion> {
-  return new Map([ ...assertions ].map(([ name, assertion ]) => [ name, weakened(assertion) ]));
+  const result = new Map<string, Assertion>();
+  for (const [ name, assertion ] of assertions) {
+    const weak = weakened(assertion);
+    if (weak !== undefined) {
+      result.set(name, weak);
+    }
+  }
+  return result;
 }
 
 /** Hands a value to the traversal, keeping the metadata of everything in it intact. */

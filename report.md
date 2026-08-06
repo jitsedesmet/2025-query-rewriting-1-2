@@ -23,6 +23,8 @@ whole. Everything below follows.
 
 ## 2. The five states
 
+<!-- eslint-skip -->
+
 ```ts
 export class AssertionConjunction {
   private readonly clusters: ClusterSet<string>;     // variable -> group
@@ -103,12 +105,13 @@ newGroup}` return that `ClusterSolver` uses to migrate satellite maps. Add `clon
 constantly), a public non-creating lookup (`getGroup` is `protected`; `ClusterSolver` re-publishes it
 by override at `:158`), `remove`, and group iteration.
 
-**`TermClusterSet<T, TTerm>`: introduce it.** `groupToTerm`, the conflict check and the merge
+**`TermClusterSet<T, Term>`: introduce it.** `groupToTerm`, the conflict check and the merge
 migration are genuinely shared. It returns a boolean on conflict — a contradiction is a normal
 outcome for Θ — and `ClusterSolver` keeps its throwing `registerTermToGroup` as a thin wrapper, so
 the unfolding path and its test output do not move. It is generic in the term type because
 `ClusterSolver` narrows to `RawBasicTerm` (`RangeSet`, staying in its own override) while Θ allows
-any ground term.
+any ground term; equality on that type comes in as a constructor-injected comparator rather than a
+structural `equals` bound.
 
 **`ClusterSolver` itself: not reused.** Typed over `RangedVar` for triple positions, carries
 `groupToExpressions`/`staticExpressionValidation`, and is a single mutable instance on the context

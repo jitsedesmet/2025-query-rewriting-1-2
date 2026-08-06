@@ -10,7 +10,7 @@ import { DF } from './rdfDatatypes.js';
  * @fileoverview The assertion (`FILTER(sameTerm(?x, c))`) toolbox: recognizing the assertions a filter
  * condition carries, building them, and substituting them into expressions and patterns.
  *
- * A condition is read for all three forms at once, into the single {@link AssertionConjunction} the
+ * A condition is read for all four forms at once, into the single {@link AssertionConjunction} the
  * pushdown moves around.
  */
 
@@ -18,18 +18,19 @@ import { DF } from './rdfDatatypes.js';
  * A set of assertions θ: variable name to the single ground term it is fixed to, i.e. `σ_{sameTerm(?x, c)}`.
  *
  * This is the *substitutable* form - the map every `substituteIn...` helper takes - which is why the
- * weak and unbound assertions of an {@link AssertionConjunction} are kept out of it, see
+ * weak, unbound and bound assertions of an {@link AssertionConjunction} are kept out of it, see
  * {@link strongTermsOf}.
  */
 export type Assertions = ReadonlyMap<string, RDF.Term>;
 
 /**
- * One assertion about one variable, in one of the three forms this pass moves around.
+ * One assertion about one variable, in one of the four forms this pass moves around.
  *
  * - `strong` is A⟨?x ≡ c⟩ ≔ `sameTerm(?x, c)`, which implies `bound(?x)`.
  * - `weak` is W⟨?x ≡ c⟩ ≔ `!bound(?x) || sameTerm(?x, c)`, which does not - it is what survives a move
  *   into a place that may leave the variable unbound (the RHS of a MINUS, the unlicensed operand of a join).
  * - `unbound` is U⟨?x⟩ ≔ `!bound(?x)`.
+ * - `bound` is B⟨?x⟩ ≔ `bound(?x)`, which fixes the variable to no term at all.
  *
  * The third form is what the conjunction of two *different* weak assertions about one variable comes to:
  * `(¬b ∨ ?x ≡ c) ∧ (¬b ∨ ?x ≡ d)` distributes to `¬b ∨ (?x ≡ c ∧ ?x ≡ d)`, which for `c ≠ d` is `¬b`.
@@ -37,8 +38,14 @@ export type Assertions = ReadonlyMap<string, RDF.Term>;
  * to leave the conjunct behind as a residual. It is also SPARQL's negation idiom
  * (`OPTIONAL { … } FILTER(!bound(?x))`), so it is the form assertions most often *start* in.
  *
- * Only the strong form may be substituted into a pattern: the other two say what the variable is *not*
- * bound to, not that it is bound.
+ * The fourth is the negation of the third, and the term-less half of the strong form: it says only that
+ * the variable *is* bound, which is what SPARQL writes as `FILTER(bound(?x))`. It carries no term, so it
+ * never substitutes into anything, but it decides the same emptiness rule the strong form does
+ * ((FBndII): `?x ∉ pVars(A) ⟹ σ_{bound(?x)}(A) ≡ ∅`) and it *completes* a weak assertion into a strong
+ * one - `b ∧ (¬b ∨ ?x ≡ c) ≡ ?x ≡ c` - which is where it earns its keep.
+ *
+ * Only the strong form may be substituted into a pattern: `weak` and `unbound` say what the variable is
+ * *not* bound to rather than that it is bound, and `bound` says nothing about which term it is.
  */
 interface BaseAssertion {
   type: 'assertion';
@@ -55,7 +62,10 @@ export interface WeakAssertion<T extends RDF.Term = RDF.Term> extends BaseAssert
 export interface UnboundAssertion extends BaseAssertion {
   subType: 'unbound';
 }
-export type Assertion = StrongAssertion | WeakAssertion | UnboundAssertion;
+export interface BoundAssertion extends BaseAssertion {
+  subType: 'bound';
+}
+export type Assertion = StrongAssertion | WeakAssertion | BoundAssertion | UnboundAssertion;
 
 export function assertStrong<T extends RDF.Term>(term: T): StrongAssertion<T> {
   return {
@@ -69,6 +79,13 @@ export function assertWeak<T extends RDF.Term>(term: T): WeakAssertion<T> {
     type: 'assertion',
     subType: 'weak',
     term,
+  };
+}
+
+export function assertBound(): BoundAssertion {
+  return {
+    type: 'assertion',
+    subType: 'bound',
   };
 }
 export function assertUnbound(): UnboundAssertion {
@@ -87,13 +104,21 @@ export type AssertionConjunction = ReadonlyMap<string, Assertion>;
 /**
  * The strong assertions of a conjunction, in the form the substitution helpers take.
  *
- * Dropping the other two is the point: substituting `c` for `?x` under W⟨?x ≡ c⟩ would claim `?x` is
- * bound, and folding `bound(?x)` to `true` under it would be wrong.
+ * Dropping the other three is the point: substituting `c` for `?x` under W⟨?x ≡ c⟩ would claim `?x` is
+ * bound, folding `bound(?x)` to `true` under it would be wrong, and B⟨?x⟩ has no term to substitute.
  */
 export function strongTermsOf(assertions: AssertionConjunction): Assertions {
   return new Map([ ...assertions ]
     .filter(([ , assertion ]) => assertion.subType === 'strong')
     .map(([ name, assertion ]) => [ name, (<{ term: RDF.Term }> assertion).term ]));
+}
+
+/**
+ * Whether the assertion implies `bound(?x)`, which is what the emptiness rule (FBndII) and every licence
+ * that moves an assertion into a single operand are read off - the strong form and the bound form alike.
+ */
+export function impliesBound(assertion: Assertion): assertion is BoundAssertion | StrongAssertion {
+  return assertion.subType === 'strong' || assertion.subType === 'bound';
 }
 
 /**
@@ -142,9 +167,10 @@ export function withAssertionConjunction(c: TransformContext, filter: Algebra.Fi
 }
 
 /**
- * Guard recognizing the filters this pass is about: the ones whose top level conjunction fixes at least
- * one variable to one term, and the contradictory ones (which are the empty operation). Anything else is
- * left where it is, and the traversal keeps descending into it looking for the filters deeper down.
+ * Guard recognizing the filters this pass is about: the ones whose top level conjunction says something
+ * about at least one variable on its own - fixing it to a term, or only deciding whether it is bound -
+ * and the contradictory ones (which are the empty operation). Anything else is left where it is, and the
+ * traversal keeps descending into it looking for the filters deeper down.
  */
 export function isAssertionFilter(c: TransformContext, op: Algebra.Operation): op is AssertionFilter {
   if (op.type !== Algebra.Types.FILTER) {
@@ -208,7 +234,7 @@ export function asWeakAssertion(expression: Algebra.Expression):
   return undefined;
 }
 
-/** Recognizes the assertion a single conjunct carries, in whichever of the three forms it is written. */
+/** Recognizes the assertion a single conjunct carries, in whichever of the four forms it is written. */
 export function assertionOf(expression: Algebra.Expression): { name: string; assertion: Assertion } | undefined {
   const strong = asStrongAssertion(expression);
   if (strong !== undefined) {
@@ -219,20 +245,30 @@ export function assertionOf(expression: Algebra.Expression): { name: string; ass
     return weak;
   }
   const unbound = variableOfNotBound(expression);
-  return unbound === undefined ? undefined : { name: unbound, assertion: assertUnbound() };
+  if (unbound !== undefined) {
+    return { name: unbound, assertion: assertUnbound() };
+  }
+  const bound = variableOfBound(expression);
+  return bound === undefined ? undefined : { name: bound, assertion: assertBound() };
+}
+
+/** The variable of a `bound(?x)` expression, if that is what it is. */
+function variableOfBound(expression: Algebra.Expression): string | undefined {
+  if (expression.subType === Algebra.ExpressionTypes.OPERATOR && expression.operator === 'bound' &&
+    expression.args.length === 1) {
+    const [ argument ] = expression.args;
+    if (argument.subType === Algebra.ExpressionTypes.TERM && argument.term.termType === 'Variable') {
+      return argument.term.value;
+    }
+  }
+  return undefined;
 }
 
 /** The variable of a `!bound(?x)` expression, if that is what it is. */
 function variableOfNotBound(expression: Algebra.Expression): string | undefined {
   if (expression.subType === Algebra.ExpressionTypes.OPERATOR && expression.operator === '!' &&
     expression.args.length === 1) {
-    const [ bound ] = expression.args;
-    if (bound.subType === Algebra.ExpressionTypes.OPERATOR && bound.operator === 'bound' && bound.args.length === 1) {
-      const [ argument ] = bound.args;
-      if (argument.subType === Algebra.ExpressionTypes.TERM && argument.term.termType === 'Variable') {
-        return argument.term.value;
-      }
-    }
+    return variableOfBound(expression.args[0]);
   }
   return undefined;
 }
@@ -241,15 +277,17 @@ function variableOfNotBound(expression: Algebra.Expression): string | undefined 
  * Merges a newly met assertion about a variable into what is already known about it,
  * or returns `undefined` when nothing satisfies both.
  *
- * With all three forms available this is total: a conjunction of assertions about one variable is again
+ * With all four forms available this is total: a conjunction of assertions about one variable is again
  * an assertion about it, or unsatisfiable.
  *
  * - Same term: `A ∧ W ≡ A`, so the weak form of something known strongly changes nothing, and the strong
  *      form of something known weakly *promotes* it.
  * - Different terms, one of them strong: contradiction - `?x` cannot be `c` and also unbound or `d`.
  * - Different terms, both weak: `U⟨?x⟩`, the case the third form exists for.
- * - Anything against `U⟨?x⟩`: it absorbs the weak form (`¬b ∧ (¬b ∨ …) ≡ ¬b`) and contradicts the strong
- *      one, which implies `bound(?x)`.
+ * - Anything against `U⟨?x⟩`: it absorbs the weak form (`¬b ∧ (¬b ∨ …) ≡ ¬b`) and contradicts the two
+ *      forms that imply `bound(?x)`.
+ * - Anything against `B⟨?x⟩`: it is neutral against the strong form (which already implies it), absorbed
+ *      by itself, and *promotes* the weak form to the strong one by ruling its `¬b` disjunct out.
  */
 export function mergeAssertion(
   previous: Assertion | undefined,
@@ -259,8 +297,13 @@ export function mergeAssertion(
     return next;
   }
   if (previous.subType === 'unbound' || next.subType === 'unbound') {
-    // Cannot be both asserted unbound and strongly asserted
-    return previous.subType === 'strong' || next.subType === 'strong' ? undefined : assertUnbound();
+    // Cannot be both asserted unbound and asserted (strongly or plainly) bound.
+    return impliesBound(previous) || impliesBound(next) ? undefined : assertUnbound();
+  }
+  if (previous.subType === 'bound' || next.subType === 'bound') {
+    // `b ∧ (¬b ∨ ?x ≡ c) ≡ ?x ≡ c`, and `b` adds nothing to what a term already says.
+    const other = previous.subType === 'bound' ? next : previous;
+    return other.subType === 'bound' ? assertBound() : assertStrong(other.term);
   }
   if (previous.term.equals(next.term)) {
     return previous.subType === 'strong' || next.subType === 'strong' ?
@@ -289,22 +332,34 @@ export function weakAssertionExpression(c: TransformContext, name: string, term:
   ]);
 }
 
+/** Creates the bound assertion B⟨?x⟩: `bound(?x)`. */
+export function boundAssertionExpression(c: TransformContext, name: string): Algebra.Expression {
+  return c.AF.createOperatorExpression('bound', [ c.AF.createTermExpression(DF.variable(name)) ]);
+}
+
 /** Creates the unbound assertion U⟨?x⟩: `!bound(?x)`. */
 export function unboundAssertionExpression(c: TransformContext, name: string): Algebra.Expression {
-  return c.AF.createOperatorExpression('!', [
-    c.AF.createOperatorExpression('bound', [ c.AF.createTermExpression(DF.variable(name)) ]),
-  ]);
+  return c.AF.createOperatorExpression('!', [ boundAssertionExpression(c, name) ]);
 }
 
 /** Creates the single condition the (non-empty) assertions stand for, each in the form it carries. */
 export function assertionsExpression(c: TransformContext, assertions: AssertionConjunction): Algebra.Expression {
+  // eslint-disable-next-line array-callback-return
   return conjunctionOf(c, [ ...assertions ].map(([ name, assertion ]) => {
-    if (assertion.subType === 'unbound') {
-      return unboundAssertionExpression(c, name);
+    switch (assertion.subType) {
+      case 'unbound': {
+        return unboundAssertionExpression(c, name);
+      }
+      case 'bound': {
+        return boundAssertionExpression(c, name);
+      }
+      case 'strong': {
+        return assertionExpression(c, name, assertion.term);
+      }
+      case 'weak': {
+        return weakAssertionExpression(c, name, assertion.term);
+      }
     }
-    return assertion.subType === 'strong' ?
-      assertionExpression(c, name, assertion.term) :
-      weakAssertionExpression(c, name, assertion.term);
   }));
 }
 

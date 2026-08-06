@@ -414,13 +414,21 @@ function pruneValues(c: TransformContext, values: Algebra.Values, assertions: As
  * of `A` for which `e` evaluates to `c` - an error in `e` makes `sameTerm(e,c)` error, which a filter
  * treats as false, matching the dropped unbound case.
  *
- * This is deliberately not shortcut to constant folding, because the important case is *renaming*: for
- * `BIND(?z AS ?x)`, whatever `?x` had to be equal to, `?z` has to be equal to below. Everything the
- * conjunction says about `?x` **transfers** to `?z` there - the term for a pinned assertion, and the place
- * in the clique for a unification, so `BIND(?z AS ?t)` under A⟨?t ≡ ?y⟩ leaves A⟨?z ≡ ?y⟩ below and may
- * reach a BGP. Transferring rather than deleting matters: `?x` has to leave Θ before descending (an
- * EXTEND target is not bound below itself), and simply dropping it would drop the edges of a clique it
- * happened to be the representative of.
+ * Whenever `e` is a *term*, that is not shortcut to constant folding, because whatever `?x` had to be
+ * equal to, the thing the BIND copies into it has to be equal to below. Everything the conjunction says
+ * about `?x` {@link AssertionConjunction.transferred | transfers} onto that term there, and the four
+ * combinations of what it was equal to with what now carries it are one rule:
+ *
+ * - `BIND(?z AS ?t)` under A⟨?t ≡ c⟩ leaves A⟨?z ≡ c⟩ below, so a *renaming* propagates an assertion;
+ * - `BIND(?z AS ?t)` under A⟨?t ≡ ?y⟩ leaves A⟨?z ≡ ?y⟩ below, so it propagates a unification too, and
+ *   either may then reach a BGP;
+ * - `BIND(:c AS ?t)` under A⟨?t ≡ d⟩ is the ground comparison `c ≡ d`, decided here;
+ * - `BIND(:c AS ?t)` under A⟨?t ≡ ?y⟩ leaves A⟨?y ≡ :c⟩ below - a constant BIND is what pins a clique the
+ *   assertions had found no term for, so every variable it unified reaches its pattern as `:c`.
+ *
+ * Transferring rather than deleting matters: `?x` has to leave Θ before descending (an EXTEND target is
+ * not bound below itself), and simply dropping it would drop the edges of a clique it happened to be the
+ * representative of.
  *
  * Only the forms that imply `bnd(?x)` do any of that. W⟨?x ≡ c⟩ on the BIND target is also satisfied by
  * the solutions where `e` errored and left `?x` unbound, so it says nothing about `e` and stays above the
@@ -440,14 +448,19 @@ function pushIntoExtend(
   // or the (FBndII) check at the top of the swap wrongly yields empty.
   const { inside: remaining, outside: aboutTarget } = assertions.split(name => name !== target);
 
-  // A BIND copying one variable into another: the two carry the same value below, so Θ transfers.
-  const source = expression.subType === Algebra.ExpressionTypes.TERM &&
-    expression.term.termType === 'Variable' && expression.term.value !== target ?
-    expression.term.value :
+  // A BIND of a term - a variable it copies, or a constant it fixes the target to - carries below the
+  // EXTEND whatever the target carries above it, so Θ transfers onto it.
+  // TODO(next time): here is where restrictions on triple terms could be transferred.
+  const carrier = expression.subType === Algebra.ExpressionTypes.TERM &&
+    (expression.term.termType === 'Variable' ?
+      expression.term.value !== target :
+      isAssertableTerm(expression.term)) ?
+    expression.term :
     undefined;
-  if (source !== undefined && assertionOfTarget !== undefined && impliesBound(assertionOfTarget)) {
-    const below = assertions.transferred(target, source);
+  if (carrier !== undefined && assertionOfTarget !== undefined && impliesBound(assertionOfTarget)) {
+    const below = assertions.transferred(target, carrier);
     if (below === undefined) {
+      // The two terms the target had to be at once, or two cliques pinned to different ones.
       return empty(c, extend);
     }
     // `?z ≡ c` holds below, so binding `?x` straight to `c` is the same as binding it to `?z`; and where
@@ -459,8 +472,8 @@ function pushIntoExtend(
     ));
   }
 
-  // Anything that could not transfer stays here: the weak, bound and unbound forms, and the edges of a
-  // clique the BIND does not copy a variable into.
+  // Anything that could not transfer stays here: the weak, bound and unbound forms, and a clique the
+  // BIND gives no term to copy into.
   if (assertionOfTarget?.subType !== 'strong' || !isAssertableTerm(assertionOfTarget.term)) {
     return keep(assertionFilter(
       c,
@@ -473,20 +486,8 @@ function pushIntoExtend(
     ));
   }
 
-  // We know we have a strong target assertion, against a ground term.
-  // TODO(next time): here is where restrictions on triple terms could be transferred.
+  // We know we have a strong target assertion, against a ground term, and a compound expression.
   const term = assertionOfTarget.term;
-  // A constant BIND decides the assertion statically.
-  if (expression.subType === Algebra.ExpressionTypes.TERM && isAssertableTerm(expression.term)) {
-    return expression.term.equals(term) ?
-      keep(AF.createExtend(
-        assertionFilter(c, extend.input, remaining),
-        extend.variable,
-        AF.createTermExpression(term),
-      )) :
-      empty(c, extend);
-  }
-
   // For a compound expression, `sameTerm(e, c)` is a multi-variable condition: it needs the full
   // (FJPush) side condition quantified over vars(e), not the single variable licence this pass uses,
   // so it is left here for a generic filter pushdown.

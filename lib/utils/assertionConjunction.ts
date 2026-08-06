@@ -309,16 +309,25 @@ export class AssertionConjunction {
   }
 
   /**
-   * Θ with `name` taken out of it and whatever it was equal *to* moved onto `replacement`, for a BIND that
-   * copies one variable into the other: below the EXTEND the two carry the same value, so the edges of the
-   * target transfer to the source rather than being dropped.
+   * Θ with `name` taken out of it and whatever it was equal *to* restated against `replacement` - the term
+   * that carries its value where the result is going, which the caller is responsible for establishing.
+   *
+   * For a BIND, that is its expression: below `BIND(?z AS ?t)` it is `?z` that holds what `?t` holds above,
+   * and below `BIND(:c AS ?t)` it is `:c`. Four cases, which are the same rule read against the two kinds
+   * of thing `name` could have been equal to:
+   *
+   * - a group pinned to `d`, replaced by a variable: that variable is now the one that has to be `d`;
+   * - a group pinned to `d`, replaced by a term: `?x ≡ d` has become the ground comparison `c ≡ d`, which
+   *   either holds or makes the whole thing empty;
+   * - a clique, replaced by a variable: it takes `name`'s place in the clique;
+   * - a clique, replaced by a term: every variable left in the clique now has to equal that term.
    *
    * Taking the variable out one member at a time, rather than dropping every conjunct that mentions it,
    * is what keeps the rest of its clique intact when it happens to be the representative all of the edges
-   * point at. Only the group membership travels: B⟨?x⟩ and U⟨?x⟩ on the target are simply removed, and
-   * stay above the EXTEND where the caller put them.
+   * point at. Only what it was equal to travels: B⟨?x⟩ and U⟨?x⟩ on `name` are simply removed, and stay
+   * where the caller put them.
    */
-  public transferred(name: string, replacement: string): AssertionConjunction | undefined {
+  public transferred(name: string, replacement: RDF.Term): AssertionConjunction | undefined {
     const result = this.clone();
     const group = this.clusters.groupOf(name);
     const term = group === undefined ? undefined : this.clusters.termOf(group);
@@ -329,11 +338,20 @@ export class AssertionConjunction {
     result.removeMember(name);
     result.bound.delete(name);
     result.unbound.delete(name);
-    if (term !== undefined) {
-      return result.assertTerm(replacement, term, strong) ? result : undefined;
+    if (replacement.termType === 'Variable') {
+      return (term === undefined ?
+        // Anchorless: `name` was a member of the clique, so `replacement` takes its place in it.
+        others.length === 0 || result.assertUnify(replacement.value, others[0]) :
+        result.assertTerm(replacement.value, term, strong)) ?
+        result :
+        undefined;
     }
-    // Anchorless: `name` was a member of the clique, so `replacement` takes its place in it.
-    return others.length === 0 || result.assertUnify(replacement, others[0]) ? result : undefined;
+    if (term !== undefined) {
+      // Two ground terms, so what `name` had to be is decided here rather than pushed anywhere.
+      return term.equals(replacement) ? result : undefined;
+    }
+    // The clique meets a term: it pins the group, which is every variable that was equal to `name`.
+    return others.length === 0 || result.assertTerm(others[0], replacement, true) ? result : undefined;
   }
 
   /** Conjoins everything `other` says with what this conjunction already says. */

@@ -1132,6 +1132,70 @@ GROUP BY ?x?y`,
       );
     });
 
+    it('pins the clique to the term a constant BIND fixes its target to', ({ expect }) => {
+      // The other direction of the same transfer: `?t` is `:c` above the EXTEND, so `?t ≡ ?y` there is
+      // `?y ≡ :c` below - a constant BIND is what gives a clique the term the assertions never found.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?y :p ?w BIND(:c AS ?t) FILTER(sameTerm(?t, ?y)) }',
+        `SELECT ( <ex://c> AS ?t ) ?w ( <ex://c> AS ?y ) WHERE {
+  <ex://c> <ex://p> ?w .
+}`,
+      );
+    });
+
+    it('pins every member of the clique, not just the one the BIND met', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?y :p ?w BIND(:c AS ?t) FILTER(sameTerm(?t, ?y) && sameTerm(?y, ?w)) }',
+        `SELECT ( <ex://c> AS ?t ) ( <ex://c> AS ?w ) ( <ex://c> AS ?y ) WHERE {
+  <ex://c> <ex://p> <ex://c> .
+}`,
+      );
+    });
+
+    it('empties the plan where a constant BIND contradicts the term of the clique', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?y :p ?w BIND(:c AS ?t) FILTER(sameTerm(?t, ?y) && sameTerm(?y, :d)) }',
+        `SELECT ?t ?w ?y WHERE {
+  {
+    ?y <ex://p> ?w .
+    BIND( <ex://c> AS ?t )
+  }
+  FILTER ( FALSE )
+}`,
+      );
+    });
+
+    it('empties the plan where the term it pins the clique to cannot occupy its position', ({ expect }) => {
+      // `?y ≡ "a"` reaches the pattern, where no triple has a literal subject.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?y :p ?w BIND("a" AS ?t) FILTER(sameTerm(?t, ?y)) }',
+        `SELECT ( "a" AS ?t ) ?w ?y WHERE {
+  ?y <ex://p> ?w .
+  FILTER ( FALSE )
+}`,
+      );
+    });
+
+    it('keeps a clique above a BIND whose expression is compound', ({ expect }) => {
+      // `sameTerm(e, ?y)` over a compound `e` is a multi-variable condition, which this pass has no
+      // licence for - so nothing transfers and the edge stays where it was.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?y :p ?w BIND(CONCAT(?w, "x") AS ?t) FILTER(sameTerm(?t, ?y)) }',
+        `SELECT ?t ?w ?y WHERE {
+  {
+    ?y <ex://p> ?w .
+    BIND( CONCAT( ?w , "x" ) AS ?t )
+  }
+  FILTER ( SAMETERM( ?y , ?t ) )
+}`,
+      );
+    });
+
     it('turns an OPTIONAL over a right-only member into a join, the edge staying above', ({ expect }) => {
       // The edge itself is licensed for neither operand - the join enforces nothing between `?y` and
       // `?z` - but the B⟨?z⟩ it entails is enough to rule out the anti-join half.
@@ -1209,6 +1273,7 @@ GROUP BY ?x?y`,
         }`,
         'SELECT * WHERE { ?s :p ?y OPTIONAL { ?s :r ?z } FILTER(sameTerm(?y, ?z)) }',
         'SELECT * WHERE { ?z :p ?y BIND(?z AS ?t) FILTER(sameTerm(?t, ?y)) }',
+        'SELECT * WHERE { ?y :p ?w BIND(:c AS ?t) FILTER(sameTerm(?t, ?y)) }',
         `SELECT * WHERE {
           { ?s ?p ?o FILTER(sameTerm(?s, :x)) } UNION { ?s :p ?o }
           FILTER(sameTerm(?s, ?o))
@@ -1853,6 +1918,14 @@ GROUP BY ?x?y`,
       await assertEquivalent(expect, `SELECT * WHERE {
         ?z :self ?y
         BIND(?z AS ?t)
+        FILTER(sameTerm(?t, ?y))
+      }`, 2);
+    });
+
+    it('keeps the rows a constant BIND pinning a unification selects', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?y :self ?w
+        BIND(:loop AS ?t)
         FILTER(sameTerm(?t, ?y))
       }`, 2);
     });

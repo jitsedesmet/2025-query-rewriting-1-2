@@ -285,19 +285,43 @@ describe('assertionConjunction', () => {
     it('moves a clique membership onto the variable that carries its value', ({ expect }) => {
       // `BIND(?z AS ?t)` under A⟨?t ≡ ?y⟩: below the EXTEND `?z` is what `?t` was.
       const assertions = <AssertionConjunction> conjunctionOf([ 'y', assertStrong(DF.variable('t')) ]);
-      const transferred = <AssertionConjunction> assertions.transferred('t', 'z');
+      const transferred = <AssertionConjunction> assertions.transferred('t', DF.variable('z'));
       expect(transferred.cliques()).toEqual([[ 'y', 'z' ]]);
       expect(stateOf(transferred, 't')).toBe('none');
     });
 
-    it('moves a term the same way, and reports the conflict it may cause', ({ expect }) => {
+    it('moves a term onto the variable that carries its value', ({ expect }) => {
       const assertions = <AssertionConjunction> conjunctionOf([ 't', assertStrong(termC) ]);
-      expect(stateOf(assertions.transferred('t', 'z'), 'z')).toBe('strong(ex://c)');
+      expect(stateOf(assertions.transferred('t', DF.variable('z')), 'z')).toBe('strong(ex://c)');
       const conflicting = <AssertionConjunction> conjunctionOf(
         [ 't', assertStrong(termC) ],
         [ 'z', assertStrong(termD) ],
       );
-      expect(conflicting.transferred('t', 'z')).toBeUndefined();
+      expect(conflicting.transferred('t', DF.variable('z'))).toBeUndefined();
+    });
+
+    it('pins a clique to the term that takes the place of one of its members', ({ expect }) => {
+      // `BIND(:c AS ?t)` under A⟨?t ≡ ?y⟩: `?t` is `:c` above, so `?y` has to be `:c` below.
+      const assertions = <AssertionConjunction> conjunctionOf(
+        [ 'y', assertStrong(DF.variable('t')) ],
+        [ 'w', assertStrong(DF.variable('t')) ],
+      );
+      const transferred = <AssertionConjunction> assertions.transferred('t', termC);
+      expect(stateOf(transferred, 'y')).toBe('strong(ex://c)');
+      expect(stateOf(transferred, 'w')).toBe('strong(ex://c)');
+      expect(stateOf(transferred, 't')).toBe('none');
+      expect(transferred.cliques()).toEqual([]);
+    });
+
+    it('decides a term against the term the group was already pinned to', ({ expect }) => {
+      const assertions = <AssertionConjunction> conjunctionOf(
+        [ 't', assertStrong(termC) ],
+        [ 'y', assertStrong(DF.variable('t')) ],
+      );
+      // `?t ≡ :c` with `?t` bound to `:c` holds, and `?y` keeps the term the group carries.
+      expect(stateOf(assertions.transferred('t', termC), 'y')).toBe('strong(ex://c)');
+      // `?t ≡ :c` with `?t` bound to `:d` does not.
+      expect(assertions.transferred('t', termD)).toBeUndefined();
     });
   });
 

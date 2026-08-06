@@ -1,23 +1,21 @@
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { PreOrderMappingReturn } from '@traqula/core';
 import type { TransformContext } from '../transformContext.js';
-import type {
-  Assertion,
-  AssertionConjunction,
-  AssertionFilter,
-  Assertions,
-  StrongAssertion,
-} from '../utils/assertions.js';
+import type { AssertionConjunct, AssertionFilter } from '../utils/assertionConjunction.js';
 import {
-  assertionsExpression,
+  AssertionConjunction,
+  collectAssertions,
+  conjunctVars,
+  isAssertionFilter,
+  weakenedConjunct,
+} from '../utils/assertionConjunction.js';
+import type { Assertions, StrongAssertion } from '../utils/assertions.js';
+import {
+  assertBound,
   assertStrong,
   assertWeak,
-  collectAssertions,
   impliesBound,
   isAssertableTerm,
-  isAssertionFilter,
-  mergeAssertion,
-  strongTermsOf,
   substituteInPattern,
   substituteInTerm,
 } from '../utils/assertions.js';
@@ -26,15 +24,17 @@ import { withCpVars, withoutCpVars } from '../utils/certainlyBoundVars.js';
 import { sameTermExpression } from '../utils/expressionHelpers.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
 import { substituteInExpression } from '../utils/partialExpressionEvaluation.js';
+import { DF } from '../utils/rdfDatatypes.js';
 
 /**
  * @fileoverview Assertion filter pushdown.
  *
  * An earlier rewriting stage produces queries carrying *assertion filters* of the form
- * `FILTER(sameTerm(?x, <ex://p>))` - each stating that one variable is fixed to one term. Left where
- * they are, they only discard rows at the end. Pushed down, they eliminate work: they substitute into
- * BGPs (fewer triple matches), prune VALUES rows, delete whole UNION branches, and can turn an OPTIONAL
- * into a plain join.
+ * `FILTER(sameTerm(?x, <ex://p>))` - fixing one variable to one term - and `FILTER(sameTerm(?x, ?y))` -
+ * unifying two variables. Left where they are, they only discard rows at the end. Pushed down, they
+ * eliminate work: they substitute into BGPs (fewer triple matches, and a repeated variable in one pattern
+ * instead of two free ones), prune VALUES rows and columns, delete whole UNION branches, and can turn an
+ * OPTIONAL into a plain join.
  *
  * Rule names in parentheses refer to Figure 2 of Schmidt et al., "Foundations of SPARQL Query
  * Optimization" (https://dl.acm.org/doi/pdf/10.1145/1804669.1804675). Writing A⟨?x ≡ c⟩ for
@@ -47,14 +47,41 @@ import { substituteInExpression } from '../utils/partialExpressionEvaluation.js'
  *   against an IRI is the one exception - `=` only raises a type error when both arguments are literals,
  *   so against an IRI it *is* `sameTerm` - and it travels as an assertion.
  *
- * Assertions travel in four forms - strong, weak, unbound and bound, see {@link Assertion} - all in the
- * *same* conjunction ({@link AssertionConjunction}) and handled by the same swap, since their rules differ
- * per operation rather than per pass, and one variable's assertion may be strong while another's is not.
- * {@link normalise} converts between them at every step.
+ * Assertions travel in the five states of {@link AssertionConjunction} - all in the *same* conjunction and
+ * handled by the same swap, since their rules differ per operation rather than per pass, and one
+ * variable's assertion may be strong while another's is not. {@link AssertionConjunction.normalisedFor}
+ * converts between them at every step.
  *
  * The bound form, `FILTER(bound(?x))`, is the one that fixes no term. It moves for two reasons: it decides
  * the same emptiness and structural rules the strong form does - which is what turns an OPTIONAL binding
  * `?x` into a plain join - and it *completes* a weak assertion it meets on the way into a strong one.
+ *
+ * ## What a unification adds
+ *
+ * `sameTerm(?x, ?y)` is not an assertion about a variable: it is an *edge* between two of them, and a
+ * chain of such edges makes a **clique** of variables that all have to be equal. Three things follow, and
+ * they are the whole difference between this pass and the per-variable one it grew out of.
+ *
+ * **A clique is substituted to its representative** - the lexicographically first member - rather than to
+ * a term: `?s ?p ?o FILTER(sameTerm(?s, ?o))` becomes `?o ?p ?o . BIND(?o AS ?s)`. That BIND is mandatory,
+ * not cosmetic: substituting takes `?s` out of the pattern, and every rewrite here has to preserve `pVars`
+ * exactly. Picking the *lexicographically first* member rather than, say, the one the enclosing PROJECT
+ * keeps is what makes the pass idempotent - re-running it re-derives the same representative and absorbs
+ * what it finds instead of stacking a second copy.
+ *
+ * **Splitting a clique means splitting its edges, never its variables.** A clique is transitively closed,
+ * so any spanning tree of it is equivalent to the whole; what a rule pushes down plus what it keeps on top
+ * has to span it again ({@link splitClique}). Splitting *variables* is what loses information: `?x ≡ ?y`
+ * under `GROUP BY ?x` decomposes into two singletons and evaporates, where the right answer is that the
+ * plan is empty, `?y` being out of scope above the GROUP.
+ *
+ * **Weak ⇔ pinned group.** Every member of an anchorless clique is strong, and a rule that cannot take the
+ * whole edge drops it rather than demoting it, because there is no sound weak form of a clique - see
+ * {@link AssertionConjunction}. What travels in its place is what the edge *entails*: every member of a
+ * clique is bound, so B⟨?x⟩ goes down on the licence that already exists for it even where the edge itself
+ * stays on top. That is what collapses `A₁ ⟕ A₂ FILTER(sameTerm(?y, ?z))` into a join.
+ *
+ * ## The traversal
  *
  * The pass is a pre-order traversal, so an assertion filter is handled *before* what is below it, and
  * each step only describes how the filter swaps places with the operation it sits on. The result of that
@@ -73,16 +100,22 @@ import { substituteInExpression } from '../utils/partialExpressionEvaluation.js'
 const keepMetadata = { shallowKeys: new Set([ 'metadata' ]) };
 
 /**
- * Pushes every assertion filter (`FILTER(sameTerm(?x, c))`) in `op` as deep as possible, and into every
- * branch that permits it - for a join, that may be both sides at once.
+ * Pushes every assertion filter (`FILTER(sameTerm(?x, c))`, `FILTER(sameTerm(?x, ?y))`) in `op` as deep as
+ * possible, and into every branch that permits it - for a join, that may be both sides at once.
  *
  * @example
  * // Before:
- * // SELECT * WHERE { { ?s <ex://p> ?o } UNION { ?x <ex://q> ?y } FILTER(sameTerm(?s, <ex://a>)) }
- * // After (the right branch can never bind ?s, so it becomes empty):
+ * // SELECT * WHERE { { ?x :p ?y } UNION { ?z :q ?w } FILTER(sameTerm(?x, <ex://a>)) }
+ * // After (the right branch can never bind ?x, so it becomes empty):
  * // SELECT * WHERE {
- * //   { <ex://a> <ex://p> ?o BIND(<ex://a> AS ?s) } UNION { ?x <ex://q> ?y FILTER(false) }
+ * //   { <ex://a> <ex://p> ?y BIND(<ex://a> AS ?x) } UNION { ?z <ex://q> ?w FILTER(false) }
  * // }
+ *
+ * @example
+ * // Before:
+ * // SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(?s, ?o)) }
+ * // After:
+ * // SELECT * WHERE { ?o ?p ?o . BIND(?o AS ?s) }
  */
 export function pushDownAssertions<T extends Algebra.Operation>(c: TransformContext, op: T): T {
   const callbacks: Record<string, (copy: any) => PreOrderMappingReturn> = Object.fromEntries(
@@ -115,13 +148,14 @@ function pushFilter(c: TransformContext, filter: Algebra.Filter): PreOrderMappin
   return pushAssertions(c, assertions, filter.input);
 }
 
-/** Swaps an assertion filter carrying θ with the operation `op` right below it, per Figure 2. */
+/** Swaps an assertion filter carrying Θ with the operation `op` right below it, per Figure 2. */
 function pushAssertions(
   c: TransformContext,
   assertions: AssertionConjunction,
   op: Algebra.Operation,
 ): PreOrderMappingReturn {
-  const normalised = normalise(assertions, op);
+  const { cVars, pVars } = cpVars(op);
+  const normalised = assertions.normalisedFor(cVars, pVars);
   if (normalised === undefined) {
     return empty(c, op);
   }
@@ -132,44 +166,13 @@ function pushAssertions(
 }
 
 /**
- * Reads the conjunction in terms of what `op` binds - e.g. promoting a weak assertion over a cVar to a
- * strong one - or `undefined` when it makes `op` empty.
- *
- * Where `?x` is certainly bound, `!bound(?x)` is unsatisfiable, so W *is* A, B is `true` and U is empty;
- * where `?x` can never be bound, A and B are empty and W and U are simply `true`.
- */
-function normalise(assertions: AssertionConjunction, op: Algebra.Operation): Map<string, Assertion> | undefined {
-  const { cVars, pVars } = cpVars(op);
-  const normalised = new Map<string, Assertion>();
-  for (const [ name, assertion ] of assertions) {
-    if (!pVars.has(name)) {
-      // (FBndII), which both of the forms implying `bound(?x)` trigger.
-      if (impliesBound(assertion)) {
-        return undefined;
-      }
-      // Not in pvars and weak or undef -> nothing to assert
-    } else if (cVars.has(name)) {
-      if (assertion.subType === 'unbound') {
-        return undefined;
-      }
-      // B⟨?x⟩ holds of every solution here.
-      if (assertion.subType !== 'bound') {
-        normalised.set(name, assertStrong(assertion.term));
-      }
-    } else {
-      normalised.set(name, assertion);
-    }
-  }
-  return normalised;
-}
-
-/**
- * The rule per operation, for a conjunction {@link normalise} has already read in terms of that operation.
+ * The rule per operation, for a conjunction {@link AssertionConjunction.normalisedFor} has already read in
+ * terms of that operation.
  *
  * Wherever the weak form is licensed, an assertion that cannot travel strongly is *demoted* rather than
  * left behind - that is the difference between reaching a BGP and stopping at the join above it. Only
  * where no form may pass does it stay on top. The unbound and bound forms have nothing below them to
- * demote to, so they either pass as themselves or stay.
+ * demote to, and neither has a clique edge, so they either pass as themselves or stay.
  */
 function swapWith(
   c: TransformContext,
@@ -178,14 +181,16 @@ function swapWith(
 ): PreOrderMappingReturn {
   const { AF } = c;
   switch (op.type) {
-    // A BGP and a path bind all of their variables, so normalisation has made every assertion that reaches them strong.
+    // A BGP and a path bind all of their variables, so normalisation has made every assertion that reaches
+    // them strong - and a clique reaching one is substituted to its representative, which turns two free
+    // variables of a pattern into the same one.
     case Algebra.Types.BGP: {
-      return keep(substituteIntoPatterns(c, op, strongTermsOf(assertions)));
+      return keep(substituteIntoPatterns(c, op, assertions.strongSubstitution()));
     }
     case Algebra.Types.PATH: {
-      return keep(substituteIntoPath(c, op, strongTermsOf(assertions)));
+      return keep(substituteIntoPath(c, op, assertions.strongSubstitution()));
     }
-    // The one leaf where all four forms do real work, since a VALUES column may be UNDEF.
+    // The one leaf where all of the forms do real work, since a VALUES column may be UNDEF.
     case Algebra.Types.VALUES: {
       return keep(pruneValues(c, op, assertions));
     }
@@ -226,13 +231,14 @@ function swapWith(
       return keep(AF.createMinus(
         // FMPush: the output is a subset of the LHS, so filtering it here is filtering the output.
         assertionFilter(c, left, assertions),
-        // The RHS takes the *weak* form of what we know strongly, and nothing of what we know in any
-        // other form. Since we know from the LHS that `sameTerm(?x, c)`, the RHS can only remove
-        // mappings of the LHS if either ?x is not bound there, or it is bound to c - any other RHS
-        // mapping is incompatible and so removes nothing anyway. That argument needs the LHS to *have*
-        // ?x bound, which is exactly what the weak and unbound forms do not give us: under those, an
-        // RHS mapping binding ?x to another term can still remove an LHS mapping that leaves it free.
-        assertionFilter(c, right, allWeakened(strongOf(assertions))),
+        // The RHS takes the *weak* form of what we know strongly about a term, and nothing else at all.
+        // Since we know from the LHS that `sameTerm(?x, c)`, the RHS can only remove mappings of the LHS
+        // if either ?x is not bound there, or it is bound to c - any other RHS mapping is incompatible and
+        // so removes nothing anyway. That argument needs the LHS to *have* ?x bound, which is exactly what
+        // the weak and unbound forms do not give us: under those, an RHS mapping binding ?x to another
+        // term can still remove an LHS mapping that leaves it free. A clique has no weak form to send in
+        // the first place, and the term is what the argument turns on: an anchor both sides agree on.
+        assertionFilter(c, right, weakenedTerms(assertions)),
       ));
     }
     case Algebra.Types.GROUP: {
@@ -242,19 +248,21 @@ function swapWith(
       // forms rule out. Anything else has to stay above: filtering before
       // the aggregation would change the aggregate. A key takes its `pVars` from the input, so an
       // unbound assertion pushed below still takes the variable out of scope, as it did on top.
+      // An edge with one endpoint outside the keys is one of those: kept on top, where normalisation
+      // correctly empties the plan, the other endpoint being out of scope above the GROUP.
       const groupsOn = new Set(op.variables.map(variable => variable.value));
-      const groupsWeAssert = restrict(assertions, name => groupsOn.has(name));
-      if (groupsWeAssert.size === 0) {
+      const { inside, outside } = assertions.split(name => groupsOn.has(name));
+      if (inside.size === 0) {
         return keep(assertionFilter(c, op, assertions));
       }
       return keep(assertionFilter(
         c,
-        AF.createGroup(assertionFilter(c, op.input, groupsWeAssert), op.variables, op.aggregates),
-        restrict(assertions, name => !groupsOn.has(name)),
+        AF.createGroup(assertionFilter(c, op.input, inside), op.variables, op.aggregates),
+        outside,
       ));
     }
     // Congruence: these do not touch which variables a solution binds.
-    // For the projection, dom(θ) ⊆ variables holds, since pVars of a projection is what it projects.
+    // For the projection, dom(Θ) ⊆ variables holds, since pVars of a projection is what it projects.
     case Algebra.Types.PROJECT: {
       // Can push since we know we are projected. (by pvars checks)
       return keep(AF.createProject(assertionFilter(c, op.input, assertions), op.variables));
@@ -286,7 +294,8 @@ function swapWith(
  *
  * All variables of a BGP are certainly bound, so the only thing left to check is whether the terms can
  * occupy the positions they land in. BGPs are duplicate-free and substituting only restricts which
- * solutions exist, so multiplicities are preserved.
+ * solutions exist - renaming a variable to the representative of its clique included - so multiplicities
+ * are preserved.
  */
 function substituteIntoPatterns(
   c: TransformContext,
@@ -325,44 +334,59 @@ function substituteIntoPath(c: TransformContext, path: Algebra.Path, assertions:
 /**
  * Prunes the rows of a VALUES that contradict the assertions, and drops the columns they decide.
  *
+ * A unification decides a column against *another column of the same row*: under A⟨?x ≡ ?y⟩ the rows where
+ * the two differ are dropped, the representative's column is kept, and the other one is re-bound from it.
+ * Every member of a clique that gets here is a variable of the VALUES, since normalisation would otherwise
+ * have emptied the plan by (FBndII).
+ *
  * Row-level filtering keeps duplicate rows duplicated, so multiplicities are preserved.
  */
 function pruneValues(c: TransformContext, values: Algebra.Values, assertions: AssertionConjunction): Algebra.Operation {
-  const strongAssertions = strongTermsOf(assertions);
-  // The forms that require the row to provide a value at all, counted so that a row leaving one of them
-  // UNDEF - which a row expresses by not carrying the column - is pruned below.
-  const requiredBound = [ ...assertions ].filter(([ , assertion ]) => impliesBound(assertion)).length;
+  const substitution = assertions.strongSubstitution();
+  // The forms that require the row to provide a value at all - a row leaving one of them UNDEF, which it
+  // expresses by not carrying the column, is pruned.
+  const requiredBound = [ ...assertions.boundImpliedBy() ];
   const newBindings: Algebra.Values['bindings'] = [];
   for (const binding of values.bindings) {
+    if (requiredBound.some(name => binding[name] === undefined)) {
+      continue;
+    }
     const newRow: typeof newBindings[0] = {};
     let isPruned = false;
-    let metRequiredBound = 0;
     for (const [ variable, value ] of Object.entries(binding)) {
       const assertion = assertions.get(variable);
       if (assertion === undefined) {
         // We do not assert on this var
         newRow[variable] = value;
-      } else if (assertion.subType === 'unbound' && value !== undefined) {
+        continue;
+      }
+      if (assertion.subType === 'unbound') {
         // The row binds a column that has to be unbound.
-        isPruned = true;
-        break;
-      } else if (assertion.subType === 'bound') {
+        if (value !== undefined) {
+          isPruned = true;
+          break;
+        }
+        continue;
+      }
+      if (assertion.subType === 'bound') {
         // Any value satisfies B⟨?x⟩, and since the row keeps deciding which one, the column stays.
-        metRequiredBound++;
         newRow[variable] = value;
-      } else if (assertion.subType !== 'unbound' && !assertion.term.equals(value)) {
+        continue;
+      }
+      // A⟨?x ≡ c⟩ or W⟨?x ≡ c⟩ against the term, and A⟨?x ≡ ?rep⟩ against whatever this row put in `?rep`.
+      const required = assertion.term.termType === 'Variable' ? binding[assertion.term.value] : assertion.term;
+      if (value !== undefined && !(required?.equals(value))) {
         // The row binds a column to a term not allowed.
         isPruned = true;
         break;
-      } else if (assertion.subType === 'weak') {
-        // Weak and term val is correct
-        newRow[variable] = value;
-      } else if (assertion.subType === 'strong') {
-        metRequiredBound++;
       }
+      if (assertion.subType === 'weak') {
+        // Weak and term val is correct - the row keeps deciding whether the variable is bound at all.
+        newRow[variable] = value;
+      }
+      // The strong form decides the column outright, so it is dropped here and re-bound below.
     }
-    // Also prune rows that left a variable required to be bound UNDEF.
-    if (!isPruned && metRequiredBound === requiredBound) {
+    if (!isPruned) {
       newBindings.push(newRow);
     }
   }
@@ -379,7 +403,7 @@ function pruneValues(c: TransformContext, values: Algebra.Values, assertions: As
   const pruned = remainingVars.length === 0 && newBindings.length === 1 ?
     c.AF.createBgp([]) :
     c.AF.createValues(remainingVars, newBindings);
-  return bindAssertedTerms(c, pruned, strongAssertions);
+  return bindAssertedTerms(c, pruned, substitution);
 }
 
 /**
@@ -391,11 +415,16 @@ function pruneValues(c: TransformContext, values: Algebra.Values, assertions: As
  * treats as false, matching the dropped unbound case.
  *
  * This is deliberately not shortcut to constant folding, because the important case is *renaming*: for
- * `BIND(?z AS ?x)`, `sameTerm(?z, c)` is itself an assertion, so the conjunction continues on `?z` and
- * may reach a BGP. Assertions propagate through renamings.
+ * `BIND(?z AS ?x)`, whatever `?x` had to be equal to, `?z` has to be equal to below. Everything the
+ * conjunction says about `?x` **transfers** to `?z` there - the term for a pinned assertion, and the place
+ * in the clique for a unification, so `BIND(?z AS ?t)` under A⟨?t ≡ ?y⟩ leaves A⟨?z ≡ ?y⟩ below and may
+ * reach a BGP. Transferring rather than deleting matters: `?x` has to leave Θ before descending (an
+ * EXTEND target is not bound below itself), and simply dropping it would drop the edges of a clique it
+ * happened to be the representative of.
  *
- * Only the strong form does any of that. W⟨?x ≡ c⟩ on the BIND target is also satisfied by the solutions
- * where `e` errored and left `?x` unbound, so it says nothing about `e` and stays above the EXTEND.
+ * Only the forms that imply `bnd(?x)` do any of that. W⟨?x ≡ c⟩ on the BIND target is also satisfied by
+ * the solutions where `e` errored and left `?x` unbound, so it says nothing about `e` and stays above the
+ * EXTEND, as do B⟨?x⟩ and U⟨?x⟩ - which are about the EXTEND's own binding rather than about `e`.
  */
 function pushIntoExtend(
   c: TransformContext,
@@ -404,56 +433,58 @@ function pushIntoExtend(
 ): PreOrderMappingReturn {
   const { AF } = c;
   const target = extend.variable.value;
+  const expression = extend.expression;
   const assertionOfTarget = assertions.get(target);
   // SPARQL spec keeps BINDing an in-scope variable explicitly undefined. We assume it errors,
-  // so in `bind(e AS ?x)` ?x is not bound below the EXTEND.It has to leave θ before descending,
+  // so in `bind(e AS ?x)` ?x is not bound below the EXTEND. It has to leave Θ before descending,
   // or the (FBndII) check at the top of the swap wrongly yields empty.
-  const remainingAssertions = restrict(assertions, name => name !== target);
+  const { inside: remaining, outside: aboutTarget } = assertions.split(name => name !== target);
 
-  if (assertionOfTarget?.subType !== 'strong') {
-    // A weak or unbound assertion: keep target filter here, push remainder
-    return keep(assertionFilter(
-      c,
-      AF.createExtend(
-        assertionFilter(c, extend.input, remainingAssertions),
-        extend.variable,
-        substituteInExpression(c, extend.expression, strongTermsOf(remainingAssertions)),
-      ),
-      restrict(assertions, name => name === target),
+  // A BIND copying one variable into another: the two carry the same value below, so Θ transfers.
+  const source = expression.subType === Algebra.ExpressionTypes.TERM &&
+    expression.term.termType === 'Variable' && expression.term.value !== target ?
+    expression.term.value :
+    undefined;
+  if (source !== undefined && assertionOfTarget !== undefined && impliesBound(assertionOfTarget)) {
+    const below = assertions.transferred(target, source);
+    if (below === undefined) {
+      return empty(c, extend);
+    }
+    // `?z ≡ c` holds below, so binding `?x` straight to `c` is the same as binding it to `?z`; and where
+    // the transfer was a clique membership, `?z` is written as the representative it substitutes to.
+    return keep(AF.createExtend(
+      assertionFilter(c, extend.input, below),
+      extend.variable,
+      substituteInExpression(c, expression, below.strongSubstitution()),
     ));
   }
 
-  // We know we have a strong target assertion
-
-  // Check whether we can link the assertion on our var to the vars used in the expression
-  // TODO(next time): here is where restrictions on triple terms could be transferred.
-  const expression = extend.expression;
-  if (expression.subType === Algebra.ExpressionTypes.TERM) {
-    const term = expression.term;
-    if (term.termType === 'Variable') {
-      // Binding to a var means the var has the same term restriction
-      const merged = mergeAssertion(remainingAssertions.get(term.value), assertStrong(assertionOfTarget.term));
-      if (merged === undefined) {
-        return empty(c, extend);
-      }
-      remainingAssertions.set(term.value, merged);
-      // ?z ≡ c holds below, so binding ?x straight to c is the same as binding it to ?z.
-      return keep(AF.createExtend(
-        assertionFilter(c, extend.input, remainingAssertions),
+  // Anything that could not transfer stays here: the weak, bound and unbound forms, and the edges of a
+  // clique the BIND does not copy a variable into.
+  if (assertionOfTarget?.subType !== 'strong' || !isAssertableTerm(assertionOfTarget.term)) {
+    return keep(assertionFilter(
+      c,
+      AF.createExtend(
+        assertionFilter(c, extend.input, remaining),
         extend.variable,
-        AF.createTermExpression(assertionOfTarget.term),
-      ));
-    }
-    // A constant BIND decides the assertion statically.
-    if (isAssertableTerm(term)) {
-      return term.equals(assertionOfTarget.term) ?
-        keep(AF.createExtend(
-          assertionFilter(c, extend.input, remainingAssertions),
-          extend.variable,
-          AF.createTermExpression(assertionOfTarget.term),
-        )) :
-        empty(c, extend);
-    }
+        substituteInExpression(c, expression, remaining.strongSubstitution()),
+      ),
+      aboutTarget,
+    ));
+  }
+
+  // We know we have a strong target assertion, against a ground term.
+  // TODO(next time): here is where restrictions on triple terms could be transferred.
+  const term = assertionOfTarget.term;
+  // A constant BIND decides the assertion statically.
+  if (expression.subType === Algebra.ExpressionTypes.TERM && isAssertableTerm(expression.term)) {
+    return expression.term.equals(term) ?
+      keep(AF.createExtend(
+        assertionFilter(c, extend.input, remaining),
+        extend.variable,
+        AF.createTermExpression(term),
+      )) :
+      empty(c, extend);
   }
 
   // For a compound expression, `sameTerm(e, c)` is a multi-variable condition: it needs the full
@@ -461,15 +492,15 @@ function pushIntoExtend(
   // so it is left here for a generic filter pushdown.
   return keep(AF.createExtend(
     AF.createFilter(
-      assertionFilter(c, extend.input, remainingAssertions),
+      assertionFilter(c, extend.input, remaining),
       sameTermExpression(
         c,
-        substituteInExpression(c, expression, strongTermsOf(remainingAssertions)),
-        assertionOfTarget.term,
+        substituteInExpression(c, expression, remaining.strongSubstitution()),
+        term,
       ),
     ),
     extend.variable,
-    AF.createTermExpression(assertionOfTarget.term),
+    AF.createTermExpression(term),
   ));
 }
 
@@ -482,12 +513,14 @@ function pushIntoExtend(
  *
  * An assertion on a variable other than `?g` distributes over the union by (FUPush) and then into the
  * left argument of each join by (FJPush), licensed by the *second* disjunct since
- * `?x ∉ pVars({?g↦uᵢ}) = {?g}`. That leaves no precondition, and holds for all four forms alike - so a
+ * `?x ∉ pVars({?g↦uᵢ}) = {?g}`. That leaves no precondition, and holds for all of the forms alike - so a
  * conjunction saying nothing about `?g`, which is the common case, travels into `P` whole and leaves the
  * GRAPH itself alone.
  *
  * An assertion on `?g` itself selects the single named graph `c` - every other `uᵢ` only contributes
- * solutions binding `?g` to `uᵢ ≠ c` - leaving `⟦P⟧_c ⋈ {?g↦c}`. Both halves need care:
+ * solutions binding `?g` to `uᵢ ≠ c` - leaving `⟦P⟧_c ⋈ {?g↦c}`. Only a *term* can do that: a clique over
+ * `?g` says only that it equals some other variable, which names no graph statically, so those edges stay
+ * above. Both halves of the selection need care:
  *
  * - `?g` may occur *inside* `P`, where it was the join that dropped the solutions binding it to another
  *   term. So `P` gets the assertion too, in the **weak** form: it need not bind `?g`, and where it binds
@@ -512,18 +545,18 @@ function pushIntoGraph(
   if (graphVar === undefined) {
     return keep(AF.createGraph(assertionFilter(c, graph.input, assertions), graphName));
   }
-  // If something is asserted about the var, we know it is a Strong assertion. Other cases would already be handled.
-  if (assertions.get(graphVar) === undefined) {
+  const assertedGraphName = assertions.get(graphVar);
+  // Only a term selects a graph. Everything else - nothing asserted, or a clique over `?g` - travels into
+  // the pattern except for what mentions `?g`, which stays above. Since `?g ∈ cVars(Graph)`, the weak and
+  // bound forms cannot be what is asserted here: normalisation has already promoted or dropped them.
+  if (assertedGraphName?.subType !== 'strong' || !isAssertableTerm(assertedGraphName.term)) {
+    const { inside, outside } = assertions.split(name => name !== graphVar);
     return keep(assertionFilter(
       c,
-      AF.createGraph(
-        assertionFilter(c, graph.input, restrict(assertions, name => name !== graphVar)),
-        graphName,
-      ),
-      restrict(assertions, name => name === graphVar),
+      AF.createGraph(assertionFilter(c, graph.input, inside), graphName),
+      outside,
     ));
   }
-  const assertedGraphName = <StrongAssertion> assertions.get(graphVar);
   if (assertedGraphName.term.termType !== 'NamedNode') {
     return empty(c, graph);
   }
@@ -532,8 +565,8 @@ function pushIntoGraph(
   const { cVars, pVars } = cpVars(graph.input);
   // `?g` travels on into the pattern, in the *weak* form: `P` need not bind it at all, and the join
   // with `{?g ↦ c}` is what would have dropped the solutions binding it to anything else.
-  const inside = new Map(assertions);
-  inside.set(graphVar, assertWeak(assertedGraphName.term));
+  const inside = assertions.split(name => name !== graphVar).inside;
+  inside.assertTerm(graphVar, assertedGraphName.term, false);
   const selected = AF.createGraph(assertionFilter(c, graph.input, inside), assertedGraphName.term);
 
   if (cVars.has(graphVar)) {
@@ -558,8 +591,10 @@ function pushIntoGraph(
 /**
  * Pushes the assertions into the operands of a JOIN their licence holds for (FJPush).
  *
- * Specialised to a single variable, that licence is `L(?x, A₁, A₂) ≔ ?x ∈ cVars(A₁) ∨ ?x ∉ pVars(A₂)`;
- * the second disjunct is easy to forget but does real work.
+ * The licence is per *variable*: `L(?x, Aᵢ) ≔ ?x ∈ cVars(Aᵢ) ∨ ∀ j ≠ i . ?x ∉ pVars(Aⱼ)`. Under it the
+ * value `?x` takes in a merged mapping is the one `Aᵢ` gave it, so a condition over variables that all
+ * satisfy it evaluates the same on the operand as on the join. The second disjunct is easy to forget but
+ * does real work.
  *
  * An assertion goes into *every* operand it is licensed for - the join already enforces that all operands
  * agree on the variable, so an assertion certain on one side is free on the others and shrinks both
@@ -576,6 +611,9 @@ function pushIntoGraph(
  * form to fall back on. The very identity that carries W and U through is what it fails: a merged mapping
  * binds `?x` when *either* half does, so an operand leaving it unbound may still be part of a solution
  * that binds it. Unlicensed, it stays on top.
+ *
+ * A clique is placed by {@link splitClique} instead, on the same licence read over both endpoints of an
+ * edge at once.
  */
 function pushIntoJoin(
   c: TransformContext,
@@ -585,39 +623,53 @@ function pushIntoJoin(
   // Read before any rewriting: every rewrite preserves pVars and never shrinks cVars, so these licences
   // stay valid while the operands are rewritten.
   const operands = join.input.map(operand => cpVars(operand));
+  const licensed = (index: number, name: string): boolean =>
+    operands[index].cVars.has(name) ||
+    operands.every((other, otherIndex) => otherIndex === index || !other.pVars.has(name));
 
-  const operandAssertions = join.input.map(() => new Map<string, Assertion>());
-  const kept = new Map<string, Assertion>();
-  // For every assertion, find out where it can go.
-  for (const [ name, assertion ] of assertions) {
+  const operandAssertions: AssertionConjunct[][] = join.input.map(() => []);
+  const kept: AssertionConjunct[] = [];
+  // For every assertion about a single variable, find out where it can go.
+  for (const conjunct of singleVariableConjuncts(assertions)) {
+    const { name, assertion } = conjunct;
     let placedStrongly = false;
     for (const [ index ] of join.input.entries()) {
-      // L(?x, operand, rest): certain in this operand, or impossible in every other one.
-      const licensed = impliesBound(assertion) && (
-        operands[index].cVars.has(name) ||
-        operands.every((other, otherIndex) => otherIndex === index || !other.pVars.has(name)));
-      if (licensed) {
-        operandAssertions[index].set(name, assertion);
+      if (impliesBound(assertion) && licensed(index, name)) {
+        operandAssertions[index].push(conjunct);
         placedStrongly = true;
       } else if (operands[index].pVars.has(name)) {
-        const demoted = weakened(assertion);
+        const demoted = weakenedConjunct(conjunct);
         // Bound assertion knows no weak form and cannot be pushed
         if (demoted !== undefined) {
-          operandAssertions[index].set(name, demoted);
+          operandAssertions[index].push(demoted);
         }
       }
     }
     // The weak and unbound forms are always consumed by the join; the two that imply `bound(?x)` only
     // when some operand took them in.
     if (impliesBound(assertion) && !placedStrongly) {
-      kept.set(name, assertion);
+      kept.push(conjunct);
     }
+  }
+  // Every operand pushing a sub-clique of its own also *connects* it: the equality between two variables
+  // it binds certainly is what join compatibility already enforces on the output.
+  for (const clique of assertions.cliques()) {
+    const placed = splitClique(
+      clique,
+      join.input.map((_, index) => clique.filter(name => licensed(index, name))),
+      join.input.map(() => true),
+    );
+    for (const [ index, pushed ] of placed.intoTarget.entries()) {
+      operandAssertions[index].push(...pushed);
+    }
+    kept.push(...placed.kept);
   }
 
   return keep(assertionFilter(
     c,
-    c.AF.createJoin(join.input.map((operand, index) => assertionFilter(c, operand, operandAssertions[index])), false),
-    kept,
+    c.AF.createJoin(join.input.map((operand, index) =>
+      assertionFilter(c, operand, AssertionConjunction.of(operandAssertions[index]))), false),
+    AssertionConjunction.of(kept),
   ));
 }
 
@@ -625,9 +677,11 @@ function pushIntoJoin(
  * Pushes the assertions into a LEFT JOIN (OPTIONAL).
  *
  * The structural win comes first: `?x ∉ pVars(A₁) ⟹ σ_{?x≡c}(A₁ ⟕ A₂) ≡ A₁ ⋈ σ_{?x≡c}(A₂)`.
- * Only the two forms implying `bound(?x)` trigger it - what they rule out is precisely the solutions
+ * Only the forms implying `bound(?x)` trigger it - what they rule out is precisely the solutions
  * leaving `?x` unbound, which with `?x ∉ pVars(A₁)` is every solution the anti-join half of the left join
- * produces. The weak and unbound forms are satisfied by exactly those, so they keep the OPTIONAL.
+ * produces. The weak and unbound forms are satisfied by exactly those, so they keep the OPTIONAL. A clique
+ * triggers it through the B⟨?x⟩ it entails of every one of its members, which is why a unification over a
+ * right-only variable collapses the OPTIONAL even when the edge itself has to stay above it.
  *
  * Otherwise (FLPush) sends the licensed assertions into `A₁`, and `?x ∈ cVars(A₁) ∩ cVars(A₂)`
  * additionally licenses replicating into `A₂`: any `μ₂` compatible with a surviving `μ₁` binds `?x`
@@ -639,7 +693,7 @@ function pushIntoJoin(
  * instead let the unmatched `μ₁` through the anti-join half.
  *
  * B⟨?x⟩ has no weak form to fall back on either, so an unlicensed one simply stays on top: `A₂` may be
- * what binds `?x`, so a `μ₁` leaving it unbound cannot be dropped from `A₁`.
+ * what binds `?x`, so a `μ₁` leaving it unbound cannot be dropped from `A₁`. Neither has a clique edge.
  */
 function pushIntoLeftJoin(
   c: TransformContext,
@@ -650,8 +704,7 @@ function pushIntoLeftJoin(
   const [ left, right ] = leftJoin.input;
   const leftVars = cpVars(left);
 
-  if ([ ...assertions ].some(([ name, assertion ]) =>
-    impliesBound(assertion) && !leftVars.pVars.has(name))) {
+  if ([ ...assertions.boundImpliedBy() ].some(name => !leftVars.pVars.has(name))) {
     // Our filter asserts that one of variables ONLY appearing on RHS is bound, thus, the LeftJoin becomes Join.
     const joined = AF.createJoin([ left, right ], true);
     const rebuilt = leftJoin.expression === undefined ? joined : AF.createFilter(joined, leftJoin.expression);
@@ -659,82 +712,152 @@ function pushIntoLeftJoin(
   }
 
   const rightVars = cpVars(right);
-  const intoLeft = new Map<string, Assertion>();
-  const intoRight = new Map<string, Assertion>();
-  const kept = new Map<string, Assertion>();
-  for (const [ name, assertion ] of assertions) {
-    const licensed = impliesBound(assertion) && (leftVars.cVars.has(name) || !rightVars.pVars.has(name));
-    if (licensed) {
-      intoLeft.set(name, assertion);
-      if (leftVars.cVars.has(name) && rightVars.cVars.has(name)) {
-        intoRight.set(name, assertion);
+  const licensedLeft = (name: string): boolean => leftVars.cVars.has(name) || !rightVars.pVars.has(name);
+  const licensedRight = (name: string): boolean => leftVars.cVars.has(name) && rightVars.cVars.has(name);
+  const intoLeft: AssertionConjunct[] = [];
+  const intoRight: AssertionConjunct[] = [];
+  const kept: AssertionConjunct[] = [];
+  for (const conjunct of singleVariableConjuncts(assertions)) {
+    const { name, assertion } = conjunct;
+    if (impliesBound(assertion) && licensedLeft(name)) {
+      intoLeft.push(conjunct);
+      if (licensedRight(name)) {
+        intoRight.push(conjunct);
       }
     } else {
       // Not licensed as itself, but the weaker forms always are on the left - except B⟨?x⟩, which has none.
       // It stays here as well, since the right hand side can still introduce a binding that violates it.
-      const demoted = leftVars.pVars.has(name) ? weakened(assertion) : undefined;
+      const demoted = leftVars.pVars.has(name) ? weakenedConjunct(conjunct) : undefined;
       if (demoted !== undefined) {
-        intoLeft.set(name, demoted);
+        intoLeft.push(demoted);
       }
-      kept.set(name, assertion);
+      kept.push(conjunct);
     }
   }
+  // Only what goes into the LHS *connects* the clique back up: the RHS push is a replication of what the
+  // LHS already enforces, and the anti-join half of a left join enforces nothing between the two sides.
+  for (const clique of assertions.cliques()) {
+    const placed = splitClique(
+      clique,
+      [ clique.filter(name => licensedLeft(name)), clique.filter(name => licensedRight(name)) ],
+      [ true, false ],
+    );
+    intoLeft.push(...placed.intoTarget[0]);
+    intoRight.push(...placed.intoTarget[1]);
+    kept.push(...placed.kept);
+  }
 
+  const leftAssertions = AssertionConjunction.of(intoLeft);
   // Every candidate μ₁ binds the variables strongly asserted in intoLeft to their term once those are
   // pushed into A₁, so substituting them into the left join condition is sound.
   const expression = leftJoin.expression === undefined ?
     undefined :
-    substituteInExpression(c, leftJoin.expression, strongTermsOf(intoLeft));
+    substituteInExpression(c, leftJoin.expression, leftAssertions.strongSubstitution());
   // TODO: the substitution in the filter might reveal more information that we could use!
   return keep(assertionFilter(
     c,
-    AF.createLeftJoin(assertionFilter(c, left, intoLeft), assertionFilter(c, right, intoRight), expression),
-    kept,
+    AF.createLeftJoin(
+      assertionFilter(c, left, leftAssertions),
+      assertionFilter(c, right, AssertionConjunction.of(intoRight)),
+      expression,
+    ),
+    AssertionConjunction.of(kept),
   ));
+}
+
+/**
+ * Places one clique over the targets of a join-like operation: each target takes the sub-clique of the
+ * members it licenses, and the edges connecting what no single target covered stay on top.
+ *
+ * Splitting *edges* rather than variables is the whole point (see the file overview). For `w ≡ x ≡ y ≡ z`
+ * over a join with `cVars(L) ⊇ {w,x}` and `cVars(R) ⊇ {y,z}` no single operand is licensed for the whole
+ * clique, yet each takes half of it, and one edge between the halves is enough to put it back together:
+ * `σ_{x≡y}( σ_{w≡x}(L) ⋈ σ_{y≡z}(R) )`.
+ *
+ * Two targets whose sub-cliques *share* a member need no such edge, and that is what `connects` records:
+ * a member both operands are licensed for is certainly bound in both (the alternative licence -
+ * `?x ∉ pVars` of every other operand - excludes it from all but one), so join compatibility already
+ * enforces the equality that would connect them. It does not for a left join's right hand side, where the
+ * anti-join half enforces nothing between the sides, so that target does not connect.
+ *
+ * A target licensed for a single member gets no edge, but still B⟨?x⟩ of it: strictly weaker than any edge
+ * and so always sound, and it travels on the licence B already has.
+ */
+function splitClique(
+  members: string[],
+  licensedPer: string[][],
+  connects: boolean[],
+): { intoTarget: AssertionConjunct[][]; kept: AssertionConjunct[] } {
+  const intoTarget = licensedPer.map(licensed => licensed.length > 1 ?
+    cliqueEdges(licensed) :
+    licensed.map(name => <AssertionConjunct> { name, assertion: assertBound() }));
+
+  // Union-find over the members, joined by every sub-clique that both went somewhere and holds above.
+  const component = new Map(members.map(name => [ name, name ]));
+  const find = (name: string): string => {
+    let root = name;
+    while (component.get(root) !== root) {
+      root = <string> component.get(root);
+    }
+    return root;
+  };
+  for (const [ index, licensed ] of licensedPer.entries()) {
+    if (!connects[index]) {
+      continue;
+    }
+    for (const member of licensed.slice(1)) {
+      component.set(find(licensed[0]), find(member));
+    }
+  }
+
+  // One edge from every component that is not the representative's back to the representative: together
+  // with the sub-cliques that were placed, that spans the clique again.
+  const [ representative ] = members;
+  const kept: AssertionConjunct[] = [];
+  const spanned = new Set([ find(representative) ]);
+  for (const member of members) {
+    const root = find(member);
+    if (spanned.has(root)) {
+      continue;
+    }
+    spanned.add(root);
+    kept.push(unification(member, representative));
+  }
+  return { intoTarget, kept };
+}
+
+/** The edges of the spanning star of a clique: every member but the first, against that first one. */
+function cliqueEdges(members: string[]): AssertionConjunct[] {
+  const sorted = [ ...members ].sort((left, right) => left.localeCompare(right));
+  return sorted.slice(1).map(member => unification(member, sorted[0]));
+}
+
+/** The conjunct A⟨?x ≡ ?representative⟩: one edge of a clique. */
+function unification(name: string, representative: string): AssertionConjunct {
+  return { name, assertion: assertStrong(DF.variable(representative)) };
+}
+
+/** The conjuncts of Θ that are about a single variable, which is everything but the edges of a clique. */
+function singleVariableConjuncts(assertions: AssertionConjunction): AssertionConjunct[] {
+  return assertions.conjuncts().filter(conjunct => conjunctVars(conjunct).length === 1);
+}
+
+/**
+ * The assertions of Θ that fix a variable to a *term*, weakened - the only ones that may enter the right
+ * hand side of a MINUS.
+ */
+function weakenedTerms(assertions: AssertionConjunction): AssertionConjunction {
+  return AssertionConjunction.of(assertions.conjuncts()
+    .filter(({ assertion }) => assertion.subType === 'strong' && isAssertableTerm(assertion.term))
+    .map(({ name, assertion }) => <AssertionConjunct> {
+      name,
+      assertion: assertWeak((<StrongAssertion> assertion).term),
+    }));
 }
 
 /** The certainly and possibly bound variables of an operation, computed once and cached on it. */
 function cpVars(op: Algebra.Operation): CPMeta {
   return withCpVars(op).metadata;
-}
-
-/** The assertions of `assertions` whose variable satisfies `predicate`. */
-function restrict(
-  assertions: AssertionConjunction,
-  predicate: (name: string) => boolean,
-): Map<string, Assertion> {
-  return new Map([ ...assertions ].filter(([ name ]) => predicate(name)));
-}
-
-/** The strong assertions of `assertions`, as a conjunction. */
-function strongOf(assertions: AssertionConjunction): Map<string, Assertion> {
-  return new Map([ ...assertions ].filter(([ , assertion ]) => assertion.subType === 'strong'));
-}
-
-/**
- * The same assertion, in the strongest form that survives a move somewhere the variable may be unbound:
- * A⟨?x ≡ c⟩ becomes W⟨?x ≡ c⟩, and W and U are already that weak.
- *
- * B⟨?x⟩ has no such form - weakening it means allowing the unbound case, and `¬b ∨ b` is `true` - so it
- * is `undefined`: it does not travel at all, and has to stay where it is.
- */
-function weakened(assertion: Assertion): Assertion | undefined {
-  if (assertion.subType === 'bound') {
-    return undefined;
-  }
-  return assertion.subType === 'strong' ? assertWeak(assertion.term) : assertion;
-}
-
-/** The same conjunction, with every assertion in it {@link weakened}, and the ones that have no weak form dropped. */
-function allWeakened(assertions: AssertionConjunction): Map<string, Assertion> {
-  const result = new Map<string, Assertion>();
-  for (const [ name, assertion ] of assertions) {
-    const weak = weakened(assertion);
-    if (weak !== undefined) {
-      result.set(name, weak);
-    }
-  }
-  return result;
 }
 
 /** Hands a value to the traversal, keeping the metadata of everything in it intact. */
@@ -765,6 +888,9 @@ function emptyOperation(c: TransformContext, replaced: Algebra.Operation): Algeb
 /**
  * Re-binds the variables the assertions substituted away, so that the rewrite preserves `pVars` and
  * `cVars` exactly. This EXTEND is mandatory: dropping it breaks the invariant, and breaks `SELECT *`.
+ *
+ * For a clique that is `BIND(?rep AS ?x)`, which `withCpVars` reads back as `?x ∈ cVars` from
+ * `?rep ∈ cVars`, so the rewrite does not shrink `cVars` either.
  */
 function bindAssertedTerms(
   c: TransformContext,
@@ -790,7 +916,7 @@ function assertionFilter(
   if (assertions.size === 0) {
     return op;
   }
-  const filter = <AssertionFilter> c.AF.createFilter(op, assertionsExpression(c, assertions));
+  const filter = <AssertionFilter> c.AF.createFilter(op, assertions.toExpression(c));
   filter.metadata = { assertions: { assertions, residual: undefined, contradictory: false }};
   return filter;
 }

@@ -924,6 +924,303 @@ GROUP BY ?x`,
     });
   });
 
+  describe('variable unification', () => {
+    it('unifies a pattern onto the representative of the clique and re-binds the other member', ({ expect }) => {
+      // The representative is the lexicographically first member, so `{?s, ?o}` unifies onto `?o`.
+      // The BIND is mandatory: substituting takes `?s` out of the pattern, and `pVars` is preserved.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(?s, ?o)) }',
+          `SELECT ?o ?p ( ?o AS ?s ) WHERE {
+  ?o ?p ?o .
+}`,
+      );
+    });
+
+    it('drags a term met above a unification onto every variable it unified', ({ expect }) => {
+      // The interop case: the left branch pins `?s`, the unification above hands that term to `?o` as
+      // well, and the right branch - which learns no term - unifies onto its representative instead.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          { ?s ?p ?o FILTER(sameTerm(?s, :x)) } UNION { ?s :p ?o }
+          FILTER(sameTerm(?s, ?o))
+        }`,
+        `SELECT ?o ?p ?s WHERE {
+  {
+    <ex://x> ?p <ex://x> .
+    BIND( <ex://x> AS ?s )
+    BIND( <ex://x> AS ?o )
+  }
+  UNION {
+    ?o <ex://p> ?o .
+    BIND( ?o AS ?s )
+  }
+}`,
+      );
+    });
+
+    it('collapses a three way unification onto one variable', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?b :p ?c . ?c :q ?a FILTER(sameTerm(?a, ?b) && sameTerm(?b, ?c)) }',
+        `SELECT ?a ( ?a AS ?b ) ( ?a AS ?c ) WHERE {
+  ?a <ex://p> ?a .
+  ?a <ex://q> ?a .
+}`,
+      );
+    });
+
+    it('substitutes the term into every member once the clique is pinned', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?x :p ?y FILTER(sameTerm(?x, ?y) && sameTerm(?y, :c)) }',
+        `SELECT ( <ex://c> AS ?x ) ( <ex://c> AS ?y ) WHERE {
+  <ex://c> <ex://p> <ex://c> .
+}`,
+      );
+    });
+
+    it('empties the plan where the clique is pinned to two distinct terms', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?x :p ?y FILTER(sameTerm(?x, ?y) && sameTerm(?x, :c) && sameTerm(?y, :d)) }',
+        `SELECT ?x ?y WHERE {
+  ?x <ex://p> ?y .
+  FILTER ( FALSE )
+}`,
+      );
+    });
+
+    it('empties the plan where `!bound` meets a clique member, which is always strong', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?x :p ?y FILTER(sameTerm(?x, ?y) && !bound(?x)) }',
+        `SELECT ?x ?y WHERE {
+  ?x <ex://p> ?y .
+  FILTER ( FALSE )
+}`,
+      );
+    });
+
+    it('completes a weak assertion it meets, membership implying bound', ({ expect }) => {
+      // `sameTerm(?x, ?y)` says `?x` is bound, which promotes W⟨?x ≡ :c⟩ to the strong form; that pins
+      // the clique, and the `bound(?x)` it entails turns the OPTIONAL into a join on the way.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          ?s :p ?y OPTIONAL { ?s :r ?x }
+          FILTER(sameTerm(?x, ?y) && (!bound(?x) || sameTerm(?x, :c)))
+        }`,
+        `SELECT ?s ?x ?y WHERE {
+  {
+    ?s <ex://p> <ex://c> .
+    BIND( <ex://c> AS ?y )
+  }
+  {
+    ?s <ex://r> <ex://c> .
+    BIND( <ex://c> AS ?x )
+  }
+}`,
+      );
+    });
+
+    it('prunes the VALUES rows whose two columns differ, and re-binds the column it drops', ({ expect }) => {
+      // Three ways for a row to go: the columns differ, one of them is UNDEF where the clique requires
+      // it bound, or they agree - in which case only the representative's column has to stay.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          VALUES (?s ?o ?k) { (:a :a 1) (:a :b 2) (UNDEF :c 3) (:d :d 4) }
+          FILTER(sameTerm(?s, ?o))
+        }`,
+        `SELECT ?k ?o ( ?o AS ?s ) WHERE {
+  VALUES( ?o ?k ){
+    ( <ex://a> "1"^^<http://www.w3.org/2001/XMLSchema#integer> )
+    ( <ex://d> "4"^^<http://www.w3.org/2001/XMLSchema#integer> )
+  }
+}`,
+      );
+    });
+
+    it('splits the clique over a join, keeping one edge to span what it pushed', ({ expect }) => {
+      // No operand is licensed for the whole clique, but each is for half of it, and one edge between
+      // the halves puts it back together: `σ_{y≡w}( σ_{w≡x}(L) ⋈ σ_{y≡z}(R) )`.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          { SELECT ?w ?x WHERE { ?w :p ?x } }
+          { SELECT ?y ?z WHERE { ?y :q ?z } }
+          FILTER(sameTerm(?w, ?x) && sameTerm(?x, ?y) && sameTerm(?y, ?z))
+        }`,
+        `SELECT ?w ?x ?y ?z WHERE {
+  {
+    SELECT ?w ( ?w AS ?x ) WHERE {
+      ?w <ex://p> ?w .
+    }
+  }
+  {
+    SELECT ?y ( ?y AS ?z ) WHERE {
+      ?y <ex://q> ?y .
+    }
+  }
+  FILTER ( SAMETERM( ?y , ?w ) )
+}`,
+      );
+    });
+
+    it('needs no spanning edge when the two halves share a variable', ({ expect }) => {
+      // `?y` is certain on both sides, so join compatibility *is* the equality that would connect them.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          { SELECT ?x ?y WHERE { ?x :p ?y } }
+          { SELECT ?y ?z WHERE { ?y :q ?z } }
+          FILTER(sameTerm(?x, ?y) && sameTerm(?y, ?z))
+        }`,
+        `SELECT ?x ?y ?z WHERE {
+  {
+    SELECT ?x ( ?x AS ?y ) WHERE {
+      ?x <ex://p> ?x .
+    }
+  }
+  {
+    SELECT ?y ( ?y AS ?z ) WHERE {
+      ?y <ex://q> ?y .
+    }
+  }
+}`,
+      );
+    });
+
+    it('empties the plan where one member of the clique is not a grouping key', ({ expect }) => {
+      // The edge stays above the GROUP, where `?y` is out of scope, and a strong assertion on a variable
+      // outside `pVars` is (FBndII). Splitting the clique per *variable* would have lost that.
+      expectTransform(
+        expect,
+        'SELECT ?x (COUNT(?y) AS ?n) WHERE { ?x :p ?y } GROUP BY ?x HAVING(sameTerm(?x, ?y))',
+        `SELECT ?x ( COUNT( ?y ) AS ?n ) WHERE {
+  ?x <ex://p> ?y .
+  FILTER ( FALSE )
+}
+GROUP BY ?x`,
+      );
+    });
+
+    it('pushes below a GROUP BY whose keys hold the whole clique', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT ?x ?y (COUNT(?z) AS ?n) WHERE { ?x :p ?y . ?y :q ?z } GROUP BY ?x ?y HAVING(sameTerm(?x, ?y))',
+        `SELECT ?x ?y ( COUNT( ?z ) AS ?n ) WHERE {
+  ?x <ex://p> ?x .
+  ?x <ex://q> ?z .
+  BIND( ?x AS ?y )
+}
+GROUP BY ?x?y`,
+      );
+    });
+
+    it('transfers the clique of a BIND target to the variable it copies', ({ expect }) => {
+      // `?t` has to leave Θ before descending, but its edges do not: below the EXTEND `?z` is what `?t`
+      // was, so A⟨?t ≡ ?y⟩ becomes A⟨?z ≡ ?y⟩ there - and `?y` is the representative of what is left.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?z :p ?y BIND(?z AS ?t) FILTER(sameTerm(?t, ?y)) }',
+        `SELECT ( ?y AS ?t ) ?y ( ?y AS ?z ) WHERE {
+  ?y <ex://p> ?y .
+}`,
+      );
+    });
+
+    it('turns an OPTIONAL over a right-only member into a join, the edge staying above', ({ expect }) => {
+      // The edge itself is licensed for neither operand - the join enforces nothing between `?y` and
+      // `?z` - but the B⟨?z⟩ it entails is enough to rule out the anti-join half.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s :p ?y OPTIONAL { ?s :r ?z } FILTER(sameTerm(?y, ?z)) }',
+        `SELECT ?s ?y ?z WHERE {
+  ?s <ex://p> ?y .
+  ?s <ex://r> ?z .
+  FILTER ( SAMETERM( ?z , ?y ) )
+}`,
+      );
+    });
+
+    it('sends nothing into the right hand side of a MINUS, which has no anchor to agree on', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?x :p ?y MINUS { ?z :q ?y } FILTER(sameTerm(?x, ?y)) }',
+        `SELECT ?x ?y WHERE {
+  {
+    ?x <ex://p> ?x .
+    BIND( ?x AS ?y )
+  }
+  MINUS {
+    ?z <ex://q> ?y .
+  }
+}`,
+      );
+    });
+
+    it('leaves a GRAPH whose name is only unified alone, naming no graph statically', ({ expect }) => {
+      expectTransformGraphOperation(
+        expect,
+        'SELECT * WHERE { GRAPH ?g { ?s :p ?o } FILTER(sameTerm(?g, ?s)) }',
+        `SELECT ?g ?o ?s WHERE {
+  GRAPH ?g {
+    ?s <ex://p> ?o .
+  }
+  FILTER ( SAMETERM( ?s , ?g ) )
+}`,
+      );
+    });
+
+    it('unifies a property path onto its representative', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?x :step* ?y FILTER(sameTerm(?x, ?y)) }',
+        `SELECT ?x ( ?x AS ?y ) WHERE {
+  ?x (<ex://step>*) ?x .
+}`,
+      );
+    });
+
+    it('leaves the input tree untouched', ({ expect }) => {
+      const algebra = parseQuery(c, `${prefixes}SELECT * WHERE {
+        { SELECT ?w ?x WHERE { ?w :p ?x } }
+        { SELECT ?y ?z WHERE { ?y :q ?z } }
+        OPTIONAL { ?x :s ?t }
+        FILTER(sameTerm(?w, ?x) && sameTerm(?x, ?y) && sameTerm(?y, ?z))
+      }`);
+      const before = JSON.stringify(algebra);
+      pushDownAssertions(c, algebra);
+      expect(JSON.stringify(algebra)).toEqual(before);
+    });
+
+    it('applying the transformation twice yields the same result as once', ({ expect }) => {
+      // What the deterministic representative buys: re-reading `SAMETERM(?y, ?w)` rebuilds the same
+      // clique, picks the same representative, and folds the `SAMETERM(?w, ?w)` it re-derives away.
+      for (const query of [
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(?s, ?o)) }',
+        `SELECT * WHERE {
+          { SELECT ?w ?x WHERE { ?w :p ?x } }
+          { SELECT ?y ?z WHERE { ?y :q ?z } }
+          FILTER(sameTerm(?w, ?x) && sameTerm(?x, ?y) && sameTerm(?y, ?z))
+        }`,
+        'SELECT * WHERE { ?s :p ?y OPTIONAL { ?s :r ?z } FILTER(sameTerm(?y, ?z)) }',
+        'SELECT * WHERE { ?z :p ?y BIND(?z AS ?t) FILTER(sameTerm(?t, ?y)) }',
+        `SELECT * WHERE {
+          { ?s ?p ?o FILTER(sameTerm(?s, :x)) } UNION { ?s :p ?o }
+          FILTER(sameTerm(?s, ?o))
+        }`,
+      ]) {
+        const once = pushDownAssertions(c, parseQuery(c, prefixes + query));
+        const twice = pushDownAssertions(c, pushDownAssertions(c, parseQuery(c, prefixes + query)));
+        expect(c.generator.generate(toAst(twice))).toEqual(c.generator.generate(toAst(once)));
+      }
+    });
+  });
+
   describe('condition handling', () => {
     it('propagates the assertion through a renaming BIND', ({ expect }) => {
       expectTransform(
@@ -1492,6 +1789,78 @@ GROUP BY ?x`,
       await assertEquivalent(expect, `SELECT * WHERE {
         { { ?s :p ?y } UNION { ?z :r ?x } }
         FILTER(bound(?x))
+      }`, 1);
+    });
+
+    it('keeps exactly the rows whose two variables are the same term', async({ expect }) => {
+      // `:loop` is its own object twice and `:other` once, so a rewrite that changed multiplicities -
+      // or that matched the pairs `:loop :self :other` too - would show here.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s ?p ?o
+        FILTER(sameTerm(?s, ?o))
+      }`, 3);
+    });
+
+    it('keeps the multiplicities a UNION produces over a unification', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        { { ?s :self ?o } UNION { ?s :self ?o } }
+        FILTER(sameTerm(?s, ?o))
+      }`, 4);
+    });
+
+    it('keeps the MINUS a unification must not be pushed into', async({ expect }) => {
+      // The trap the missing weak form of a clique avoids: pruning the right hand side by `?s ≡ ?o` -
+      // which it has no anchor for - would stop it removing the `:loop` row, and yield two rows here.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :self ?o
+        MINUS { ?o :twice ?x }
+        FILTER(sameTerm(?s, ?o))
+      }`, 1);
+    });
+
+    it('keeps the per-pair witness count of a path whose two ends are unified', async({ expect }) => {
+      // `:cyc` reaches itself through two intermediate witnesses, so the pair has multiplicity two.
+      await assertEquivalent(expect, `SELECT ?x ?y WHERE {
+        ?x :step/:onwards ?y
+        FILTER(sameTerm(?x, ?y))
+      }`, 2);
+    });
+
+    it('keeps the rows an OPTIONAL turned into a join by a unification selects', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :self ?o
+        OPTIONAL { ?o :twice ?x }
+        FILTER(sameTerm(?x, ?o))
+      }`, 1);
+    });
+
+    it('keeps the rows a clique split over a join selects', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        { SELECT ?w ?x WHERE { ?w :self ?x } }
+        { SELECT ?y ?z WHERE { ?y :twice ?z } }
+        FILTER(sameTerm(?w, ?x) && sameTerm(?x, ?y) && sameTerm(?y, ?z))
+      }`, 1);
+    });
+
+    it('keeps the VALUES rows whose two columns agree', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        VALUES (?s ?o) { (:a :a) (:a :b) (UNDEF :c) (:d :d) }
+        FILTER(sameTerm(?s, ?o))
+      }`, 2);
+    });
+
+    it('keeps the rows a unification transferred through a BIND selects', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?z :self ?y
+        BIND(?z AS ?t)
+        FILTER(sameTerm(?t, ?y))
+      }`, 2);
+    });
+
+    it('keeps the rows a term meeting a unification selects', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :self ?o
+        FILTER(sameTerm(?s, ?o) && sameTerm(?o, :loop))
       }`, 1);
     });
 

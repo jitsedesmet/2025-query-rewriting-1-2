@@ -30,7 +30,7 @@ export class ClusterSet<T> {
    * @param value - The value to get/create a group for
    * @returns The group ID
    */
-  protected getGroup(value: T): number {
+  public getGroup(value: T): number {
     const group = this.valueToGroup[this.toId(value)];
     // Return the group
     if (group !== undefined) {

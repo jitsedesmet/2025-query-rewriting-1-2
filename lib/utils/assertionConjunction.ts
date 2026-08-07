@@ -16,6 +16,7 @@ import {
   weakAssertionExpression,
 } from './assertions.js';
 import type { CPMeta } from './certainlyBoundVars.js';
+import { withCpVars } from './certainlyBoundVars.js';
 import { booleanConstantOf, conjunctionOf, splitConjunction } from './expressionHelpers.js';
 import { substituteInExpression } from './partialExpressionEvaluation.js';
 import { DF } from './rdfDatatypes.js';
@@ -603,7 +604,8 @@ export function withAssertionConjunction(c: TransformContext, filter: Algebra.Fi
   const casted = <Algebra.Filter & { metadata?: Partial<AssertionFilter['metadata']> }> filter;
   const known = casted.metadata?.assertions;
   if (known === undefined) {
-    const collected = collectAssertions(c, filter.expression);
+    // The condition is evaluated over the solutions of the input, so those are the variables bound in it.
+    const collected = collectAssertions(c, filter.expression, undefined, withCpVars(filter.input).metadata.cVars);
     casted.metadata ??= {};
     casted.metadata.assertions = collected ?? {
       assertions: new AssertionConjunction(),
@@ -642,16 +644,20 @@ export function isAssertionFilter(c: TransformContext, op: Algebra.Operation): o
  * Merging into the known assertions is also what makes the pass idempotent: re-running it re-derives the
  * same conjunction and absorbs it rather than stacking a second copy - the residual `sameTerm(?o, ?o)` a
  * re-derived edge leaves behind folds away, since a clique member is bound.
+ *
+ * `cVars` are the variables the operation the condition filters certainly binds, which is what the
+ * substitution folds `sameTerm(?x, ?x)` against. Leaving it empty only means fewer residuals fold.
  */
 export function collectAssertions(
   c: TransformContext,
   expression: Algebra.Expression,
   known: AssertionConjunction = new AssertionConjunction(),
+  cVars: ReadonlySet<string> = new Set(),
 ): AssertionConjunctionMeta | undefined {
   // Make copy and perform substitution
   const assertions = known.clone();
   let substitution = assertions.strongSubstitution();
-  let conjuncts = splitConjunction(substituteInExpression(c, expression, substitution));
+  let conjuncts = splitConjunction(substituteInExpression(c, expression, substitution, cVars));
 
   let learned = true;
   let residual: Algebra.Expression[] = [];
@@ -686,7 +692,8 @@ export function collectAssertions(
     if (!sameSubstitution(substitution, grown)) {
       learned = true;
       substitution = grown;
-      conjuncts = residual.flatMap(conjunct => splitConjunction(substituteInExpression(c, conjunct, substitution)));
+      conjuncts = residual.flatMap(conjunct =>
+        splitConjunction(substituteInExpression(c, conjunct, substitution, cVars)));
     }
   }
   return {

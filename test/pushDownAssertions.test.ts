@@ -1338,6 +1338,20 @@ GROUP BY ?x?y`,
       );
     });
 
+    it('folds sameTerm(?y, ?y) inside a residual for a variable the operation below binds', ({ expect }) => {
+      // Under the `||` it is no conjunct of the top level, so nothing reads it as an assertion and
+      // nothing substitutes for ?y: it is the `cVars` of the BGP that decide the fold, `sameTerm(?y, ?y)`
+      // being `true` of a bound ?y and an error of an unbound one. Folding it makes the `||` true, which
+      // takes the whole residual with it.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?x :p ?y FILTER(sameTerm(?x, :c) && (sameTerm(?y, ?y) || ?y > 2)) }',
+        `SELECT ( <ex://c> AS ?x ) ?y WHERE {
+  <ex://c> <ex://p> ?y .
+}`,
+      );
+    });
+
     it('collapses the !bound(?x) negation idiom to the empty result', ({ expect }) => {
       expectTransform(
         expect,
@@ -1615,6 +1629,33 @@ GROUP BY ?x?y`,
       <ex://c> <ex://q> ?d .
     }
   }
+}`,
+      );
+    });
+
+    it('keeps sameTerm(?z, ?z) for a variable an OPTIONAL may leave unbound', ({ expect }) => {
+      // The counterpart of the fold in 'condition handling': ?z is only *possibly* bound, so
+      // `sameTerm(?z, ?z)` is an error rather than `true` there - and there is nothing to rewrite it into
+      // either, since `COALESCE` tells that error apart from the `false` of `bound(?z)`.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          ?x :p ?y
+          OPTIONAL { ?x :q ?z }
+          FILTER(sameTerm(?x, :c) && (sameTerm(?z, ?z) || ?z > 2))
+        }`,
+        `SELECT ?x ?y ?z WHERE {
+  {
+    <ex://c> <ex://p> ?y .
+    BIND( <ex://c> AS ?x )
+  }
+  OPTIONAL {
+    {
+      <ex://c> <ex://q> ?z .
+      BIND( <ex://c> AS ?x )
+    }
+  }
+  FILTER ( ( SAMETERM( ?z , ?z ) || ( ?z > "2"^^<http://www.w3.org/2001/XMLSchema#integer> ) ) )
 }`,
       );
     });

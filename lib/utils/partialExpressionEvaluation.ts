@@ -3,6 +3,7 @@ import type { TransformContext } from '../transformContext.js';
 import type { Assertions } from './assertions.js';
 import { isAssertableTerm } from './assertions.js';
 import { booleanConstantOf, createBooleanExpression, isIriExpression } from './expressionHelpers.js';
+import { unionSets } from './setUtils.js';
 
 /**
  * Substitutes assertions (θ) into an expression and folds what becomes constant: `simplify(R[θ])`.
@@ -11,25 +12,33 @@ import { booleanConstantOf, createBooleanExpression, isIriExpression } from './e
  * takes a bare `Var` instead of an `Expression`, so replacing the variable by a term would produce the
  * ungrammatical `BOUND(<ex://p>)` once the plan is serialised back to SPARQL. Since an assertion implies
  * the variable is bound, `bound(?x)` becomes `true` instead.
+ *
+ * `cVars` are the variables certainly bound where the expression is evaluated - the ones of the operation
+ * it sits on. They are the only thing that decides `sameTerm(?x, ?x)`, and the substitution proves a few
+ * more of them by itself ({@link cVarsExtensionFromAssertions}).
  */
 export function substituteInExpression(
   c: TransformContext,
   expression: Algebra.Expression,
   assertions: Assertions,
+  cVars: ReadonlySet<string>,
 ): Algebra.Expression {
-  return substitute(c, expression, assertions, imageVariables(assertions));
+  return substitute(c, expression, assertions, unionSets([ cVars, cVarsExtensionFromAssertions(assertions) ]));
 }
 
 /**
- * The variables a substitution replaces others *by*: the representatives of the cliques it unifies.
+ * The variables the substitution proves bound on its own, whatever the operation below it binds: both ends
+ * of every replacement it makes.
  *
- * Every one of them is certainly bound where the substitution applies - only a strong assertion
- * substitutes, and a clique membership implies `bnd(?x)` - which is what lets the residual
- * `sameTerm(?o, ?o)` a unification leaves behind fold away.
+ * Only a strong assertion substitutes, so the variable being replaced is certainly bound wherever the
+ * substitution applies; and so is the variable it is replaced *by* - the representative of a clique, of
+ * which membership implies `bnd(?x)`. The latter is what lets the residual `sameTerm(?o, ?o)` a
+ * unification leaves behind fold away.
  */
-function imageVariables(assertions: Assertions): Set<string> {
+function cVarsExtensionFromAssertions(assertions: Assertions): Set<string> {
   const result = new Set<string>();
-  for (const term of assertions.values()) {
+  for (const [ key, term ] of assertions.entries()) {
+    result.add(key);
     if (term.termType === 'Variable') {
       result.add(term.value);
     }
@@ -94,7 +103,10 @@ function substitute(
  * `COALESCE(Error, false, true) ≡ false`.
  *
  * `boundVariables` are the variables known to be bound here, which is the only thing that makes
- * `sameTerm(?x, ?x)` decidable: it is `true` of a bound `?x` and an *error* of an unbound one.
+ * `sameTerm(?x, ?x)` decidable: it is `true` of a bound `?x` and an *error* of an unbound one. Where `?x`
+ * is not known to be bound there is nothing to rewrite it into either, since no expression has that
+ * true-or-error semantics: `bound(?x)` answers `false` where `sameTerm(?x, ?x)` errors, and the two are
+ * told apart by `COALESCE`.
  */
 export function constantFoldOperator(
   c: TransformContext,
@@ -113,8 +125,8 @@ export function constantFoldOperator(
         return createBooleanExpression(c, left.term.equals(right.term));
       }
       // The residual a unification leaves behind: substituting `?s ↦ ?o` turns `sameTerm(?s, ?o)` into
-      // `sameTerm(?o, ?o)`. Only for a variable the substitution replaced others by, never an arbitrary
-      // one - an unbound `?a` makes `sameTerm(?a, ?a)` an error rather than `true`.
+      // `sameTerm(?o, ?o)`. Only decidable for a variable certainly bound here - an unbound `?a` makes
+      // `sameTerm(?a, ?a)` an error rather than `true`.
       if (args.length === 2 &&
                 left.subType === Algebra.ExpressionTypes.TERM && left.term.termType === 'Variable' &&
                 right.subType === Algebra.ExpressionTypes.TERM && right.term.equals(left.term) &&

@@ -155,8 +155,11 @@ Three guards:
 
 - `constantFoldOperator('sameterm')` is gated on `isAssertableTerm`, which rejects variables, so the
   residual `sameTerm(?o, ?o)` left by substituting `?s ↦ ?o` will not fold. It should fold to `true`,
-  but only because a strong group implies bound: fold only for variables in the substitution's image,
-  never for an arbitrary `?a` (unbound makes it false).
+  but only for a variable *certainly bound* where the condition is evaluated: the `cVars` of the
+  operation below it, plus both ends of every replacement the substitution makes (only a strong
+  assertion substitutes, and a clique membership implies bound). Never for an arbitrary `?a` — an
+  unbound one makes `sameTerm(?a, ?a)` an error, and no expression has that true-or-error semantics
+  (`bound(?a)` answers `false`, which `COALESCE` tells apart).
 - `substituteInExpression` folding `bound(?x)` to `true` stays sound.
 - `transformExtendsToValues` (`extendsToValues.ts:12-19`) would turn `BIND(?o AS ?s)` over the empty
   BGP into the nonsense `VALUES ?s { ?o }`. Latent bug the new BINDs will trigger; exclude variable

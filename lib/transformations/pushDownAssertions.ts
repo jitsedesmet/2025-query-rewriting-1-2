@@ -25,6 +25,7 @@ import { sameTermExpression } from '../utils/expressionHelpers.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
 import { substituteInExpression } from '../utils/partialExpressionEvaluation.js';
 import { DF } from '../utils/rdfDatatypes.js';
+import { unionSets } from '../utils/setUtils.js';
 
 /**
  * @fileoverview Assertion filter pushdown.
@@ -202,7 +203,7 @@ function swapWith(
     }
     case Algebra.Types.FILTER: {
       // The conjunction we manage absorbs the assertions of the filter we pass (SDecompI),
-      const collected = collectAssertions(c, op.expression, assertions);
+      const collected = collectAssertions(c, op.expression, assertions, cpVars(op.input).cVars);
       if (collected === undefined) {
         return empty(c, op);
       }
@@ -443,6 +444,8 @@ function pushIntoExtend(
   const target = extend.variable.value;
   const expression = extend.expression;
   const assertionOfTarget = assertions.get(target);
+  // The expression is evaluated over the input of the EXTEND, wherever this rewrite ends up putting it.
+  const { cVars } = cpVars(extend.input);
   // SPARQL spec keeps BINDing an in-scope variable explicitly undefined. We assume it errors,
   // so in `bind(e AS ?x)` ?x is not bound below the EXTEND. It has to leave Θ before descending,
   // or the (FBndII) check at the top of the swap wrongly yields empty.
@@ -468,7 +471,7 @@ function pushIntoExtend(
     return keep(AF.createExtend(
       assertionFilter(c, extend.input, below),
       extend.variable,
-      substituteInExpression(c, expression, below.strongSubstitution()),
+      substituteInExpression(c, expression, below.strongSubstitution(), cVars),
     ));
   }
 
@@ -480,7 +483,7 @@ function pushIntoExtend(
       AF.createExtend(
         assertionFilter(c, extend.input, remaining),
         extend.variable,
-        substituteInExpression(c, expression, remaining.strongSubstitution()),
+        substituteInExpression(c, expression, remaining.strongSubstitution(), cVars),
       ),
       aboutTarget,
     ));
@@ -496,7 +499,7 @@ function pushIntoExtend(
       assertionFilter(c, extend.input, remaining),
       sameTermExpression(
         c,
-        substituteInExpression(c, expression, remaining.strongSubstitution()),
+        substituteInExpression(c, expression, remaining.strongSubstitution(), cVars),
         term,
       ),
     ),
@@ -751,9 +754,16 @@ function pushIntoLeftJoin(
   const leftAssertions = AssertionConjunction.of(intoLeft);
   // Every candidate μ₁ binds the variables strongly asserted in intoLeft to their term once those are
   // pushed into A₁, so substituting them into the left join condition is sound.
+  // The condition is only ever evaluated on a merged `μ₁ ∪ μ₂` - the anti-join half keeps a `μ₁` exactly
+  // when no compatible `μ₂` satisfies it - so both sides are bound wherever it is asked anything.
   const expression = leftJoin.expression === undefined ?
     undefined :
-    substituteInExpression(c, leftJoin.expression, leftAssertions.strongSubstitution());
+    substituteInExpression(
+      c,
+      leftJoin.expression,
+      leftAssertions.strongSubstitution(),
+      unionSets([ leftVars.cVars, rightVars.cVars ]),
+    );
   // TODO: the substitution in the filter might reveal more information that we could use!
   return keep(assertionFilter(
     c,

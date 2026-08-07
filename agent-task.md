@@ -65,8 +65,9 @@ endpoints to each operand, on the licence that already exists for it — that is
 OPTIONAL→JOIN collapse (`:653-659`) fire on a pure unification.
 
 Plus the two collateral fixes from report §6: let `constantFoldOperator('sameterm')` fold
-`sameTerm(?v, ?v)` to `true` but **only** for variables in the substitution's image (never an
-arbitrary variable — unbound makes it false), and exclude variable expressions from
+`sameTerm(?v, ?v)` to `true` but **only** for a variable certainly bound there — the `cVars` of the
+operation plus both ends of the substitution, never an arbitrary variable, since an unbound one makes
+it an error rather than `true` — and exclude variable expressions from
 `extendsToValues.ts:12-19`, which today would turn `BIND(?o AS ?s)` into the nonsense
 `VALUES ?s { ?o }`.
 

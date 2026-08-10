@@ -11,6 +11,13 @@ Not hypothetical input: `rewriteSinglePattern`'s `headUnificationFilter` (`:160,
 `sameTerm(?mA, ?mB)` chains for every mapping-head cluster without a term. They sit in the unfolded
 body and never move.
 
+**Status: implemented on this branch**, and this stays the design study rather than a description of
+the result - read the `@fileoverview` of `pushDownAssertions.ts` and `assertionConjunction.ts` for
+that. Some names moved on the way: the class lives in `utils/assertionConjunction.ts`, `restrict` is
+`split(predicate)`, `normalise` is `normalisedFor(cVars, pVars)`, `mergeAssertion` is
+`absorb`/`assert`, and `strongTermsOf` is `strongSubstitution`. Line references are to the tree as it
+stood when this was written.
+
 ## 1. The one structural fact
 
 Today's Θ is a conjunction of *independent, single-variable* constraints. That is what licenses
@@ -27,13 +34,14 @@ whole. Everything below follows.
 
 ```ts
 export class AssertionConjunction {
-  private readonly clusters: ClusterSet<string>;     // variable -> group
-  private readonly groupTerm: Map<number, RDF.Term>; // group -> its term, if pinned
+  // Variable -> group, and per group the term it is pinned to, if any (§4).
+  private clusters: TermClusterSet<string, RDF.Term>;
   // Per *variable*, not per group: `normalise` promotes each member against cVars/pVars separately,
   // so one member of a pinned group can be strong while another is weak.
-  private readonly strength: Map<string, 'strong' | 'weak'>;
-  private readonly unbound: Set<string>;             // U⟨?x⟩
-  private readonly bound: Set<string>;               // B⟨?x⟩
+  private strength: Map<string, 'strong' | 'weak'>;
+  private unbound: Set<string>;                      // U⟨?x⟩
+  private bound: Set<string>;                        // B⟨?x⟩
+  private order: Set<string>;                        // first-mention order, for idempotency
 }
 ```
 
@@ -76,8 +84,8 @@ is what collapses `A₁ ⟕ A₂ FILTER(sameTerm(?y, ?z))` with `?z ∉ pVars(A�
 OPTIONAL→JOIN rule at `:653-659`. Expose it as `boundImpliedBy()`.
 
 API: `assertTerm/assertUnify/assertUnbound/assertBound/absorb` (`false` on contradiction), `clone`,
-`restrictedTo`, `normalisedFor(cVars, pVars)`, `strongSubstitution`, `weakened`, `boundImpliedBy`,
-`toExpression`.
+`split`, `normalisedFor(cVars, pVars)`, `strongSubstitution`, `weakened`, `boundImpliedBy`,
+`conjuncts`, `cliques`, `toExpression`.
 
 ## 3. Splitting Θ: split edges, not variables
 
@@ -102,12 +110,13 @@ needs no filter on top.
 
 **`ClusterSet<string>`: base class.** It has union-by-size and the `mergeGroups(): {oldGroup,
 newGroup}` return that `ClusterSolver` uses to migrate satellite maps. Add `clone()` (Θ is copied
-constantly), a public non-creating lookup (`getGroup` is `protected`; `ClusterSolver` re-publishes it
-by override at `:158`), `remove`, and group iteration.
+constantly), a non-creating lookup next to the creating `getGroup` (`groupOf(value): number |
+undefined`), `remove`, and group iteration.
 
 **`TermClusterSet<T, Term>`: introduce it.** `groupToTerm`, the conflict check and the merge
-migration are genuinely shared. It returns a boolean on conflict — a contradiction is a normal
-outcome for Θ — and `ClusterSolver` keeps its throwing `registerTermToGroup` as a thin wrapper, so
+migration are genuinely shared. Pinning returns a boolean on conflict and merging reports one as a
+field of its return — a contradiction is a normal outcome for Θ — and `ClusterSolver` keeps its
+throwing `registerTermToGroup` as a thin wrapper, so
 the unfolding path and its test output do not move. It is generic in the term type because
 `ClusterSolver` narrows to `RawBasicTerm` (`RangeSet`, staying in its own override) while Θ allows
 any ground term; equality on that type comes in as a constructor-injected comparator rather than a
@@ -176,13 +185,18 @@ Three guards:
   fixpoint must re-run after a merge (still terminates: each round drops a group or pins one).
 - **EXTEND** — the target leaves Θ before descending, but do not just delete it: for `BIND(?z AS ?t)`
   under `A⟨?t ≡ ?y⟩`, *transfer* the membership so `A⟨?z ≡ ?y⟩` holds below. The existing renaming
-  rule (`:433-445`) generalised, and strictly stronger.
+  rule (`:433-445`) generalised, and strictly stronger. A *constant* BIND transfers too, pinning the
+  clique it lands on: under `BIND(:c AS ?t)`, `A⟨?t ≡ ?y⟩` makes every member of `?t`'s clique `:c`.
 - **GRAPH** — only the pinned case selects a graph; an anchorless group over the graph variable
-  teaches nothing statically, so those edges stay above.
+  teaches nothing statically, so the edges *touching* it stay above while the sub-clique over the
+  rest travels into the pattern, split per §3 like a join operand's.
 - **JOIN / LEFT JOIN** — licence per edge: push into operand `i` if both endpoints ∈ `cVars(Aᵢ)`, or
   if neither is in `pVars(Aⱼ)` for `j ≠ i`; place the rest per §3. Sub-cliques inside one operand's
   `cVars` are worth pushing even when the whole is unlicensed, and an edge placed nowhere still
-  offers its derived B (§2) — which for LEFT JOIN fires OPTIONAL→JOIN before any of this.
+  offers its derived B (§2) — which for LEFT JOIN fires OPTIONAL→JOIN before any of this. That
+  collapse leaves two BGPs where the same query written without the OPTIONAL has one, and an edge
+  needs a single operand binding both endpoints, so JOIN merges its BGP operands (`bgp(A) ⋈ bgp(B) ≡
+  bgp(A ∪ B)`) before reading any licence.
 - **GROUP** — push edges wholly inside the key set; the rest stays above, where `normalise` correctly
   empties on a non-key member.
 - **`normalise`** — per member: `∉ pVars` + strong ⇒ empty (FBndII); `∉ pVars` + weak ⇒ drop the
@@ -192,9 +206,10 @@ Three guards:
 ## 8. Touch list
 
 `datastructures/ClusterSet.ts` (clone, lookup, remove, iteration) · `datastructures/TermClusterSet.ts`
-(new) · `ClusterSolver.ts` (rebase, keep the throwing wrappers) · `utils/assertions.ts` (the class;
-`asStrongAssertion` accepting two variables; `mergeAssertion` → merge; `strongTermsOf` →
-`strongSubstitution`) · `transformations/pushDownAssertions.ts` (`normalise`, edge-based splitting,
+(new) · `ClusterSolver.ts` (rebase, keep the throwing wrappers) · `utils/assertionConjunction.ts` (new:
+the class, `mergeAssertion` → `absorb`, `strongTermsOf` → `strongSubstitution`) · `utils/assertions.ts`
+(the assertion forms; `asStrongAssertion` accepting two variables) ·
+`transformations/pushDownAssertions.ts` (`normalisedFor`, edge-based splitting,
 join/left-join/extend/graph/values) · `utils/partialExpressionEvaluation.ts` (fold guard) ·
 `transformations/extendsToValues.ts` (latent bug) · `README.md` step 5.1.
 

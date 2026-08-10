@@ -25,27 +25,26 @@ import { DF } from './rdfDatatypes.js';
  * @fileoverview The conjunction of assertions (Θ) the pushdown moves around, and how a filter condition
  * is read into one.
  *
- * Θ is no longer a map from variable to constraint: `FILTER(sameTerm(?x, ?y))` constrains *two* variables
- * at once, and a chain of such filters makes a clique of variables that all have to be equal. So the
- * carrier is a union-find ({@link TermClusterSet}) whose groups may be pinned to a term, plus the two
- * term-less forms (`bound` / `!bound`) which stay per variable.
+ * `FILTER(sameTerm(?x, ?y))` constrains *two* variables at once, and a chain of such filters makes
+ * a clique of variables that all have to be equal. So the carrier is a union-find ({@link TermClusterSet})
+ * whose groups may be pinned to a term, plus the two term-less forms (`bound` / `!bound`) which stay per variable.
  *
- * The dividing line, and the reason everything else stays as simple as it was: a group **pinned to a
- * term** still decomposes into independent single-variable conjuncts, and behaves exactly like today's
- * per-variable assertions. A group **without a term** - a clique - has to be reasoned about as a whole,
+ * The dividing line, and the reason everything else stays simple:
+ * a group **pinned to a term** still decomposes into independent single-variable conjuncts.
+ * A group **without a term** - a clique - has to be reasoned about as a whole,
  * because its conjuncts mention two variables each.
  */
 
 /**
  * A set of assertions Θ, in the five states an assertion about a variable can be in:
  *
- * | state                                  | means                             | serialised as                     |
- * |----------------------------------------|-----------------------------------|-----------------------------------|
- * | strong member of a pinned group        | `sameTerm(?x, c)`                 | `SAMETERM(?x, c)`                 |
- * | weak member of a pinned group          | `!bound(?x) \|\| sameTerm(?x, c)` | `!BOUND(?x) \|\| SAMETERM(?x, c)` |
- * | member of an anchorless group (clique) | `sameTerm(?x, ?rep)`              | `SAMETERM(?x, ?rep)`              |
- * | unbound                                | `!bound(?x)`                      | `!BOUND(?x)`                      |
- * | bound                                  | `bound(?x)`, no term              | `BOUND(?x)`                       |
+ * | state                                  | means                             |
+ * |----------------------------------------|-----------------------------------|
+ * | strong member of a pinned group        | `sameTerm(?x, c)`                 |
+ * | weak member of a pinned group          | `!bound(?x) \|\| sameTerm(?x, c)` |
+ * | member of an anchorless group (clique) | `sameTerm(?x, ?rep)`              |
+ * | unbound                                | `!bound(?x)`                      |
+ * | bound                                  | `bound(?x)`, no term              |
  *
  * Nothing new is serialised: every row but the third is the form the previous per-variable conjunction
  * already used, and the third is the plain `sameTerm` between two variables the parser reads straight back
@@ -70,9 +69,7 @@ export class AssertionConjunction {
   /** Variable to its group; a group may be pinned to the term all of its members equal. */
   private clusters: TermClusterSet<string, RDF.Term>;
   /**
-   * Per *variable*, not per group: {@link normalisedFor} promotes each member against `cVars`/`pVars`
-   * separately, so one member of a pinned group may be strong while another is weak. Entries for
-   * variables that are in no group are stale leftovers, and are ignored.
+   * Strength only applies to variables in groups. If you are not in a group, you are a stale leftover.
    */
   private strength: Map<string, 'strong' | 'weak'>;
   /** U⟨?x⟩ */
@@ -80,9 +77,7 @@ export class AssertionConjunction {
   /** B⟨?x⟩ */
   private bound: Set<string>;
   /**
-   * The variables in the order they were first mentioned, which is the order everything here iterates in.
-   * Reading a conjunction back out of the condition it serialised to re-mentions them in that same order,
-   * which is what keeps the pass idempotent.
+   * The variables in the order they were first mentioned, used to keep a pass idempotent.
    */
   private order: Set<string>;
 
@@ -126,14 +121,8 @@ export class AssertionConjunction {
   }
 
   /**
-   * What the conjunction says about one variable, in the per-variable form the licences of the pushdown
-   * are read off.
-   *
-   * A clique is *not* per-variable, so this is a faithful view of it rather than the thing itself: each
-   * member but the representative reads as A⟨?x ≡ ?rep⟩ - a strong assertion whose term happens to be a
-   * variable - and the representative reads as B⟨?rep⟩, which is what the clique entails about it and all
-   * that is left once the others are stated against it. Conjoining the views of every member gives the
-   * clique back, so {@link impliesBound} and every licence built on it answer truthfully.
+   * What the conjunction says about one variable. For a clique, the Strong assertion to the representative is made.
+   * For the representative of a clique, we return an assertBound.
    */
   public get(name: string): Assertion | undefined {
     if (this.unbound.has(name)) {
@@ -195,14 +184,15 @@ export class AssertionConjunction {
   }
 
   /**
-   * Splits Θ in two along `predicate`: the conjuncts mentioning only variables that satisfy it, and the
-   * rest. The two are equivalent to the whole, since together they hold every conjunct.
+   * Splits Θ in two along `predicate` callback:
+   * when all variables in an {@link AssertionConjunct} match the predicate, they are in 'inside'.
+   * The two are equivalent to the whole, since together they hold every conjunct (under simple conjunct-UNION).
    */
   public split(predicate: (name: string) => boolean): { inside: AssertionConjunction; outside: AssertionConjunction } {
     const inside: AssertionConjunct[] = [];
     const outside: AssertionConjunct[] = [];
     for (const conjunct of this.conjuncts()) {
-      (conjunctVars(conjunct).every(name => predicate(name)) ? inside : outside).push(conjunct);
+      (conjunctVars(conjunct).every(predicate) ? inside : outside).push(conjunct);
     }
     return { inside: AssertionConjunction.of(inside), outside: AssertionConjunction.of(outside) };
   }
@@ -246,17 +236,16 @@ export class AssertionConjunction {
     const result = new Map<string, RDF.Term>();
     for (const name of this.names()) {
       const group = this.clusters.groupOf(name);
-      if (group === undefined || this.strength.get(name) !== 'strong') {
-        continue;
-      }
-      const term = this.clusters.termOf(group);
-      if (term !== undefined) {
-        result.set(name, term);
-        continue;
-      }
-      const representative = this.representativeOf(group);
-      if (representative !== name) {
-        result.set(name, DF.variable(representative));
+      if (this.strength.get(name) === 'strong' && group !== undefined) {
+        const term = this.clusters.termOf(group);
+        if (term === undefined) {
+          const representative = this.representativeOf(group);
+          if (representative !== name) {
+            result.set(name, DF.variable(representative));
+          }
+        } else {
+          result.set(name, term);
+        }
       }
     }
     return result;
@@ -271,47 +260,57 @@ export class AssertionConjunction {
    * Per member of a group, not per group: a group whose members disagree about being in `cVars` is
    * perfectly ordinary. Taking a member out may leave its group with a single variable and nothing for it
    * to equal, which {@link TermClusterSet.remove} then drops.
+   *
+   * Reading a clique per member is not an approximation of a per-clique rule. Every member of one carries
+   * A⟨?x ≡ ?rep⟩, which entails `bnd(?x)` of that member alone, and both rules are about exactly that: a
+   * member outside `pVars` empties the operation by (FBndII) - which is the clique's own emptiness check,
+   * since the clique entails `bnd` of each of them - and `cVars` has nothing to promote an edge into,
+   * there being no form of one weaker than itself.
+   *
+   * Coverage - whether something below binds enough of a clique to be handed its edges - is not decided
+   * here. This reads the conjunction against the single operation the filter sits on, before the swap;
+   * the swap is what splits the edges over the branches it has licences for.
    */
   public normalisedFor(cVars: CPMeta['cVars'], pVars: CPMeta['pVars']): AssertionConjunction | undefined {
     const result = this.clone();
     for (const name of this.names()) {
       if (this.unbound.has(name)) {
         if (cVars.has(name)) {
+          // Contradiction
           return undefined;
         }
         if (!pVars.has(name)) {
+          // Nothing left to assert
           result.unbound.delete(name);
         }
-        continue;
-      }
-      if (this.bound.has(name)) {
-        // (FBndII), which both of the forms implying `bound(?x)` trigger.
+      } else if (this.bound.has(name)) {
+        // Contradiction -- (FBndII), which both of the forms implying `bound(?x)` trigger.
         if (!pVars.has(name)) {
           return undefined;
         }
         if (cVars.has(name)) {
           result.bound.delete(name);
         }
-        continue;
-      }
-      const strong = this.strength.get(name) === 'strong';
-      if (!pVars.has(name)) {
-        if (strong) {
-          return undefined;
+      } else {
+        const isStrong = this.strength.get(name) === 'strong';
+        if (!pVars.has(name)) {
+          if (isStrong) {
+            return undefined;
+          }
+          // Not in pVars and weak -> nothing to assert.
+          result.removeMember(name);
+        } else if (cVars.has(name)) {
+          // B⟨?x⟩ holds of every solution here, and completes a weak member into a strong one.
+          result.strength.set(name, 'strong');
         }
-        // Not in pVars and weak -> nothing to assert.
-        result.removeMember(name);
-      } else if (cVars.has(name)) {
-        // B⟨?x⟩ holds of every solution here, and completes a weak member into a strong one.
-        result.strength.set(name, 'strong');
       }
     }
     return result;
   }
 
   /**
-   * Θ with `name` taken out of it and whatever it was equal *to* restated against `replacement` - the term
-   * that carries its value where the result is going, which the caller is responsible for establishing.
+   * Θ with `name` taken out of it and whatever it was equal *to* restated against `replacement` -
+   * the term that carries its value where the result is going, which the caller is responsible for establishing.
    *
    * For a BIND, that is its expression: below `BIND(?z AS ?t)` it is `?z` that holds what `?t` holds above,
    * and below `BIND(:c AS ?t)` it is `:c`. Four cases, which are the same rule read against the two kinds
@@ -330,29 +329,32 @@ export class AssertionConjunction {
    */
   public transferred(name: string, replacement: RDF.Term): AssertionConjunction | undefined {
     const result = this.clone();
-    const group = this.clusters.groupOf(name);
-    const term = group === undefined ? undefined : this.clusters.termOf(group);
-    const strong = this.strength.get(name) === 'strong';
-    const others = group === undefined ?
+    const group: number | undefined = this.clusters.groupOf(name);
+    const term: RDF.Term | undefined = group === undefined ? undefined : this.clusters.termOf(group);
+    const isStrong: boolean = this.strength.get(name) === 'strong';
+    const othersInGroup: string[] = group === undefined ?
         [] :
       this.clusters.valuesOf(group).filter(member => member !== name);
     result.removeMember(name);
     result.bound.delete(name);
     result.unbound.delete(name);
     if (replacement.termType === 'Variable') {
-      return (term === undefined ?
+      if (term === undefined) {
         // Anchorless: `name` was a member of the clique, so `replacement` takes its place in it.
-        others.length === 0 || result.assertUnify(replacement.value, others[0]) :
-        result.assertTerm(replacement.value, term, strong)) ?
-        result :
-        undefined;
+        if (othersInGroup.length === 0 || result.assertUnify(replacement.value, othersInGroup[0])) {
+          return result;
+        }
+      } else if (result.assertTerm(replacement.value, term, isStrong)) {
+        return result;
+      }
+      return undefined;
     }
     if (term !== undefined) {
       // Two ground terms, so what `name` had to be is decided here rather than pushed anywhere.
       return term.equals(replacement) ? result : undefined;
     }
     // The clique meets a term: it pins the group, which is every variable that was equal to `name`.
-    return others.length === 0 || result.assertTerm(others[0], replacement, true) ? result : undefined;
+    return othersInGroup.length === 0 || result.assertTerm(othersInGroup[0], replacement, true) ? result : undefined;
   }
 
   /** Conjoins everything `other` says with what this conjunction already says. */
@@ -392,6 +394,7 @@ export class AssertionConjunction {
    *
    * Pinning is per *group*: a term meeting a clique fixes every member of it, which is how an assertion
    * met above a unification travels onto all of the variables it unified.
+   * @returns `false` when the assertion contradicts what is already known.
    */
   public assertTerm(name: string, term: RDF.Term, strong: boolean): boolean {
     this.remember(name);
@@ -403,7 +406,8 @@ export class AssertionConjunction {
       this.bound.delete(name);
       return this.pin(name, term, 'strong');
     }
-    // `¬b ∧ (¬b ∨ φ) ≡ ¬b`: U absorbs the weak form outright.
+    // Strong = false
+    // `¬b ∧ (¬b ∨ φ) ≡ ¬b`: U absorbs the weak form outright. -- remains unbound
     if (this.unbound.has(name)) {
       return true;
     }
@@ -412,6 +416,7 @@ export class AssertionConjunction {
       return this.pin(name, term, 'strong');
     }
     const group = this.clusters.groupOf(name);
+    // Weak and variable is currently unknown
     if (group === undefined) {
       return this.pin(name, term, 'weak');
     }
@@ -461,9 +466,11 @@ export class AssertionConjunction {
   public assertBound(name: string): boolean {
     this.remember(name);
     if (this.unbound.has(name)) {
+      // Contradiction
       return false;
     }
-    if (this.clusters.groupOf(name) !== undefined) {
+    const group = this.clusters.groupOf(name);
+    if (group !== undefined) {
       // Absorbed by a strong member, and completes a weak one - `b ∧ (¬b ∨ ?x ≡ c) ≡ ?x ≡ c`.
       this.strength.set(name, 'strong');
       return true;
@@ -476,9 +483,11 @@ export class AssertionConjunction {
   public assertUnbound(name: string): boolean {
     this.remember(name);
     if (this.bound.has(name)) {
+      // Contradiction
       return false;
     }
-    if (this.clusters.groupOf(name) !== undefined) {
+    const group = this.clusters.groupOf(name);
+    if (group !== undefined) {
       // A strong member implies `bnd(?x)`; a weak one is absorbed (`¬b ∧ (¬b ∨ φ) ≡ ¬b`) and leaves the
       // group. U never propagates to the other members - it is about this variable only.
       if (this.strength.get(name) === 'strong') {
@@ -516,7 +525,7 @@ export class AssertionConjunction {
     return [ ...this.clusters.valuesOf(group) ].sort((left, right) => left.localeCompare(right))[0];
   }
 
-  /** Pins the group of `name` to `term`, `false` when that group already equals another one. */
+  /** Pins the group of `name` to `term`, `false` when that group already equals another one. (contradiction) */
   private pin(name: string, term: RDF.Term, strength: 'strong' | 'weak'): boolean {
     if (!this.clusters.setTerm(this.clusters.getGroup(name), term)) {
       return false;
@@ -542,7 +551,7 @@ export interface AssertionConjunct {
   assertion: Assertion;
 }
 
-/** The variables a conjunct mentions - two of them when it is a clique edge. */
+/** The variables a conjunct mentions - two iff it is a clique edge. */
 export function conjunctVars(conjunct: AssertionConjunct): string[] {
   const { assertion } = conjunct;
   return (assertion.subType === 'strong' || assertion.subType === 'weak') &&
@@ -610,6 +619,7 @@ export function withAssertionConjunction(c: TransformContext, filter: Algebra.Fi
     casted.metadata.assertions = collected ?? {
       assertions: new AssertionConjunction(),
       residual: undefined,
+      // If the collection returns `undefined`, it is a sign of a contradiction.
       contradictory: true,
     };
   }
@@ -678,6 +688,7 @@ export function collectAssertions(
       // Each form has its own top level shape, so at most one of these recognizes a conjunct.
       const met = assertionOf(conjunct);
       if (met === undefined) {
+        // Not an assertion we recognize, so goes into the residuals
         residual.push(conjunct);
         continue;
       }

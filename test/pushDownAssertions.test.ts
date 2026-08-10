@@ -203,12 +203,9 @@ describe('pushDownAssertions', () => {
 
     it('turns an OPTIONAL over an optional-only variable into a plain join', ({ expect }) => {
       const result = transform('SELECT * WHERE { ?s :p ?o OPTIONAL { ?s :q ?x } FILTER(sameTerm(?x, :c)) }');
-      expect(result).toEqual(`SELECT ?o ?s ?x WHERE {
+      expect(result).toEqual(`SELECT ?o ?s ( <ex://c> AS ?x ) WHERE {
   ?s <ex://p> ?o .
-  {
-    ?s <ex://q> <ex://c> .
-    BIND( <ex://c> AS ?x )
-  }
+  ?s <ex://q> <ex://c> .
 }`);
       expect(result).not.toContain('OPTIONAL');
     });
@@ -778,12 +775,9 @@ GROUP BY ?x`,
           OPTIONAL { ?a :q ?x }
           FILTER(bound(?x) && (!bound(?x) || sameTerm(?x, :c)))
         }`,
-        `SELECT ?a ?b ?x WHERE {
+        `SELECT ?a ?b ( <ex://c> AS ?x ) WHERE {
   ?a <ex://p> ?b .
-  {
-    ?a <ex://q> <ex://c> .
-    BIND( <ex://c> AS ?x )
-  }
+  ?a <ex://q> <ex://c> .
 }`,
       );
     });
@@ -796,12 +790,9 @@ GROUP BY ?x`,
           { ?a :p ?b OPTIONAL { ?a :q ?x } FILTER(!bound(?x) || sameTerm(?x, :c)) }
           FILTER(bound(?x))
         }`,
-        `SELECT ?a ?b ?x WHERE {
+        `SELECT ?a ?b ( <ex://c> AS ?x ) WHERE {
   ?a <ex://p> ?b .
-  {
-    ?a <ex://q> <ex://c> .
-    BIND( <ex://c> AS ?x )
-  }
+  ?a <ex://q> <ex://c> .
 }`,
       );
     });
@@ -1012,15 +1003,9 @@ GROUP BY ?x`,
           ?s :p ?y OPTIONAL { ?s :r ?x }
           FILTER(sameTerm(?x, ?y) && (!bound(?x) || sameTerm(?x, :c)))
         }`,
-        `SELECT ?s ?x ?y WHERE {
-  {
-    ?s <ex://p> <ex://c> .
-    BIND( <ex://c> AS ?y )
-  }
-  {
-    ?s <ex://r> <ex://c> .
-    BIND( <ex://c> AS ?x )
-  }
+        `SELECT ?s ( <ex://c> AS ?x ) ( <ex://c> AS ?y ) WHERE {
+  ?s <ex://p> <ex://c> .
+  ?s <ex://r> <ex://c> .
 }`,
       );
     });
@@ -1196,16 +1181,17 @@ GROUP BY ?x?y`,
       );
     });
 
-    it('turns an OPTIONAL over a right-only member into a join, the edge staying above', ({ expect }) => {
-      // The edge itself is licensed for neither operand - the join enforces nothing between `?y` and
-      // `?z` - but the B⟨?z⟩ it entails is enough to rule out the anti-join half.
+    it('turns an OPTIONAL over a right-only member into a join, and unifies over the merged BGP', ({ expect }) => {
+      // The B⟨?z⟩ the edge entails rules out the anti-join half. The edge itself is licensed for neither
+      // operand of the join that leaves - a join enforces nothing between `?y` and `?z` - so it only
+      // travels because the two BGPs are merged into the one that binds both of its endpoints, which is
+      // the plan the same query written without the OPTIONAL has all along.
       expectTransform(
         expect,
         'SELECT * WHERE { ?s :p ?y OPTIONAL { ?s :r ?z } FILTER(sameTerm(?y, ?z)) }',
-        `SELECT ?s ?y ?z WHERE {
+        `SELECT ?s ?y ( ?y AS ?z ) WHERE {
   ?s <ex://p> ?y .
-  ?s <ex://r> ?z .
-  FILTER ( SAMETERM( ?z , ?y ) )
+  ?s <ex://r> ?y .
 }`,
       );
     });
@@ -1233,6 +1219,45 @@ GROUP BY ?x?y`,
         `SELECT ?g ?o ?s WHERE {
   GRAPH ?g {
     ?s <ex://p> ?o .
+  }
+  FILTER ( SAMETERM( ?s , ?g ) )
+}`,
+      );
+    });
+
+    it('splits a clique over a GRAPH name into the pattern and back together on top', ({ expect }) => {
+      // `?a` is the representative, so the star of the clique {a, b, g} is `?b ≡ ?a` and `?g ≡ ?a`. Only
+      // the first mentions no `?g` and travels into the pattern; the second stays above, and the two
+      // together still span the clique - `?b ≡ ?g` is what neither of them states on its own.
+      expectTransformGraphOperation(
+        expect,
+        'SELECT * WHERE { GRAPH ?g { ?a :p ?b } FILTER(sameTerm(?a, ?g) && sameTerm(?a, ?b)) }',
+        `SELECT ?a ?b ?g WHERE {
+  GRAPH ?g {
+    {
+      ?a <ex://p> ?a .
+      BIND( ?a AS ?b )
+    }
+  }
+  FILTER ( SAMETERM( ?g , ?a ) )
+}`,
+      );
+    });
+
+    it('splits a clique whose representative is the GRAPH name', ({ expect }) => {
+      // `?g` is the representative here, so no edge of the star `?s ≡ ?g`, `?t ≡ ?g` may travel as it
+      // stands. The sub-clique over the members that are not `?g` still can: `?s ≡ ?t` - an edge the
+      // star never states, only entails - goes into the pattern, and one edge back to `?g` stays here
+      // to span the clique again.
+      expectTransformGraphOperation(
+        expect,
+        'SELECT * WHERE { GRAPH ?g { ?s :p ?t } FILTER(sameTerm(?g, ?s) && sameTerm(?g, ?t)) }',
+        `SELECT ?g ?s ?t WHERE {
+  GRAPH ?g {
+    {
+      ?s <ex://p> ?s .
+      BIND( ?s AS ?t )
+    }
   }
   FILTER ( SAMETERM( ?s , ?g ) )
 }`,

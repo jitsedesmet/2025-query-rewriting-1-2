@@ -3,6 +3,9 @@
 `report.md` is the design authority — read it fully first. This file is the work order, the invariants
 and the traps.
 
+**Status: all four phases landed on this branch.** The names that changed on the way are listed at the
+top of `report.md`; the invariants below are the ones the code and its tests still have to hold.
+
 ## Goal
 
 Extend the pushdown so `FILTER(sameTerm(?x, ?y))` travels like `FILTER(sameTerm(?x, c))` does today,

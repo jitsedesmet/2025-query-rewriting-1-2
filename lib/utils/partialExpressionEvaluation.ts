@@ -3,6 +3,7 @@ import type { TransformContext } from '../transformContext.js';
 import type { Assertions } from './assertions.js';
 import { isAssertableTerm } from './assertions.js';
 import { booleanConstantOf, createBooleanExpression, isIriExpression } from './expressionHelpers.js';
+import { unionSets } from './setUtils.js';
 
 /**
  * Substitutes assertions (θ) into an expression and folds what becomes constant: `simplify(R[θ])`.
@@ -11,11 +12,45 @@ import { booleanConstantOf, createBooleanExpression, isIriExpression } from './e
  * takes a bare `Var` instead of an `Expression`, so replacing the variable by a term would produce the
  * ungrammatical `BOUND(<ex://p>)` once the plan is serialised back to SPARQL. Since an assertion implies
  * the variable is bound, `bound(?x)` becomes `true` instead.
+ *
+ * `cVars` are the variables certainly bound where the expression is evaluated - the ones of the operation
+ * it sits on. They are the only thing that decides `sameTerm(?x, ?x)`, and the substitution proves a few
+ * more of them by itself ({@link cVarsExtensionFromAssertions}).
  */
 export function substituteInExpression(
   c: TransformContext,
   expression: Algebra.Expression,
   assertions: Assertions,
+  cVars: ReadonlySet<string>,
+): Algebra.Expression {
+  return substitute(c, expression, assertions, unionSets([ cVars, cVarsExtensionFromAssertions(assertions) ]));
+}
+
+/**
+ * The variables the substitution proves bound on its own, whatever the operation below it binds: both ends
+ * of every replacement it makes.
+ *
+ * Only a strong assertion substitutes, so the variable being replaced is certainly bound wherever the
+ * substitution applies; and so is the variable it is replaced *by* - the representative of a clique, of
+ * which membership implies `bnd(?x)`. The latter is what lets the residual `sameTerm(?o, ?o)` a
+ * unification leaves behind fold away.
+ */
+function cVarsExtensionFromAssertions(assertions: Assertions): Set<string> {
+  const result = new Set<string>();
+  for (const [ key, term ] of assertions.entries()) {
+    result.add(key);
+    if (term.termType === 'Variable') {
+      result.add(term.value);
+    }
+  }
+  return result;
+}
+
+function substitute(
+  c: TransformContext,
+  expression: Algebra.Expression,
+  assertions: Assertions,
+  boundVariables: ReadonlySet<string>,
 ): Algebra.Expression {
   // TODO(other PR):
   //  part of future works includes evaluating the functions statically using the Comunica Expression Evaluator
@@ -36,7 +71,7 @@ export function substituteInExpression(
         return createBooleanExpression(c, true);
       }
       return constantFoldOperator(c, expression.operator, expression.args
-        .map(arg => substituteInExpression(c, arg, assertions)));
+        .map(arg => substitute(c, arg, assertions, boundVariables)), boundVariables);
     }
     case Algebra.ExpressionTypes.EXISTENCE:
       // TODO: work out how to propagate an assertion into the pattern of an EXISTS.
@@ -44,12 +79,12 @@ export function substituteInExpression(
     case Algebra.ExpressionTypes.NAMED:
       return AF.createNamedExpression(
         expression.name,
-        expression.args.map(arg => substituteInExpression(c, arg, assertions)),
+        expression.args.map(arg => substitute(c, arg, assertions, boundVariables)),
       );
     case Algebra.ExpressionTypes.AGGREGATE:
       return {
         ...expression,
-        expression: substituteInExpression(c, expression.expression, assertions),
+        expression: substitute(c, expression.expression, assertions, boundVariables),
       };
     default:
       return expression;
@@ -66,11 +101,18 @@ export function substituteInExpression(
  * identical terms - RDF term equality is the fallback for unsupported datatypes - but never to `false`,
  * since comparing unsupported datatypes raises an error, and an error is not `false` in every context:
  * `COALESCE(Error, false, true) ≡ false`.
+ *
+ * `boundVariables` are the variables known to be bound here, which is the only thing that makes
+ * `sameTerm(?x, ?x)` decidable: it is `true` of a bound `?x` and an *error* of an unbound one. Where `?x`
+ * is not known to be bound there is nothing to rewrite it into either, since no expression has that
+ * true-or-error semantics: `bound(?x)` answers `false` where `sameTerm(?x, ?x)` errors, and the two are
+ * told apart by `COALESCE`.
  */
 export function constantFoldOperator(
   c: TransformContext,
   operator: string,
   args: Algebra.Expression[],
+  boundVariables: ReadonlySet<string> = new Set(),
 ): Algebra.Expression {
   const constants = args.map(arg => booleanConstantOf(arg));
   switch (operator) {
@@ -82,6 +124,15 @@ export function constantFoldOperator(
                 right.subType === Algebra.ExpressionTypes.TERM && isAssertableTerm(right.term)) {
         return createBooleanExpression(c, left.term.equals(right.term));
       }
+      // The residual a unification leaves behind: substituting `?s ↦ ?o` turns `sameTerm(?s, ?o)` into
+      // `sameTerm(?o, ?o)`. Only decidable for a variable certainly bound here - an unbound `?a` makes
+      // `sameTerm(?a, ?a)` an error rather than `true`.
+      if (args.length === 2 &&
+                left.subType === Algebra.ExpressionTypes.TERM && left.term.termType === 'Variable' &&
+                right.subType === Algebra.ExpressionTypes.TERM && right.term.equals(left.term) &&
+                boundVariables.has(left.term.value)) {
+        return createBooleanExpression(c, true);
+      }
       break;
     }
     case '=': {
@@ -92,11 +143,11 @@ export function constantFoldOperator(
       // `=` is, worst case RDFterm-equal/ sameValue -- which raises a type error when *both* of its arguments
       // are literals, and of different types. But, for IRIs, if not sameTerm, then false.
       if (isIriExpression(left) || isIriExpression(right)) {
-        return constantFoldOperator(c, 'sameterm', args);
+        return constantFoldOperator(c, 'sameterm', args, boundVariables);
       }
       // Everywhere else only the *positive* answer of `sameTerm` carries over: identical terms are
       // equal, but distinct ones may be equal by value, or raise the type error `sameTerm` never does.
-      const identical = constantFoldOperator(c, 'sameterm', args);
+      const identical = constantFoldOperator(c, 'sameterm', args, boundVariables);
       if (booleanConstantOf(identical) === true) {
         return identical;
       }

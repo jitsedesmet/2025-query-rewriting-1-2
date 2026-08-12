@@ -21,9 +21,8 @@ SELECT * {
 Of course, this feature should interop with the term assertion and variable unification.
 So if a unified group of variables gets asserted, this information would also travel down as such.
 
-
 Support for Strong and Weak Variables might also be required for effective push down (just like we have now).
 
 Start by creating a study of how our `AssertionConjunction` structure should be updated.
-Look whether we can reuse e.g. TermClusterSet given some changes. 
+Look whether we can reuse e.g. TermClusterSet given some changes.
 Write your finding in `report.md` in the root of this repo so I can properly review.

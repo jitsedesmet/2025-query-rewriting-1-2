@@ -251,6 +251,29 @@ describe('pushDownAssertions', () => {
       );
     });
 
+    it('prunes a MINUS right hand side that binds the asserted variable certainly', ({ expect }) => {
+      // Only the weak form enters the right hand side, but `?y ∈ cVars` there promotes it back to the
+      // strong one - and that is sound for the very reason the weak form was sent in: every surviving
+      // left hand side mapping binds ?y to :c, so a right hand side mapping binding it to anything else
+      // is incompatible with all of them and never removed anything.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?x :p ?y MINUS { ?z :q ?y } FILTER(sameTerm(?y, :c)) }',
+        `SELECT ?x ?y WHERE {
+  {
+    ?x <ex://p> <ex://c> .
+    BIND( <ex://c> AS ?y )
+  }
+  MINUS {
+    {
+      ?z <ex://q> <ex://c> .
+      BIND( <ex://c> AS ?y )
+    }
+  }
+}`,
+      );
+    });
+
     it('collapses the weak assertion per branch inside a MINUS right hand side', ({ expect }) => {
       // W becomes the strong assertion in the branch that certainly binds ?x, and `true` - dropped,
       // never empty - in the branch that cannot bind it at all.
@@ -1841,6 +1864,17 @@ GROUP BY ?x?y`,
         ?x :p ?y
         MINUS { ?z :q ?y }
         FILTER(sameTerm(?x, :a))
+      }`, 0);
+    });
+
+    it('still removes the row when the right hand side of a MINUS is pruned strongly', async({ expect }) => {
+      // The other side of the previous test: here the right hand side binds the asserted variable
+      // certainly, so the weak form promotes and the prune *is* strong. It has to keep `:b :q :shared`,
+      // which is what removes the only answer - pruning one term too many would yield a row.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?x :p ?y
+        MINUS { ?z :q ?y }
+        FILTER(sameTerm(?y, :shared))
       }`, 0);
     });
 

@@ -1,6 +1,6 @@
 import type * as RDF from '@rdfjs/types';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
-import { TermClusterSet } from './datastructures/TermClusterSet.js';
+import { meetPinsOf, TermClusterSet } from './datastructures/TermClusterSet.js';
 import { objectRange, RangeSet } from './RangeSet.js';
 import type { RangedVar } from './utils/RangedVar.js';
 import { isRdfTerm, isRdfVar } from './utils/typeGuards.js';
@@ -39,8 +39,6 @@ export type RawBasicTerm = Exclude<RawTerm, RDF.Quad>;
  * // The solver determines: ?t = ?x = ?s, ?y = ?p, ?z = ?o
  */
 export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
-  /** Maps group ID to the valid term type range for that group */
-  protected groupToRange: Record<number, RangeSet>;
   /** Maps group ID to the expression that they need to satisfy */
   public groupToExpressions: Record<number, Algebra.Expression[]>;
   /**
@@ -51,7 +49,9 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
   /** Counter for generating unique group IDs */
 
   public constructor() {
-    super(variable => variable.value, (a, b) => a.equals(b));
+    // No triple pin ever reaches this: a mapping head is unfolded against terms narrowed to a
+    // `RawBasicTerm`, so the meet is the plain equality it always was.
+    super(variable => variable.value, meetPinsOf((a, b) => a.equals(b)));
     this.clear();
   }
 
@@ -62,7 +62,6 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
   public override clear(): void {
     super.clear();
     this.groupToExpressions = {};
-    this.groupToRange = {};
     this.staticExpressionValidation = [];
   }
 
@@ -76,9 +75,9 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
     const range = variable.range;
     const group = this.getGroup(variable);
     if (range !== undefined && group !== undefined) {
-      const groupRange = this.groupToRange[group].disjunct(range);
-      this.groupToRange[group] = groupRange;
-      const groupTerm = this.groupToTerm[group];
+      const groupRange = this.rangeOf(group).disjunct(range);
+      this.setRangeOf(group, groupRange);
+      const groupTerm = this.termOf(group);
       if (groupTerm && !groupRange.has(groupTerm.termType)) {
         throw new Error(`The range of the current group no longer matches the term type ${groupTerm.termType} of term: ${JSON.stringify(groupTerm.termType)}`);
       }
@@ -142,7 +141,7 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
   protected override createGroup(variable: RangedVar): number {
     const group = super.createGroup(variable);
     this.groupToExpressions[group] = [];
-    this.groupToRange[group] = new RangeSet(variable.range ?? objectRange);
+    this.setRangeOf(group, new RangeSet(variable.range ?? objectRange));
     return group;
   }
 
@@ -192,7 +191,7 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
     if (curTerm && !curTerm.equals(term)) {
       throw new Error(`Cannot match Term ${JSON.stringify(curTerm)} with term ${JSON.stringify(term)}`);
     }
-    const groupRange = this.groupToRange[group];
+    const groupRange = this.rangeOf(group);
     if (!groupRange.has(term.termType)) {
       throw new Error(`Cannot assign Term ${JSON.stringify(term)} to a group with range [${[ ...groupRange.values() ].join(', ')}]`);
     }
@@ -205,7 +204,7 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
    */
   protected override migrateGroupData(oldGroup: number, newGroup: number): boolean {
     // Merge range
-    this.groupToRange[newGroup] = this.groupToRange[newGroup].disjunct(this.groupToRange[oldGroup]);
+    this.setRangeOf(newGroup, this.rangeOf(newGroup).disjunct(this.rangeOf(oldGroup)));
     // Merge term
     const oldTerm = this.termOf(oldGroup);
     if (oldTerm) {
@@ -214,7 +213,6 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
     // Merge expressions - the old group is no longer reachable, so its constraints would be lost.
     this.groupToExpressions[newGroup].push(...this.groupToExpressions[oldGroup]);
     delete this.groupToExpressions[oldGroup];
-    delete this.groupToRange[oldGroup];
     return true;
   }
 
@@ -241,7 +239,7 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
   public getCluster(from: RDF.Variable): { term: RawBasicTerm | undefined ; vars: RDF.Variable[]; group: number } {
     const varGroup = this.getGroup(from);
     return {
-      term: this.groupToTerm[varGroup],
+      term: this.termOf(varGroup),
       vars: this.groupToValues[varGroup]
         .filter(x => !x.equals(from)),
       group: varGroup,

@@ -1,6 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
-import { TermClusterSet } from '../datastructures/TermClusterSet.js';
+import { meetPinsOf, TermClusterSet } from '../datastructures/TermClusterSet.js';
+import { RangeSet } from '../RangeSet.js';
 import type { TransformContext } from '../transformContext.js';
 import type { Assertion, Assertions } from './assertions.js';
 import {
@@ -82,7 +83,11 @@ export class AssertionConjunction {
   private order: Set<string>;
 
   public constructor() {
-    this.clusters = new TermClusterSet<string, RDF.Term>(name => name, (a, b) => a.equals(b));
+    this.clusters = new TermClusterSet<string, RDF.Term>(
+      name => name,
+      meetPinsOf((a, b) => a.equals(b)),
+      term => new RangeSet([ term.termType ]),
+    );
     this.strength = new Map();
     this.unbound = new Set();
     this.bound = new Set();

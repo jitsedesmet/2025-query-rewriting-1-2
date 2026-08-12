@@ -75,10 +75,22 @@ export class ClusterSet<T> {
   }
 
   protected createGroup(value: T): number {
-    const group = this.cleanNumber;
-    this.cleanNumber++;
+    const group = this.createEmptyGroup();
     this.groupToValues[group] = [ value ];
     this.valueToGroup[this.toId(value)] = group;
+    return group;
+  }
+
+  /**
+   * Creates a group holding no value at all, which only what a subclass hangs off it keeps alive.
+   *
+   * Such a group is *anonymous*: it exists, it unifies, and it contributes nothing to the values, so a
+   * position nobody named is still a thing to reason about rather than a variable that had to be coined.
+   */
+  protected createEmptyGroup(): number {
+    const group = this.cleanNumber;
+    this.cleanNumber++;
+    this.groupToValues[group] = [];
     return group;
   }
 
@@ -88,6 +100,10 @@ export class ClusterSet<T> {
    * A group the removal leaves without members, or with a single member and nothing for that member to be
    * equal *to* ({@link carriesInformation}), no longer says anything, so it is dropped rather than kept
    * around as a group of one.
+   *
+   * Unless something outside it still *points* at it ({@link isReferencedBy}), in which case it stays as
+   * an anonymous group. Dropping such a group is the sharp edge here: whatever pointed at it would go on
+   * holding an id that no longer names anything.
    */
   public remove(value: T): void {
     const id = this.toId(value);
@@ -98,13 +114,19 @@ export class ClusterSet<T> {
     delete this.valueToGroup[id];
     const remaining = this.groupToValues[group].filter(other => this.toId(other) !== id);
     this.groupToValues[group] = remaining;
-    if (remaining.length === 0 || (remaining.length < 2 && !this.carriesInformation(group))) {
+    const constrains = remaining.length === 1 && this.carriesInformation(group);
+    if (remaining.length < 2 && !constrains && !this.isReferencedBy(group)) {
       this.dropGroup(group);
     }
   }
 
   /** Whether the group holds something its single remaining member would still be constrained by. */
   protected carriesInformation(_group: number): boolean {
+    return false;
+  }
+
+  /** Whether something outside the group holds its id, so that dropping it would leave that dangling. */
+  protected isReferencedBy(_group: number): boolean {
     return false;
   }
 
@@ -117,12 +139,19 @@ export class ClusterSet<T> {
   }
 
   /**
-   * Merges two groups into one.
+   * Merges the groups of two values into one.
    * @returns `undefined` when both values were already in the same group, so nothing was merged.
    */
   public mergeGroups(from: T, to: T): { oldGroup: number; newGroup: number } | undefined {
-    const fromGroup = this.getGroup(from);
-    const toGroup = this.getGroup(to);
+    return this.mergeGroupIds(this.getGroup(from), this.getGroup(to));
+  }
+
+  /**
+   * Merges two groups into one, by id rather than by value - the form an anonymous group can be merged
+   * in, and the one everything a subclass unifies on its own behalf goes through.
+   * @returns `undefined` when the two ids are the same group, so nothing was merged.
+   */
+  public mergeGroupIds(fromGroup: number, toGroup: number): { oldGroup: number; newGroup: number } | undefined {
     if (fromGroup === toGroup) {
       return undefined;
     }

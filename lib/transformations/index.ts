@@ -16,6 +16,9 @@
  * - **nullifyJoinOverIncompatibleBounds**: Detects joins where variable bindings
  *   from one branch are incompatible with another and replaces with FILTER(FALSE).
  *
+ * - **nullifyUnbindableVars**: Replaces an operation that certainly binds a variable no term can
+ *   satisfy - incompatible term *types* rather than terms - by FILTER(FALSE).
+ *
  * - **pushUpBoundedFromUnion**: Hoists common variable bindings out of UNION branches
  *   to the parent level for optimization.
  *
@@ -37,6 +40,7 @@
  */
 export { transformFilterFalse } from './filterFalse.js';
 export { nullifyJoinOverIncompatibleBounds } from './nullifyJoinOverIncompatibleBounds.js';
+export { nullifyUnbindableVars } from './nullifyUnbindableVars.js';
 export { pushUpBoundedFromUnion } from './pushUpBoundedFromUnion.js';
 export { rewriteSinglePattern } from './rewriteSinglePattern.js';
 export { removeProjections } from './removeProjections.js';

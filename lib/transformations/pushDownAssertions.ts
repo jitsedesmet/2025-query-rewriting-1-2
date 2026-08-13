@@ -120,13 +120,18 @@ const keepMetadata = { shallowKeys: new Set([ 'metadata' ]) };
  * // SELECT * WHERE { ?o ?p ?o . BIND(?o AS ?s) }
  */
 export function pushDownAssertions<T extends Algebra.Operation>(c: TransformContext, op: T): T {
-  const callbacks: Record<string, (copy: any) => PreOrderMappingReturn> = Object.fromEntries(
+  const callbacks: Parameters<typeof algebraUtils.mapOperationPreOrder<'unsafe', T>>[1] = Object.fromEntries(
     Object.values(Algebra.Types).map(type => [ type, (copy: Algebra.Operation) => keep(copy) ]),
   );
   callbacks[Algebra.Types.FILTER] = (filter: Algebra.Filter) => pushFilter(c, filter);
   // Starting from a copy without metadata gives us both a tree of our own to rewrite and the guarantee
   // that what `withCpVars` hands us describes the plan as it is now.
-  return algebraUtils.mapOperationPreOrder<'unsafe', T>(withoutCpVars(op), <any> callbacks);
+  //
+  // And clearing it again on the way out, for the same reason: what the traversal cached describes the
+  // plan at the moment it passed, which the rewrites below it have since changed. This may *not* be done
+  // inside `mapOperationPreOrder` - `keepMetadata` is how an assertion filter hands its conjunction to the
+  // `pushFilter` that meets it next, and how a `reTransform` keeps the work it has already done.
+  return withoutCpVars(algebraUtils.mapOperationPreOrder<'unsafe', T>(withoutCpVars(op), callbacks));
 }
 
 /**
@@ -156,8 +161,7 @@ function pushAssertions(
   assertions: AssertionConjunction,
   op: Algebra.Operation,
 ): PreOrderMappingReturn {
-  const { cVars, pVars } = cpVars(op);
-  const normalised = assertions.normalisedFor(cVars, pVars);
+  const normalised = assertions.normalisedFor(cpVars(op));
   if (normalised === undefined) {
     return empty(c, op);
   }
@@ -543,7 +547,8 @@ function pushIntoExtend(
  *   wrong is an error rather than a wrong answer: `Extend` raises on an already bound variable, so it may
  *   only be used where `P` cannot bind `?g` at all.
  *
- * If `c` is not an IRI nothing matches, since graph names are IRIs.
+ * A `c` outside `?g`'s range - a Literal, say - matched nothing, and normalisation has already emptied
+ * the plan for it before anything reaches here.
  */
 function pushIntoGraph(
   c: TransformContext,
@@ -560,13 +565,14 @@ function pushIntoGraph(
   }
   const assertedGraphName = assertions.get(graphVar);
 
-  if (assertedGraphName?.subType === 'strong' && isAssertableTerm(assertedGraphName.term)) {
-    if (assertedGraphName.term.termType !== 'NamedNode') {
-      return empty(c, graph);
-    }
-
-    // Read before the rewrite, which preserves `pVars` exactly and never shrinks `cVars`.
-    const { cVars, pVars } = cpVars(graph.input);
+  if (assertedGraphName?.subType === 'strong' && isAssertableTerm(assertedGraphName.term) &&
+    // A term outside `?g`'s range has already emptied the plan in `normalisedFor`, so what can still be
+    // asserted here is a graph name: a NamedNode, or the BlankNode a dataset may equally name a graph by.
+    // Only the first can be written back - `createGraph` names a graph by a Variable or a NamedNode - so
+    // the second falls through to the general path below rather than being treated as an emptiness.
+    assertedGraphName.term.termType === 'NamedNode') {
+    // Read before the rewrite, which preserves the scope exactly and never shrinks `cVars`.
+    const { cVars, vRanges } = cpVars(graph.input);
     // `?g` travels on into the pattern, in the *weak* form: `P` need not bind it at all, and the join
     // with `{?g ↦ c}` is what would have dropped the solutions binding it to anything else.
     const graphIndependentAssertions = assertions.split(name => name !== graphVar).inside;
@@ -581,9 +587,11 @@ function pushIntoGraph(
       // has already fixed it to `c` - so joining `{?g ↦ c}` back on would change nothing.
       return keep(selected);
     }
-    if (pVars.has(graphVar)) {
+    if (vRanges.canBind(graphVar)) {
       // `P` binds `?g` in some solutions and not others, so the join has to stay one: an EXTEND raises an
       // error on a variable that is already bound. A single row binding `?g` to `c` *is* `{?g ↦ c}`.
+      // Read as `canBind` rather than as scope: `?g` may be *declared* below and bindable by nothing
+      // there, and then no solution of `P` can be the one the EXTEND would raise on.
       // This JOIN is required because we DO NOT CHANGE pVars/ cVars.
       // TODO(future): we could provide a transformation that recognizes a BIND/VALUES join with a cVar join
       return keep(AF.createJoin([ selected, AF.createExtend(
@@ -597,8 +605,9 @@ function pushIntoGraph(
     return keep(bindAssertedTerms(c, selected, new Map([[ graphVar, assertedGraphName.term ]])));
   }
 
-  // Only a term selects a graph. Everything else - nothing asserted, or a clique over `?g` - travels into
-  // the pattern except for what mentions `?g`, which stays above. Since `?g ∈ cVars(Graph)`, the weak and
+  // Only a term that can *name* a graph in the algebra selects one. Everything else - nothing asserted, a
+  // clique over `?g`, or a BlankNode graph name - travels into the pattern except for what mentions `?g`,
+  // which stays above. Since `?g ∈ cVars(Graph)`, the weak and
   // bound forms cannot be what is asserted here: normalisation has already promoted or dropped them.
   const inside: AssertionConjunct[] = [];
   const kept: AssertionConjunct[] = [];
@@ -629,7 +638,7 @@ function pushIntoGraph(
 /**
  * Pushes the assertions into the operands of a JOIN their licence holds for (FJPush).
  *
- * The licence is per *variable*: `L(?x, Aᵢ) ≔ ?x ∈ cVars(Aᵢ) ∨ ∀ j ≠ i . ?x ∉ pVars(Aⱼ)`. Under it the
+ * The licence is per *variable*: `L(?x, Aᵢ) ≔ ?x ∈ cVars(Aᵢ) ∨ ∀ j ≠ i . Aⱼ never binds ?x`. Under it the
  * value `?x` takes in a merged mapping is the one `Aᵢ` gave it, so a condition over variables that all
  * satisfy it evaluates the same on the operand as on the join. The second disjunct is easy to forget but
  * does real work.
@@ -671,7 +680,7 @@ function pushIntoJoin(
   const operands = join.input.map(operand => cpVars(operand));
   function licensed(index: number, name: string): boolean {
     return operands[index].cVars.has(name) || operands.every((other, otherIndex) =>
-      otherIndex === index || !other.pVars.has(name));
+      otherIndex === index || other.vRanges.neverBinds(name));
   }
 
   const operandAssertions: AssertionConjunct[][] = join.input.map(() => []);
@@ -685,7 +694,7 @@ function pushIntoJoin(
       if (assertionImpliesBound && licensed(index, name)) {
         operandAssertions[index].push(conjunct);
         placedStrongly = true;
-      } else if (operands[index].pVars.has(name)) {
+      } else if (operands[index].vRanges.canBind(name)) {
         const demoted = weakenedConjunct(conjunct);
         // Bound assertion knows no weak form and cannot be pushed
         if (demoted !== undefined) {
@@ -779,7 +788,7 @@ function pushIntoLeftJoin(
   const [ left, right ] = leftJoin.input;
   const leftVars = cpVars(left);
 
-  if ([ ...assertions.boundImpliedBy() ].some(name => !leftVars.pVars.has(name))) {
+  if ([ ...assertions.boundImpliedBy() ].some(name => leftVars.vRanges.neverBinds(name))) {
     // Our filter asserts that one of variables ONLY appearing on RHS is bound, thus, the LeftJoin becomes Join.
     const joined = AF.createJoin([ left, right ], true);
     const rebuilt = leftJoin.expression === undefined ? joined : AF.createFilter(joined, leftJoin.expression);
@@ -788,7 +797,7 @@ function pushIntoLeftJoin(
 
   const rightVars = cpVars(right);
   function licensedLeft(name: string): boolean {
-    return leftVars.cVars.has(name) || !rightVars.pVars.has(name);
+    return leftVars.cVars.has(name) || rightVars.vRanges.neverBinds(name);
   }
   function licensedRight(name: string): boolean {
     return leftVars.cVars.has(name) && rightVars.cVars.has(name);
@@ -806,7 +815,7 @@ function pushIntoLeftJoin(
     } else {
       // Not licensed as itself, but the weaker forms always are on the left - except B⟨?x⟩, which has none.
       // It stays here as well, since the right hand side can still introduce a binding that violates it.
-      const demoted = leftVars.pVars.has(name) ? weakenedConjunct(conjunct) : undefined;
+      const demoted = leftVars.vRanges.canBind(name) ? weakenedConjunct(conjunct) : undefined;
       if (demoted !== undefined) {
         intoLeft.push(demoted);
       }

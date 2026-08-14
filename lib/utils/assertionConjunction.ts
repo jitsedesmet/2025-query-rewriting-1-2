@@ -257,13 +257,25 @@ export class AssertionConjunction {
    * Where `?x` is certainly bound, `!bound(?x)` is unsatisfiable, so W *is* A, B is `true` and U is empty;
    * where `?x` can never be bound, A and B are empty ((FBndII)) and W and U are simply `true`.
    *
+   * The ranges decide the same two things one level finer, which is why every rule below reads them
+   * rather than the scope:
+   *
+   * - A variable whose range is *empty* is never bound, exactly as one out of scope is never bound -
+   *   {@link VRanges.neverBinds} is the single fact both are - so A and B empty the operation by (FBndII)
+   *   while W and U are carried by their `!bound(?x)` disjunct and prune away.
+   * - A variable pinned to a term outside a range that is *not* empty - `?g ≡ "1"` under a `GRAPH ?g`,
+   *   `?p ≡ _:b` in a predicate position - cannot be bound to it, which is the same fact for one term
+   *   rather than for all of them. **Strong** is then unsatisfiable, since it implies `bnd(?x)`; **weak**
+   *   loses its right disjunct and becomes exactly U⟨?x⟩. Which is why the rewrites downstream need no
+   *   term-type checks of their own.
+   *
    * Per member of a group, not per group: a group whose members disagree about being in `cVars` is
    * perfectly ordinary. Taking a member out may leave its group with a single variable and nothing for it
    * to equal, which {@link TermClusterSet.remove} then drops.
    *
    * Reading a clique per member is not an approximation of a per-clique rule. Every member of one carries
    * A⟨?x ≡ ?rep⟩, which entails `bnd(?x)` of that member alone, and both rules are about exactly that: a
-   * member outside `pVars` empties the operation by (FBndII) - which is the clique's own emptiness check,
+   * member out of scope empties the operation by (FBndII) - which is the clique's own emptiness check,
    * since the clique entails `bnd` of each of them - and `cVars` has nothing to promote an edge into,
    * there being no form of one weaker than itself.
    *
@@ -271,7 +283,7 @@ export class AssertionConjunction {
    * here. This reads the conjunction against the single operation the filter sits on, before the swap;
    * the swap is what splits the edges over the branches it has licences for.
    */
-  public normalisedFor(cVars: CPMeta['cVars'], pVars: CPMeta['pVars']): AssertionConjunction | undefined {
+  public normalisedFor({ cVars, vRanges }: CPMeta): AssertionConjunction | undefined {
     const result = this.clone();
     for (const name of this.names()) {
       if (this.unbound.has(name)) {
@@ -279,13 +291,13 @@ export class AssertionConjunction {
           // Contradiction
           return undefined;
         }
-        if (!pVars.has(name)) {
-          // Nothing left to assert
+        if (vRanges.neverBinds(name)) {
+          // `!bound(?x)` holds of every solution here, so nothing is left to assert.
           result.unbound.delete(name);
         }
       } else if (this.bound.has(name)) {
         // Contradiction -- (FBndII), which both of the forms implying `bound(?x)` trigger.
-        if (!pVars.has(name)) {
+        if (vRanges.neverBinds(name)) {
           return undefined;
         }
         if (cVars.has(name)) {
@@ -293,15 +305,32 @@ export class AssertionConjunction {
         }
       } else {
         const isStrong = this.strength.get(name) === 'strong';
-        if (!pVars.has(name)) {
+        if (vRanges.neverBinds(name)) {
           if (isStrong) {
             return undefined;
           }
-          // Not in pVars and weak -> nothing to assert.
+          // Never bound and weak -> the `!bound(?x)` disjunct carries it, so nothing to assert.
           result.removeMember(name);
         } else if (cVars.has(name)) {
           // B⟨?x⟩ holds of every solution here, and completes a weak member into a strong one.
           result.strength.set(name, 'strong');
+        }
+        // A member pinned to a term the variable can never take, which both forms have something to say
+        // about - the same rule as (FBndII) one level down the lattice, the variable being in scope here
+        // and no solution binding it to *this* term. Read off `result`, so a promotion just above counts.
+        // A clique member is pinned to a *variable*, which says nothing statically, so it is skipped.
+        const pinned = result.get(name);
+        if ((pinned?.subType === 'strong' || pinned?.subType === 'weak') &&
+          pinned.term.termType !== 'Variable' && !vRanges.rangeOf(name).has(pinned.term.termType)) {
+          if (pinned.subType === 'strong') {
+            // A⟨?x ≡ c⟩ implies `bnd(?x)` and there is no value left for it to take.
+            return undefined;
+          }
+          // W⟨?x ≡ c⟩ is `¬bnd(?x) ∨ ?x ≡ c`, and the right disjunct is false wherever `?x` is bound. So
+          // the weak form *is* U⟨?x⟩ here - which is worth doing rather than leaving it: a weak member
+          // says almost nothing, where `!bound(?x)` is a constraint the rest of the pass acts on.
+          // Cannot fail: `?x` is neither `bound` nor a strong member, the two states it rejects.
+          result.assertUnbound(name);
         }
       }
     }

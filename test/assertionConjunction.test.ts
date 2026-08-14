@@ -1,15 +1,33 @@
 import { toAst } from '@traqula/algebra-sparql-1-2';
 import { describe, it } from 'vitest';
+import type { RangeSet } from '../lib/RangeSet.js';
+import { emptyRange, graphRange } from '../lib/RangeSet.js';
 import type { TransformContext } from '../lib/transformContext.js';
 import { createPartialContext } from '../lib/transformContext.js';
 import { AssertionConjunction, collectAssertions } from '../lib/utils/assertionConjunction.js';
 import type { Assertion } from '../lib/utils/assertions.js';
 import { assertBound, assertStrong, assertUnbound, assertWeak } from '../lib/utils/assertions.js';
+import type { CPMeta } from '../lib/utils/certainlyBoundVars.js';
+import { VRanges } from '../lib/utils/certainlyBoundVars.js';
 import { DF } from '../lib/utils/rdfDatatypes.js';
 
 const c = <TransformContext> createPartialContext();
 const termC = DF.namedNode('ex://c');
 const termD = DF.namedNode('ex://d');
+
+/** The metadata of an operation binding `inScope`, of which `certain` is certainly bound. */
+function metaOf(certain: string[], inScope: string[]): CPMeta {
+  const vRanges = new VRanges();
+  vRanges.addAtTop(inScope);
+  return { cVars: new Set(certain), vRanges };
+}
+
+/** {@link metaOf} with `name` narrowed to `range`, the operation binding nothing else. */
+function rangedMeta(certain: string[], name: string, range: RangeSet): CPMeta {
+  const vRanges = new VRanges();
+  vRanges.narrow(name, range);
+  return { cVars: new Set(certain), vRanges };
+}
 
 /** The conjunction of the given conjuncts, or `undefined` when they contradict each other. */
 function conjunctionOf(...conjuncts: [ string, Assertion ][]): AssertionConjunction | undefined {
@@ -257,7 +275,7 @@ describe('assertionConjunction', () => {
   describe('normalising against an operation', () => {
     it('empties the plan on a clique member that can never be bound', ({ expect }) => {
       const assertions = <AssertionConjunction> conjunctionOf([ 'x', assertStrong(DF.variable('y')) ]);
-      expect(assertions.normalisedFor(new Set([ 'x' ]), new Set([ 'x' ]))).toBeUndefined();
+      expect(assertions.normalisedFor(metaOf([ 'x' ], [ 'x' ]))).toBeUndefined();
     });
 
     it('drops a weak member that can never be bound, leaving its group alone', ({ expect }) => {
@@ -265,9 +283,63 @@ describe('assertionConjunction', () => {
         [ 'x', assertWeak(termC) ],
         [ 'y', assertStrong(termC) ],
       );
-      const normalised = assertions.normalisedFor(new Set([ 'y' ]), new Set([ 'y' ]));
+      const normalised = assertions.normalisedFor(metaOf([ 'y' ], [ 'y' ]));
       expect(stateOf(normalised, 'x')).toBe('none');
       expect(stateOf(normalised, 'y')).toBe('strong(ex://c)');
+    });
+
+    it('empties the plan on a term outside the range the variable can take', ({ expect }) => {
+      // `GRAPH ?g` narrows `?g` to a graph name, and no solution binds one to a literal.
+      const assertions = <AssertionConjunction> conjunctionOf([ 'g', assertStrong(DF.literal('1')) ]);
+      expect(assertions.normalisedFor(rangedMeta([ 'g' ], 'g', graphRange))).toBeUndefined();
+    });
+
+    it('keeps a term the range still admits', ({ expect }) => {
+      const assertions = <AssertionConjunction> conjunctionOf([ 'g', assertStrong(termC) ]);
+      const normalised = assertions.normalisedFor(rangedMeta([ 'g' ], 'g', graphRange));
+      expect(stateOf(normalised, 'g')).toBe('strong(ex://c)');
+    });
+
+    it('keeps a BlankNode a graph may be named by, which is not the emptiness a literal is', ({ expect }) => {
+      const assertions = <AssertionConjunction> conjunctionOf([ 'g', assertStrong(DF.blankNode('b')) ]);
+      const normalised = assertions.normalisedFor(rangedMeta([ 'g' ], 'g', graphRange));
+      expect(stateOf(normalised, 'g')).toBe('strong(b)');
+    });
+
+    it('collapses a weak member out of range to `!bound`, its other disjunct being false', ({ expect }) => {
+      // `¬bnd(?g) ∨ ?g ≡ "1"` where `?g` can only be a graph name: the right disjunct never holds, so
+      // what is left is the unbound assertion - a real constraint, where the weak one said almost nothing.
+      const assertions = <AssertionConjunction> conjunctionOf([ 'g', assertWeak(DF.literal('1')) ]);
+      const normalised = assertions.normalisedFor(rangedMeta([], 'g', graphRange));
+      expect(stateOf(normalised, 'g')).toBe('unbound');
+    });
+
+    it('leaves a weak member the range still admits weak', ({ expect }) => {
+      const assertions = <AssertionConjunction> conjunctionOf([ 'g', assertWeak(termC) ]);
+      const normalised = assertions.normalisedFor(rangedMeta([], 'g', graphRange));
+      expect(stateOf(normalised, 'g')).toBe('weak(ex://c)');
+    });
+
+    it('empties rather than collapses where the variable is certainly bound', ({ expect }) => {
+      // `?g ∈ cVars` promotes the weak member to strong first, and a strong one out of range is empty.
+      const assertions = <AssertionConjunction> conjunctionOf([ 'g', assertWeak(DF.literal('1')) ]);
+      expect(assertions.normalisedFor(rangedMeta([ 'g' ], 'g', graphRange))).toBeUndefined();
+    });
+
+    it('empties the plan on a bound assertion the variable can never satisfy', ({ expect }) => {
+      // In scope - an all-UNDEF VALUES column declares it - and yet never bound, so `bound(?x)` is false.
+      const assertions = <AssertionConjunction> conjunctionOf([ 'x', assertBound() ]);
+      expect(assertions.normalisedFor(rangedMeta([], 'x', emptyRange))).toBeUndefined();
+    });
+
+    it('prunes an unbound assertion the variable can never fail', ({ expect }) => {
+      const assertions = <AssertionConjunction> conjunctionOf([ 'x', assertUnbound() ]);
+      expect(stateOf(assertions.normalisedFor(rangedMeta([], 'x', emptyRange)), 'x')).toBe('none');
+    });
+
+    it('prunes a weak member the `!bound` disjunct already carries', ({ expect }) => {
+      const assertions = <AssertionConjunction> conjunctionOf([ 'x', assertWeak(termC) ]);
+      expect(stateOf(assertions.normalisedFor(rangedMeta([], 'x', emptyRange)), 'x')).toBe('none');
     });
 
     it('promotes a weak member of a pinned group where it is certainly bound', ({ expect }) => {
@@ -275,7 +347,7 @@ describe('assertionConjunction', () => {
         [ 'x', assertWeak(termC) ],
         [ 'y', assertWeak(termC) ],
       );
-      const normalised = assertions.normalisedFor(new Set([ 'x' ]), new Set([ 'x', 'y' ]));
+      const normalised = assertions.normalisedFor(metaOf([ 'x' ], [ 'x', 'y' ]));
       expect(stateOf(normalised, 'x')).toBe('strong(ex://c)');
       expect(stateOf(normalised, 'y')).toBe('weak(ex://c)');
     });

@@ -1,15 +1,182 @@
 import type * as RDF from '@rdfjs/types';
 import type { Algebra as A, Algebra } from '@traqula/algebra-transformations-1-2';
 import { algebraUtils, ExpressionTypes, Types } from '@traqula/algebra-transformations-1-2';
+import {
+  emptyRange,
+  graphRange,
+  objectRange,
+  predicateRange,
+  RangeSet,
+  serviceNameRange,
+  subjectRange,
+  tripleTermRange,
+} from '../RangeSet.js';
 import type { SSet } from './setUtils.js';
 import { differenceSets, intersectSets, isSubsetOf, unionSets } from './setUtils.js';
 
+/**
+ * What an operation binds, as one structure: its **key set is exactly the variables in scope** - what
+ * `SELECT *` expands to, the `pVars` - and the range stored for one
+ * is the term types it can hold *when it is bound*.
+ *
+ * Key presence and range are independent on purpose, which is what makes the merge sound. A key at
+ * {@link emptyRange} is a variable *in scope that provably never binds*, and it has to stay a key:
+ * `pVars(Empty_S) := S`, never `∅`, or `SELECT *` scoping changes silently. So nothing here ever drops a
+ * key to say something about the terms a variable takes - {@link narrow} only ever tightens the value.
+ *
+ * A range is about the value the variable takes *when it is bound*: a branch that cannot bind it at all
+ * contributes nothing, which is why {@link unionRanges} reads the branches of a union against their key
+ * sets before combining their ranges.
+ *
+ * One case deliberately drops a key rather than bottoming its range: a `FILTER(!bound(?x))` takes `?x`
+ * out of scope, which is what the `pVars` this replaced did too. The bottom range would say it more
+ * precisely - in scope, never bound - but (FBndII) reads *absence* as its emptiness proof, so moving it
+ * would change what the assertion pushdown concludes. Worth revisiting once the bottom has consumers.
+ */
+export class VRanges extends Map<string, RangeSet> {
+  /**
+   * The term types `name` can be bound to here - {@link emptyRange} when it is not in scope at all,
+   * since a variable this operation cannot bind takes no value in any of its solutions.
+   */
+  public rangeOf(name: string): RangeSet {
+    return this.get(name) ?? emptyRange;
+  }
+
+  /**
+   * Whether no solution here binds `name`: it is out of scope, or in scope with a range no term
+   * satisfies. Anything reading Θ against an operation wants these two as one fact - `bound(?x)` is
+   * false either way - which is what {@link rangeOf} reporting the bottom for both is for.
+   */
+  public neverBinds(name: string): boolean {
+    return this.rangeOf(name).size === 0;
+  }
+
+  /**
+   * Whether some solution here can bind `name`: it is in scope and has a term left to take. The dual of
+   * {@link neverBinds}, for the licences and guards that read the fact positively.
+   */
+  public canBind(name: string): boolean {
+    return !this.neverBinds(name);
+  }
+
+  /**
+   * Brings `name` into scope and narrows what is known about it: the variable has to satisfy both.
+   *
+   * A variable not recorded yet starts at the *top* rather than at the bottom {@link rangeOf} reports,
+   * because this only ever runs while building an operation's ranges up out of the positions its
+   * variables occupy - the key is being added, not read.
+   */
+  public narrow(name: string, range: RangeSet): void {
+    this.set(name, (this.get(name) ?? objectRange).disjunct(range));
+  }
+
+  /** Brings `names` into scope without saying anything about the terms they take. */
+  public addAtTop(names: Iterable<string>): void {
+    for (const name of names) {
+      if (!this.has(name)) {
+        this.set(name, objectRange);
+      }
+    }
+  }
+}
+
 export interface CPMeta {
   cVars: SSet;
-  pVars: SSet;
+  vRanges: VRanges;
 }
 
 export type CPOp<T extends Algebra.Operation = Algebra.Operation> = T & { metadata: CPMeta };
+
+/**
+ * The ranges of the operands an operation *merges*, which the scopes unite over. Useful for BGPs and JOINs.
+ * A union of the vars apearing in vRanges, but an intersection of their ranges where possible.
+ *
+ * Only an operand that binds the variable *certainly* narrows it: its binding is in every solution, so
+ * whatever else merges has to agree with it. An operand that merely has it in scope may be the one that
+ * leaves it unbound - and then another operand's binding is what survives the merge untouched - so where
+ * no operand is certain the ranges **unite** rather than intersect.
+ *
+ * `{ VALUES (?x) { (UNDEF) } } . { VALUES (?x) { ("l") } }` is what forces the distinction: intersecting
+ * reports `?x` as unbindable where the join in fact binds it to `"l"`, and anything reading the range as
+ * a proof - {@link VRanges.neverBinds}, and the pruning built on it - would act on that.
+ */
+function intersectRanges(inputs: readonly CPMeta[]): VRanges {
+  const result = new VRanges();
+  const allNames = unionSets(inputs.map(input => new Set(input.vRanges.keys())));
+  for (const name of allNames) {
+    const certainlyBoundBranches = inputs.filter(input => input.cVars.has(name));
+    if (certainlyBoundBranches.length > 0) {
+      for (const input of certainlyBoundBranches) {
+        result.narrow(name, input.vRanges.rangeOf(name));
+      }
+    } else {
+      const binders = inputs.filter(input => input.vRanges.has(name));
+      result.set(name, new RangeSet(binders.flatMap(input => [ ...input.vRanges.rangeOf(name) ])));
+    }
+  }
+  return result;
+}
+
+/**
+ * The ranges of the branches an operation *chooses between*: a variable takes the type of whichever
+ * branch produced the solution, so the ranges are unioned - and a branch that does not have it in scope
+ * contributes nothing rather than the top.
+ */
+function unionRanges(inputs: readonly CPMeta[]): VRanges {
+  const result = new VRanges();
+  const names = unionSets(inputs.map(input => new Set(input.vRanges.keys())));
+  for (const name of names) {
+    const binders = inputs.filter(input => input.vRanges.has(name));
+    result.set(name, new RangeSet(binders.flatMap(input => [ ...input.vRanges.rangeOf(name) ])));
+  }
+  return result;
+}
+
+/**
+ * Narrows the range of every variable of `term` by the position it occupies, recursing into a triple
+ * term with the positions of its components.
+ */
+function narrowTermRanges(target: VRanges, term: RDF.Term, range: RangeSet): void {
+  if (term.termType === 'Variable') {
+    target.narrow(term.value, range);
+  } else if (term.termType === 'Quad') {
+    narrowTermRanges(target, term.subject, subjectRange);
+    narrowTermRanges(target, term.predicate, predicateRange);
+    narrowTermRanges(target, term.object, objectRange);
+  }
+}
+
+/** The ranges a single quad pattern imposes on the variables it holds, which are exactly its scope. */
+function patternRanges(pattern: { subject: RDF.Term; predicate: RDF.Term; object: RDF.Term; graph: RDF.Term }):
+VRanges {
+  const result = new VRanges();
+  narrowTermRanges(result, pattern.subject, subjectRange);
+  narrowTermRanges(result, pattern.predicate, predicateRange);
+  narrowTermRanges(result, pattern.object, objectRange);
+  narrowTermRanges(result, pattern.graph, graphRange);
+  return result;
+}
+
+/**
+ * The range of the target of a `BIND(e AS ?t)`: what the expression can possibly evaluate to.
+ *
+ * Only the shapes that decide a term type are read - a term expression is its own type, and a triple
+ * term construction is a `Quad` however its components evaluate - since everything else is the top
+ * anyway and this is only ever asked to *narrow*.
+ */
+function expressionRange(expression: Algebra.Expression, input: CPMeta): RangeSet {
+  if (expression.subType === ExpressionTypes.TERM) {
+    // A variable the input does not have in scope is never bound, so neither is the target: the bottom
+    // {@link VRanges.rangeOf} reports for it is exactly right.
+    return expression.term.termType === 'Variable' ?
+      input.vRanges.rangeOf(expression.term.value) :
+      new RangeSet([ expression.term.termType ]);
+  }
+  if (expression.subType === ExpressionTypes.OPERATOR && expression.operator === 'triple') {
+    return tripleTermRange;
+  }
+  return objectRange;
+}
 
 /** Drops the `metadata` of the operation it is applied to, whatever that metadata holds. */
 const dropMetadata = { transform: (copy: { metadata?: unknown }): unknown => {
@@ -46,62 +213,91 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
       if (!casted.metadata.cVars) {
         casted.metadata.cVars = new Set<string>();
       }
-      if (!casted.metadata.pVars) {
-        casted.metadata.pVars = new Set<string>();
+      if (!casted.metadata.vRanges) {
+        casted.metadata.vRanges = new VRanges();
       }
     }
     return casted;
   }
   const casted = <T & { metadata?: Partial<CPMeta> }> op;
-  if (casted.metadata !== undefined && casted.metadata.cVars !== undefined && casted.metadata.pVars !== undefined) {
+  if (casted.metadata !== undefined && casted.metadata.cVars !== undefined &&
+    casted.metadata.vRanges !== undefined) {
     return <CPOp<T>> casted;
   }
   const resOp = asCPVars<T>(op);
   switch (resOp.type) {
     case Types.BGP: {
-      const vars = unionSets(resOp.patterns.map(pattern => withCpVars(pattern).metadata.cVars));
-      resOp.metadata.pVars = vars;
-      resOp.metadata.cVars = vars;
+      const patterns = resOp.patterns.map(pattern => withCpVars(pattern).metadata);
+      resOp.metadata.cVars = unionSets(patterns.map(pattern => pattern.cVars));
+      // Every pattern of a BGP has to match at once, so a variable occurring in several of them takes
+      // the one type all of its occurrences admit.
+      resOp.metadata.vRanges = intersectRanges(patterns);
       return resOp;
     } case Types.PATTERN: {
-      const vars = unionSets([ resOp.subject, resOp.predicate, resOp.object, resOp.graph ].map(termVars));
-      resOp.metadata.pVars = vars;
-      resOp.metadata.cVars = vars;
+      resOp.metadata.cVars = unionSets([ resOp.subject, resOp.predicate, resOp.object, resOp.graph ].map(termVars));
+      resOp.metadata.vRanges = patternRanges(resOp);
       return resOp;
     } case Types.PATH: {
       const vars = unionSets([ resOp.subject, resOp.object, resOp.graph ].map(termVars));
-      resOp.metadata.pVars = vars;
       resOp.metadata.cVars = vars;
+      // A path says nothing about the type of its endpoints - `?lit ^:p ?s` legitimately starts at a
+      // literal, and a zero-length path returns whatever the other end held - so only the graph narrows.
+      const ranges = new VRanges();
+      ranges.addAtTop(vars);
+      for (const name of termVars(resOp.graph)) {
+        ranges.narrow(name, graphRange);
+      }
+      resOp.metadata.vRanges = ranges;
       return resOp;
     } case Types.JOIN: {
       const inputs = resOp.input.map(input => withCpVars(input));
-      resOp.metadata.pVars = unionSets(inputs.map(input => input.metadata.pVars));
       resOp.metadata.cVars = unionSets(inputs.map(input => input.metadata.cVars));
+      // Note the inversion against `cVars`: a join *merges* compatible mappings, so a variable several
+      // operands can bind holds one value satisfying all of them - the ranges intersect where the
+      // certainties unite. (For a union it is the other way around, see below.)
+      resOp.metadata.vRanges = intersectRanges(inputs.map(input => input.metadata));
       return resOp;
     } case Types.UNION: {
       // A variable is only certain when every branch binds it, but any branch may bind it.
       const inputs = resOp.input.map(input => withCpVars(input));
-      resOp.metadata.pVars = unionSets(inputs.map(input => input.metadata.pVars));
       resOp.metadata.cVars = intersectSets(inputs.map(input => input.metadata.cVars));
+      // The other half of the inversion: a solution comes from exactly *one* branch, so the value of a
+      // variable is whatever that branch gave it - the ranges unite where the certainties intersect.
+      resOp.metadata.vRanges = unionRanges(inputs.map(input => input.metadata));
       return resOp;
     } case Types.MINUS: {
       // The right-hand side of a MINUS contributes no binding at all to the result, not even a
       // possible one - its variables are out of scope above it.
       const left = withCpVars(resOp.input[0]);
-      resOp.metadata.pVars = new Set(left.metadata.pVars);
       resOp.metadata.cVars = new Set(left.metadata.cVars);
+      resOp.metadata.vRanges = new VRanges(left.metadata.vRanges);
       return resOp;
     } case Types.LEFT_JOIN: {
       // OPTIONAL only certainly binds whatever its left-hand (required) side binds.
       const [ left, right ] = resOp.input.map(input => withCpVars(input));
-      resOp.metadata.pVars = unionSets([ left.metadata.pVars, right.metadata.pVars ]);
       resOp.metadata.cVars = new Set(left.metadata.cVars);
+      // Where the left binds the variable *certainly* it is the left that decides its value in every
+      // solution, the right hand side only ever contributing a compatible mapping. Where it does not, a
+      // mapping of the left leaving it unbound merges with one of the right that binds it, so the right's
+      // range is reachable too and the two unite. The key sets unite either way, which is what keeps the
+      // scope of the OPTIONAL right.
+      const ranges = new VRanges(left.metadata.vRanges);
+      for (const [ name, range ] of right.metadata.vRanges) {
+        if (!left.metadata.cVars.has(name)) {
+          ranges.set(name, new RangeSet([ ...ranges.rangeOf(name), ...range ]));
+        }
+      }
+      resOp.metadata.vRanges = ranges;
       return resOp;
     } case Types.PROJECT: {
       const projected = new Set(resOp.variables.map(variable => variable.value));
       const input = withCpVars(resOp.input);
-      resOp.metadata.pVars = intersectSets([ input.metadata.pVars, projected ]);
       resOp.metadata.cVars = intersectSets([ input.metadata.cVars, projected ]);
+      // A projection only drops variables, so what it keeps still takes the values the input gave it -
+      // and dropping one is now dropping its key, which is what takes it out of scope.
+      resOp.metadata.vRanges = new VRanges(
+        [ ...input.metadata.vRanges ].filter(([ name ]) => projected.has(name)),
+      );
       return resOp;
     } case Types.GROUP: {
       // Only the grouping keys and the aggregate targets survive the grouping. A key is certain only
@@ -109,10 +305,6 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
       // stays unbound. An aggregate may raise an evaluation error, so its target is never certain.
       const keys = new Set(resOp.variables.map(variable => variable.value));
       const input = withCpVars(resOp.input);
-      resOp.metadata.pVars = unionSets([
-        intersectSets([ input.metadata.pVars, keys ]),
-        new Set(resOp.aggregates.map(aggregate => aggregate.variable.value)),
-      ]);
       // COUNT is the one aggregate that cannot fail: it counts the bound, non-error values of its
       // argument, so it yields an integer.
       // All others can end up with an error value leaving their target unbound.
@@ -122,17 +314,35 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
           .filter(aggregate => aggregate.aggregator === 'count')
           .map(aggregate => aggregate.variable.value)),
       ]);
+      // A grouping key keeps holding the value of the input; an aggregate computes a new one, of a type
+      // this does not track (COUNT is an integer, MIN takes the type of whichever row won), so it is top.
+      // Only the keys and the aggregate targets stay in scope, and an aggregate writing over a key wins.
+      const ranges = new VRanges([ ...input.metadata.vRanges ].filter(([ name ]) => keys.has(name)));
+      for (const aggregate of resOp.aggregates) {
+        ranges.set(aggregate.variable.value, objectRange);
+      }
+      resOp.metadata.vRanges = ranges;
       return resOp;
     } case Types.VALUES: {
       // A VALUES variable is certainly bound only if every row provides a value for it.
-      resOp.metadata.pVars = new Set(resOp.variables.map(variable => variable.value));
       resOp.metadata.cVars = new Set(resOp.variables
         .filter(variable => resOp.bindings.every(binding => binding[variable.value] !== undefined))
         .map(variable => variable.value));
+      // The column is spelled out, so its range is exactly the types it holds - the tightest this gets.
+      // An all-UNDEF column lands on the bottom: declared by the VALUES, so in scope, yet never bound.
+      const ranges = new VRanges();
+      for (const variable of resOp.variables) {
+        ranges.set(variable.value, new RangeSet(resOp.bindings
+          .map(binding => binding[variable.value])
+          .filter(value => value !== undefined)
+          .map(value => value.termType)));
+      }
+      resOp.metadata.vRanges = ranges;
       return resOp;
     } case Types.EXTEND: {
       const input = withCpVars(resOp.input);
       const certain = new Set(input.metadata.cVars);
+      const ranges = new VRanges(input.metadata.vRanges);
       // Maybe the var we will create is also certain:
       if (resOp.expression.subType === ExpressionTypes.TERM &&
           // A triple-term construction may raise an evaluation error, so it is not certainly bound.
@@ -141,9 +351,11 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
           isSubsetOf(termVars(resOp.expression.term), certain)) {
         certain.add(resOp.variable.value);
       }
-      resOp.metadata.pVars = new Set<string>(input.metadata.pVars);
-      resOp.metadata.pVars.add(resOp.variable.value);
       resOp.metadata.cVars = certain;
+      // The EXTEND brings its target into scope, and what the expression yields overrides whatever the
+      // input had to say about it - binding an already bound variable is an error, not a narrowing.
+      ranges.set(resOp.variable.value, expressionRange(resOp.expression, input.metadata));
+      resOp.metadata.vRanges = ranges;
       return resOp;
     } case Types.FILTER: {
       // The variables of an EXISTS stay inside it, so a filter never adds a possible binding.
@@ -152,24 +364,51 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
       // Keep in mind: Filter False is a special case.
       const input = withCpVars(resOp.input);
       const unbound = variablesImpliedUnboundBy(resOp.expression);
-      resOp.metadata.pVars = differenceSets(input.metadata.pVars, unbound);
       resOp.metadata.cVars = differenceSets(unionSets([
         input.metadata.cVars,
         variablesImpliedBoundBy(resOp.expression),
       ]), unbound);
+      // A filter only drops solutions, so what survives still holds what the input put there. What the
+      // *condition* narrows is the business of the pushdown, which reads it into an assertion instead.
+      // A `!bound(?x)` takes `?x` out of scope entirely, as it did out of `pVars` - see the note in the
+      // file header on why this is not the bottom range instead.
+      const ranges = new VRanges(input.metadata.vRanges);
+      for (const name of unbound) {
+        ranges.delete(name);
+      }
+      resOp.metadata.vRanges = ranges;
       return resOp;
     } case Types.GRAPH: {
       // Asserting on the graph variable selects one graph, so it is in scope above the GRAPH.
       const input = withCpVars(resOp.input);
       const graphVars = termVars(resOp.name);
-      resOp.metadata.pVars = unionSets([ input.metadata.pVars, graphVars ]);
       resOp.metadata.cVars = unionSets([ input.metadata.cVars, graphVars ]);
+      // The graph variable is bound to the name of a graph, which is a NamedNode or a BlankNode - the
+      // join with `{?g ↦ uᵢ}` binds it in every solution, so that much always holds.
+      //
+      // What the *pattern* says about it only holds on top of that where the pattern binds it certainly.
+      // Where it does not, the solutions leaving it unbound down there take the graph name and nothing
+      // else, so `P`'s range does not narrow: `GRAPH ?g { OPTIONAL { VALUES ?g { "l" } } }` binds `?g` to
+      // a graph name whenever the OPTIONAL misses, where intersecting reports it as never bound at all.
+      const ranges = new VRanges(input.metadata.vRanges);
+      for (const name of graphVars) {
+        if (input.metadata.cVars.has(name)) {
+          ranges.narrow(name, graphRange);
+        } else {
+          ranges.set(name, graphRange);
+        }
+      }
+      resOp.metadata.vRanges = ranges;
       return resOp;
     } case Types.SERVICE: {
       // A SILENT service that fails is replaced by a single empty solution, so no variable is certain.
       const input = withCpVars(resOp.input);
-      resOp.metadata.pVars = unionSets([ input.metadata.pVars, termVars(resOp.name) ]);
       resOp.metadata.cVars = resOp.silent ? new Set<string>() : new Set(input.metadata.cVars);
+      const ranges = new VRanges(input.metadata.vRanges);
+      for (const name of termVars(resOp.name)) {
+        ranges.narrow(name, serviceNameRange);
+      }
+      resOp.metadata.vRanges = ranges;
       return resOp;
     }
     case Types.DISTINCT:
@@ -179,8 +418,8 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
     case Types.FROM: {
       // These only drop or reorder solutions, they never change which variables a solution binds.
       const input = withCpVars((<A.Single> <A.Operation> resOp).input);
-      resOp.metadata.pVars = new Set(input.metadata.pVars);
       resOp.metadata.cVars = new Set(input.metadata.cVars);
+      resOp.metadata.vRanges = new VRanges(input.metadata.vRanges);
       return resOp;
     }
     case Types.ASK:
@@ -206,8 +445,8 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
     case Types.NOP:
     case Types.SEQ:
       // Everything without solution mappings of its own.
-      resOp.metadata.pVars = new Set<string>();
       resOp.metadata.cVars = new Set<string>();
+      resOp.metadata.vRanges = new VRanges();
       return resOp;
   }
 }

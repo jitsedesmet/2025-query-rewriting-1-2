@@ -106,20 +106,26 @@ export function impliesBound(assertion: Assertion): assertion is BoundAssertion 
 /**
  * Whether an assertion may fix a variable to this *ground* term, i.e. whether it pins a group to it.
  *
- * TODO: decide when a ground triple term can raise an evaluation error, and move this and the EXTEND case
- * of {@link withCpVars} (`certainlyBoundVars.ts`) together when it does. The two make the same
- * call from opposite sides, and today only one of them makes it: that case treats a triple-term expression
- * as *not* certainly binding its target, since constructing one may error, while this pass discharges an
- * assertion on a BIND target as soon as the term is decided - `BIND(e AS ?t)` under A⟨?t ≡ c⟩ becomes
- * `Extend(σ_{sameTerm(e,c)}(A), ?t, c)`, whose `σ` folds away for a decided `e`, keeping the rows where the
- * construction errored and left `?t` unbound. Until that is settled the two agree by both refusing, which
- * is the conservative direction for each: this one only gives up substituting a triple term into a
- * pattern, which is out of scope anyway.
+ * A triple term is admitted exactly when it is ground, which is what makes it a term at all rather than a
+ * *shape* - `<<( ?a ?b ?c )>>` says which triple the variable is the term of only once its components are
+ * known, and until then it is the business of the pin lattice ({@link TermClusterSet}) instead.
+ *
+ * This is the same call the EXTEND case of {@link withCpVars} (`certainlyBoundVars.ts`) makes from the
+ * other side, and the two now agree: a ground triple term cannot raise an evaluation error, so
+ * `BIND(<<( :a :b :c )>> AS ?t)` binds `?t` certainly, and an assertion on `?t` may be discharged as soon
+ * as its term is decided - `BIND(e AS ?t)` under A⟨?t ≡ c⟩ becomes `Extend(σ_{sameTerm(e,c)}(A), ?t, c)`,
+ * which for a decided `e` folds away without a row where `?t` was left unbound to worry about.
  */
 export function isAssertableTerm(term: RDF.Term): boolean {
   // Blank nodes need no exclusion here: by the time this pass runs, the ones in a WHERE clause have
   // already been converted to variables, so no assertion can ever carry one.
-  return term.termType !== 'Variable' && term.termType !== 'Quad';
+  return term.termType !== 'Variable' && (term.termType !== 'Quad' || isGroundTripleTerm(term));
+}
+
+/** Whether a triple term is fully decided - every component a term rather than a variable. */
+export function isGroundTripleTerm(term: RDF.BaseQuad): boolean {
+  return [ term.subject, term.predicate, term.object ].every(component =>
+    component.termType !== 'Variable' && (component.termType !== 'Quad' || isGroundTripleTerm(component)));
 }
 
 /**

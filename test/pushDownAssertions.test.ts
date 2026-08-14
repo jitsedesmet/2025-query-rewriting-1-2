@@ -1735,32 +1735,58 @@ GROUP BY ?x?y`,
       );
     });
 
-    it('does not read a triple term as an assertion, since constructing one may error', ({ expect }) => {
-      // See the TODO on `isAssertableTerm`: this pass discharges an assertion as soon as its term is
-      // decided, while `withCpVars` holds that a triple-term expression need not bind its target at all.
-      // Until the two are settled they agree by both refusing, so the condition stays a plain filter.
+    it('empties a pattern that would need a triple term in the subject position', ({ expect }) => {
+      // A ground triple term is a term like any other, so it pins `?t` - and `?t` only ever occurs in a
+      // subject position, whose range holds no `Quad`, so this asks for a triple that cannot exist rather
+      // than for a filter. `normalisedFor` proves that off the range before the assertion reaches the
+      // pattern; `canOccupy` refusing to substitute it there says the same thing one step later.
       expectTransform(
         expect,
         'SELECT * WHERE { ?t :p ?w FILTER(sameTerm(?t, <<( :a :b :c )>>)) }',
         `SELECT ?t ?w WHERE {
   ?t <ex://p> ?w .
-  FILTER ( SAMETERM( ?t , <<( <ex://a> <ex://b> <ex://c> )>> ) )
+  FILTER ( FALSE )
 }`,
       );
     });
 
-    it('does not let a triple term BIND pin the clique of its target', ({ expect }) => {
-      // The unsound version of the rule above it: `?y ≡ <<( :a :b :c )>>` below would keep the rows where
-      // the construction errored, `?t` was left unbound, and `sameTerm(?t, ?y)` therefore errored too.
+    it('lets a ground triple term BIND pin the clique of its target', ({ expect }) => {
+      // The construction is infallible for ground components, so `?t` is certainly bound and the term
+      // travels onto `?y` - which the pattern restricts to a subject, a position holding no triple term,
+      // so the operation is empty. The *fallible* version is the test below, where the rows leaving `?t`
+      // unbound are real.
       expectTransform(
         expect,
         'SELECT * WHERE { ?y :p ?w BIND(<<( :a :b :c )>> AS ?t) FILTER(sameTerm(?t, ?y)) }',
+        `SELECT ( <<( <ex://a> <ex://b> <ex://c> )>> AS ?t ) ?w ?y WHERE {
+  ?y <ex://p> ?w .
+  FILTER ( FALSE )
+}`,
+      );
+    });
+
+    it('does not let a fallible triple term BIND pin the clique of its target', ({ expect }) => {
+      // `?w` may be a literal, in which case the construction errors and leaves `?t` unbound. Pinning
+      // `?y` to it below would keep exactly those rows, where `sameTerm(?t, ?y)` errored on top.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?y :p ?w BIND(<<( ?w :b :c )>> AS ?t) FILTER(sameTerm(?t, ?y)) }',
         `SELECT ?t ?w ?y WHERE {
   {
     ?y <ex://p> ?w .
-    BIND( <<( <ex://a> <ex://b> <ex://c> )>> AS ?t )
+    BIND( <<( ?w <ex://b> <ex://c> )>> AS ?t )
   }
   FILTER ( SAMETERM( ?y , ?t ) )
+}`,
+      );
+    });
+
+    it('substitutes a ground triple term into the object position it can occupy', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s :p ?t FILTER(sameTerm(?t, <<( :a :b :c )>>)) }',
+        `SELECT ?s ( <<( <ex://a> <ex://b> <ex://c> )>> AS ?t ) WHERE {
+  ?s <ex://p> <<( <ex://a> <ex://b> <ex://c> )>> .
 }`,
       );
     });
@@ -1855,6 +1881,13 @@ GROUP BY ?x?y`,
         ?x :step/:onwards ?y
         FILTER(sameTerm(?x, :a))
       }`, 2);
+    });
+
+    it('matches the ground triple term it substituted into the object position', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :says ?t
+        FILTER(sameTerm(?t, <<( :a :p :shared )>>))
+      }`, 1);
     });
 
     it('keeps a MINUS whose right hand side shares only the object variable', async({ expect }) => {
@@ -1967,7 +2000,7 @@ GROUP BY ?x?y`,
         ?s ?p2 ?o
         OPTIONAL { ?s :r ?d }
         FILTER(bound(?d))
-      }`, 5);
+      }`, 6);
     });
 
     it('keeps the join rows whose operand never bound the variable `bound` asserts', async({ expect }) => {

@@ -32,3 +32,12 @@ PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 :cyc :step :h1 , :h2 .
 :h1 :onwards :cyc .
 :h2 :onwards :cyc .
+
+# Triple terms, the subject of the structural assertions. `:says` relates a subject to a triple term
+# whose own subject is that same subject for `:a` and `:c` but not for `:b`, which is what
+# `FILTER(sameTerm(subject(?o), ?s))` tells apart. `:d` is bound to something that is not a triple term
+# at all, so an accessor on it errors and the row drops.
+:a :says <<( :a :p :shared )>> .
+:b :says <<( :a :q :other )>> .
+:c :says <<( :c :p :other )>> .
+:d :says :notATripleTerm .

@@ -306,10 +306,24 @@ describe('assertionConjunction', () => {
       expect(stateOf(normalised, 'g')).toBe('strong(b)');
     });
 
-    it('leaves a weak member out of range alone, an unbound solution satisfying it', ({ expect }) => {
+    it('collapses a weak member out of range to `!bound`, its other disjunct being false', ({ expect }) => {
+      // `¬bnd(?g) ∨ ?g ≡ "1"` where `?g` can only be a graph name: the right disjunct never holds, so
+      // what is left is the unbound assertion - a real constraint, where the weak one said almost nothing.
       const assertions = <AssertionConjunction> conjunctionOf([ 'g', assertWeak(DF.literal('1')) ]);
       const normalised = assertions.normalisedFor(rangedMeta([], 'g', graphRange));
-      expect(stateOf(normalised, 'g')).toBe('weak(1)');
+      expect(stateOf(normalised, 'g')).toBe('unbound');
+    });
+
+    it('leaves a weak member the range still admits weak', ({ expect }) => {
+      const assertions = <AssertionConjunction> conjunctionOf([ 'g', assertWeak(termC) ]);
+      const normalised = assertions.normalisedFor(rangedMeta([], 'g', graphRange));
+      expect(stateOf(normalised, 'g')).toBe('weak(ex://c)');
+    });
+
+    it('empties rather than collapses where the variable is certainly bound', ({ expect }) => {
+      // `?g ∈ cVars` promotes the weak member to strong first, and a strong one out of range is empty.
+      const assertions = <AssertionConjunction> conjunctionOf([ 'g', assertWeak(DF.literal('1')) ]);
+      expect(assertions.normalisedFor(rangedMeta([ 'g' ], 'g', graphRange))).toBeUndefined();
     });
 
     it('empties the plan on a bound assertion the variable can never satisfy', ({ expect }) => {

@@ -263,9 +263,11 @@ export class AssertionConjunction {
    * - A variable whose range is *empty* is never bound, exactly as one out of scope is never bound -
    *   {@link VRanges.neverBinds} is the single fact both are - so A and B empty the operation by (FBndII)
    *   while W and U are carried by their `!bound(?x)` disjunct and prune away.
-   * - A **strong** assertion pinning a variable to a term outside a range that is *not* empty - `?g ≡ "1"`
-   *   under a `GRAPH ?g`, `?p ≡ _:b` in a predicate position - is unsatisfiable for the same reason, one
-   *   term rather than all of them. Which is why the rewrites downstream need no term-type checks.
+   * - A variable pinned to a term outside a range that is *not* empty - `?g ≡ "1"` under a `GRAPH ?g`,
+   *   `?p ≡ _:b` in a predicate position - cannot be bound to it, which is the same fact for one term
+   *   rather than for all of them. **Strong** is then unsatisfiable, since it implies `bnd(?x)`; **weak**
+   *   loses its right disjunct and becomes exactly U⟨?x⟩. Which is why the rewrites downstream need no
+   *   term-type checks of their own.
    *
    * Per member of a group, not per group: a group whose members disagree about being in `cVars` is
    * perfectly ordinary. Taking a member out may leave its group with a single variable and nothing for it
@@ -313,15 +315,22 @@ export class AssertionConjunction {
           // B⟨?x⟩ holds of every solution here, and completes a weak member into a strong one.
           result.strength.set(name, 'strong');
         }
-        // A member pinned to a term the variable can never take empties the operation - the same rule as
-        // (FBndII) one level down the lattice: there the variable is out of scope, here it is in scope
-        // and no solution binding it to *this* term exists. Read off `result`, so a promotion just above
-        // counts, and only for the strong form: an unbound solution still satisfies a weak one.
+        // A member pinned to a term the variable can never take, which both forms have something to say
+        // about - the same rule as (FBndII) one level down the lattice, the variable being in scope here
+        // and no solution binding it to *this* term. Read off `result`, so a promotion just above counts.
         // A clique member is pinned to a *variable*, which says nothing statically, so it is skipped.
         const pinned = result.get(name);
-        if (pinned?.subType === 'strong' && pinned.term.termType !== 'Variable' &&
-          !vRanges.rangeOf(name).has(pinned.term.termType)) {
-          return undefined;
+        if ((pinned?.subType === 'strong' || pinned?.subType === 'weak') &&
+          pinned.term.termType !== 'Variable' && !vRanges.rangeOf(name).has(pinned.term.termType)) {
+          if (pinned.subType === 'strong') {
+            // A⟨?x ≡ c⟩ implies `bnd(?x)` and there is no value left for it to take.
+            return undefined;
+          }
+          // W⟨?x ≡ c⟩ is `¬bnd(?x) ∨ ?x ≡ c`, and the right disjunct is false wherever `?x` is bound. So
+          // the weak form *is* U⟨?x⟩ here - which is worth doing rather than leaving it: a weak member
+          // says almost nothing, where `!bound(?x)` is a constraint the rest of the pass acts on.
+          // Cannot fail: `?x` is neither `bound` nor a strong member, the two states it rejects.
+          result.assertUnbound(name);
         }
       }
     }

@@ -22,7 +22,21 @@ describe('nullifyUnbindableVars', () => {
   });
 
   it('nullifies a VALUES with no rows, whose columns are vacuously certain', ({ expect }) => {
+    // Zero *rows* - `VALUES ?x {}` - so zero solutions. Every column is certain over no rows at all and
+    // holds nothing, which is the pairing. Verified against the engine: this yields 0 solutions.
     expect(isFilterFalse(c, nullifyUnbindableVars(c, c.AF.createValues([ x ], [])))).toBe(true);
+  });
+
+  it('leaves a VALUES with one empty row alone, that being the empty solution mapping', ({ expect }) => {
+    // `VALUES () { () }` is one *row* binding nothing, not zero rows: it yields a single solution, the
+    // same one an empty group graph pattern does. Distinct from the case above, and not FILTER(false).
+    expect(isFilterFalse(c, nullifyUnbindableVars(c, c.AF.createValues([], [{}])))).toBe(false);
+  });
+
+  it('leaves an UNDEF row alone, which binds nothing yet is still a solution', ({ expect }) => {
+    // `VALUES ?x { UNDEF }`: one row, `?x` unbound in it. `?x` never binds, but it is not in `cVars`
+    // either - the row itself is a solution - so the pairing does not arise.
+    expect(isFilterFalse(c, nullifyUnbindableVars(c, c.AF.createValues([ x ], [{}])))).toBe(false);
   });
 
   it('nullifies `FILTER(bound(?x))` over something that cannot bind it, which is (FBndII)', ({ expect }) => {

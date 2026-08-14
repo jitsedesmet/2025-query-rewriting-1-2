@@ -201,31 +201,25 @@ export function withoutCpVars<T extends Algebra.Operation>(op: T): T {
 
 /**
  * Whether constructing this triple term is guaranteed to yield a term rather than an evaluation error.
- *
- * `<<( ?s ?p ?o )>>` is ill-typed - and so unbound rather than bound to a generalised triple - whenever
- * `?s` is a literal or a triple term, or `?p` is anything but an IRI. A component is safe when every term
- * type it can still take is one the position admits, which is what a *ground* component decides by itself.
- * The components also have to be bound, which the caller checks against `cVars`.
- *
- * A variable at the bottom range is *not* safe, even though it vacuously admits every position: the range
- * being empty says nothing binds it, so there is no construction to call infallible. The caller's `cVars`
- * check already rules that combination out - {@link VRanges.canBind} is stated here so the read of the
- * bottom does not depend on it.
  */
 function constructionCannotFail(term: RDF.BaseQuad, vRanges: VRanges): boolean {
   function admits(component: RDF.Term, position: RangeSet): boolean {
     if (component.termType === 'Variable') {
+      // The variable can be bound
       return vRanges.canBind(component.value) &&
+      // All valid tremTypes of the variable are acceptable in this position
         [ ...vRanges.rangeOf(component.value) ].every(type => position.has(type));
     }
     if (component.termType === 'Quad') {
+      // A quad can be in this position and that quad construction cannot fail.
       return position.has('Quad') && constructionCannotFail(component, vRanges);
     }
     return position.has(component.termType);
   }
   return admits(term.subject, subjectRange) &&
     admits(term.predicate, predicateRange) &&
-    admits(term.object, objectRange);
+    admits(term.object, objectRange) &&
+    admits(term.graph, graphRange);
 }
 
 /**

@@ -51,7 +51,7 @@ export const objectRange = new RangeSet([ 'Quad', 'NamedNode', 'BlankNode', 'Lit
  * The SPARQL grammar only allows an IRI to be written in a `GRAPH` clause, but a variable there
  * (`GRAPH ?g`) can still bind to a BlankNode graph name, so the range cannot be narrowed to NamedNode.
  */
-export const graphRange = new RangeSet([ 'NamedNode', 'BlankNode' ]);
+export const graphRange = new RangeSet([ 'NamedNode', 'BlankNode', 'DefaultGraph' ]);
 
 /** Valid term types for a triple term, which only ever occupies an object position. */
 export const tripleTermRange = new RangeSet([ 'Quad' ]);

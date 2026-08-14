@@ -117,6 +117,7 @@ export function impliesBound(assertion: Assertion): assertion is BoundAssertion 
  * which for a decided `e` folds away without a row where `?t` was left unbound to worry about.
  */
 export function isAssertableTerm(term: RDF.Term): boolean {
+  // TODO can we not use termVars().size === 0?
   // Blank nodes need no exclusion here: by the time this pass runs, the ones in a WHERE clause have
   // already been converted to variables, so no assertion can ever carry one.
   return term.termType !== 'Variable' && (term.termType !== 'Quad' || isGroundTripleTerm(term));

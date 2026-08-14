@@ -107,6 +107,21 @@ describe('the target of a triple-term BIND', () => {
       c.DF.quad(c.DF.namedNode('ex://a'), c.DF.namedNode('ex://b'), ground),
     )).toBe(true);
   });
+
+  it('is uncertain for a quad carrying a graph, which is no triple term', ({ expect }) => {
+    // An `Algebra.Pattern` *is* a quad with a graph - what a GRAPH clause parses to - so one reaches this
+    // position the moment anything builds a term expression out of one. A triple term has no graph, and
+    // `<<( … )>>` cannot construct this, so there is nothing to call infallible however ground it is.
+    // The graph is a *name* here rather than a variable on purpose: an unbindable variable would be
+    // refused for the ordinary reason, and would say nothing about the graph slot itself.
+    const quadPattern = c.AF.createPattern(
+      c.DF.namedNode('ex://a'),
+      c.DF.namedNode('ex://b'),
+      c.DF.namedNode('ex://c'),
+      c.DF.namedNode('ex://g1'),
+    );
+    expect(bindsCertainly(c.AF.createBgp([]), quadPattern)).toBe(false);
+  });
 });
 
 describe('the range of a graph variable', () => {

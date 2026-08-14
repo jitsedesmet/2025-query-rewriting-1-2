@@ -205,9 +205,10 @@ export function withoutCpVars<T extends Algebra.Operation>(op: T): T {
 function constructionCannotFail(term: RDF.BaseQuad, vRanges: VRanges): boolean {
   function admits(component: RDF.Term, position: RangeSet): boolean {
     if (component.termType === 'Variable') {
-      // The variable can be bound
+      // Every termType the variable can still take has to be one the position admits. The bottom range
+      // would pass that vacuously, so it is ruled out first: nothing binds the variable there, and a
+      // construction over something that never has a value is not one to call infallible.
       return vRanges.canBind(component.value) &&
-      // All valid tremTypes of the variable are acceptable in this position
         [ ...vRanges.rangeOf(component.value) ].every(type => position.has(type));
     }
     if (component.termType === 'Quad') {
@@ -219,7 +220,9 @@ function constructionCannotFail(term: RDF.BaseQuad, vRanges: VRanges): boolean {
   return admits(term.subject, subjectRange) &&
     admits(term.predicate, predicateRange) &&
     admits(term.object, objectRange) &&
-    admits(term.graph, graphRange);
+    // A triple term has no graph: the slot is an RDF/JS artefact and is always the default graph. A quad
+    // with a real one is not something `<<( … )>>` can construct, so nothing here calls it infallible.
+    term.graph.termType === 'DefaultGraph';
 }
 
 /**

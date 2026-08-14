@@ -1,6 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { TransformContext } from '../transformContext.js';
+import { termVars } from './certainlyBoundVars.js';
 import { sameTermExpression } from './expressionHelpers.js';
 import { DF } from './rdfDatatypes.js';
 
@@ -117,16 +118,11 @@ export function impliesBound(assertion: Assertion): assertion is BoundAssertion 
  * which for a decided `e` folds away without a row where `?t` was left unbound to worry about.
  */
 export function isAssertableTerm(term: RDF.Term): boolean {
-  // TODO can we not use termVars().size === 0?
+  // Ground *is* variable-free, so the two cases - a variable, and a triple term holding one - are the one
+  // question {@link termVars} already answers, and the one `isStaticExpression` asks of a term expression.
   // Blank nodes need no exclusion here: by the time this pass runs, the ones in a WHERE clause have
   // already been converted to variables, so no assertion can ever carry one.
-  return term.termType !== 'Variable' && (term.termType !== 'Quad' || isGroundTripleTerm(term));
-}
-
-/** Whether a triple term is fully decided - every component a term rather than a variable. */
-export function isGroundTripleTerm(term: RDF.BaseQuad): boolean {
-  return [ term.subject, term.predicate, term.object ].every(component =>
-    component.termType !== 'Variable' && (component.termType !== 'Quad' || isGroundTripleTerm(component)));
+  return termVars(term).size === 0;
 }
 
 /**

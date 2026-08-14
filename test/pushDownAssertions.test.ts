@@ -1791,6 +1791,38 @@ GROUP BY ?x?y`,
       );
     });
 
+    it('substitutes it into a pattern carrying a graph of its own', ({ expect }) => {
+      // {@link parseQuery} asks for quads, so a GRAPH clause is the *graph component* of the patterns
+      // below it rather than an operation - the usual shape, and the one where a pattern holds both a
+      // graph and a triple term at once. The two positions have to stay apart: the term lands in the
+      // object, and the graph is left to say which graph the triple is in.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { GRAPH ?g { ?s :p ?t } FILTER(sameTerm(?t, <<( :a :b :c )>>)) }',
+        `SELECT ?g ?s ( <<( <ex://a> <ex://b> <ex://c> )>> AS ?t ) WHERE {
+  GRAPH ?g {
+    ?s <ex://p> <<( <ex://a> <ex://b> <ex://c> )>> .
+  }
+}`,
+      );
+    });
+
+    it('empties a graph-carrying pattern that would need one in its subject position', ({ expect }) => {
+      // The other half: the graph component does not make the subject any more accommodating.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { GRAPH ?g { ?t :p ?w } FILTER(sameTerm(?t, <<( :a :b :c )>>)) }',
+        `SELECT ?g ?t ?w WHERE {
+  GRAPH ?g {
+    {
+      ?t <ex://p> ?w .
+      FILTER ( FALSE )
+    }
+  }
+}`,
+      );
+    });
+
     it('meets no blank node, because the parse turned them into variables', ({ expect }) => {
       // What lets `isAssertableTerm` admit a blank node - and so lets the constant folding decide
       // `sameTerm` between two of them. A blank node label in an expression would be a fresh label

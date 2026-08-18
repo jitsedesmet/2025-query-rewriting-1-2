@@ -63,6 +63,70 @@ describe('withCpVars', () => {
   });
 });
 
+/**
+ * A triple-term construction is the one term expression that can fail, leaving its target unbound where a
+ * component is not a term the position it lands in admits. What decides it is the *range* of the
+ * components, so this is the rule the ranges were needed for: a ground construction is infallible by
+ * itself, and so is one over a variable that can only take terms the position admits.
+ */
+describe('the target of a triple-term BIND', () => {
+  const t = c.DF.variable('t');
+  const ground = c.DF.quad(c.DF.namedNode('ex://a'), c.DF.namedNode('ex://b'), c.DF.namedNode('ex://c'));
+
+  /** Whether `BIND(<<( … )>> AS ?t)` over `input` binds `?t` in every solution. */
+  function bindsCertainly(input: Parameters<typeof withCpVars>[0], term: Parameters<typeof c.DF.quad>[2]): boolean {
+    const extend = c.AF.createExtend(input, t, c.AF.createTermExpression(term));
+    return withCpVars(extend).metadata.cVars.has('t');
+  }
+
+  it('is certain for a ground construction, which no range can spoil', ({ expect }) => {
+    expect(bindsCertainly(c.AF.createBgp([]), ground)).toBe(true);
+  });
+
+  it('is certain for a variable subject a pattern already restricts to a subject', ({ expect }) => {
+    // `?x` occurs in a subject position, so it is an IRI or a blank node - every type the subject of the
+    // construction admits. Non-ground, and still infallible: this is what reading the ranges buys.
+    const pattern = c.AF.createPattern(x, c.DF.namedNode('ex://p'), c.DF.variable('o'));
+    expect(bindsCertainly(pattern, c.DF.quad(x, c.DF.namedNode('ex://b'), c.DF.namedNode('ex://c')))).toBe(true);
+  });
+
+  it('is uncertain for a subject that may be a literal', ({ expect }) => {
+    // The construction is ill-typed for a literal subject, so those solutions leave `?t` unbound.
+    expect(bindsCertainly(column(true), c.DF.quad(x, c.DF.namedNode('ex://b'), c.DF.namedNode('ex://c')))).toBe(false);
+  });
+
+  it('is uncertain for a component that is not bound at all', ({ expect }) => {
+    // The all-UNDEF column has `?x` in scope but never bound, so there is no construction to call
+    // infallible - and `cVars` refuses it on top.
+    expect(bindsCertainly(column(false), c.DF.quad(x, c.DF.namedNode('ex://b'), c.DF.namedNode('ex://c')))).toBe(false);
+  });
+
+  it('is certain for a nested construction, the object position admitting a triple term', ({ expect }) => {
+    expect(bindsCertainly(
+      c.AF.createBgp([]),
+      c.DF.quad(c.DF.namedNode('ex://a'), c.DF.namedNode('ex://b'), ground),
+    )).toBe(true);
+  });
+
+  it('is uncertain for a quad carrying a graph, which is no triple term', ({ expect }) => {
+    // Defensive, and deliberately so. The *type* admits this: `constructionCannotFail` takes an
+    // `RDF.BaseQuad`, and an `Algebra.Pattern` is one with its graph slot filled. No parse puts one here
+    // - `toAlgebra` with `quads: true` fills the graph of the top-level pattern only, leaving a triple
+    // term in its object, and every quad inside a BIND or a FILTER, on the default graph - so the rule
+    // states its own precondition instead of resting on that. A triple term has no graph, and
+    // `<<( … )>>` cannot construct this, so there is nothing to call infallible however ground it is.
+    // The graph is a *name* here rather than a variable on purpose: an unbindable variable would be
+    // refused for the ordinary reason, and would say nothing about the graph slot itself.
+    const quadPattern = c.AF.createPattern(
+      c.DF.namedNode('ex://a'),
+      c.DF.namedNode('ex://b'),
+      c.DF.namedNode('ex://c'),
+      c.DF.namedNode('ex://g1'),
+    );
+    expect(bindsCertainly(c.AF.createBgp([]), quadPattern)).toBe(false);
+  });
+});
+
 describe('the range of a graph variable', () => {
   it('is the graph name where the pattern does not certainly bind it', ({ expect }) => {
     // `GRAPH ?g { OPTIONAL { VALUES ?g { "l" } } }`: every solution where the OPTIONAL misses binds `?g`

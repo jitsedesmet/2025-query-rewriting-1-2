@@ -200,6 +200,32 @@ export function withoutCpVars<T extends Algebra.Operation>(op: T): T {
 }
 
 /**
+ * Whether constructing this triple term is guaranteed to yield a term rather than an evaluation error.
+ */
+function constructionCannotFail(term: RDF.BaseQuad, vRanges: VRanges): boolean {
+  function admits(component: RDF.Term, position: RangeSet): boolean {
+    if (component.termType === 'Variable') {
+      // Every termType the variable can still take has to be one the position admits. The bottom range
+      // would pass that vacuously, so it is ruled out first: nothing binds the variable there, and a
+      // construction over something that never has a value is not one to call infallible.
+      return vRanges.canBind(component.value) &&
+        [ ...vRanges.rangeOf(component.value) ].every(type => position.has(type));
+    }
+    if (component.termType === 'Quad') {
+      // A quad can be in this position and that quad construction cannot fail.
+      return position.has('Quad') && constructionCannotFail(component, vRanges);
+    }
+    return position.has(component.termType);
+  }
+  return admits(term.subject, subjectRange) &&
+    admits(term.predicate, predicateRange) &&
+    admits(term.object, objectRange) &&
+    // A triple term has no graph: the slot is an RDF/JS artefact and is always the default graph. A quad
+    // with a real one is not something `<<( … )>>` can construct, so nothing here calls it infallible.
+    term.graph.termType === 'DefaultGraph';
+}
+
+/**
  * The operation with its certain and possible vars assigned, computed by dynamic programming: callers
  * are responsible for keeping the metadata up to date when they manipulate the operation.
  *
@@ -345,10 +371,14 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
       const ranges = new VRanges(input.metadata.vRanges);
       // Maybe the var we will create is also certain:
       if (resOp.expression.subType === ExpressionTypes.TERM &&
-          // A triple-term construction may raise an evaluation error, so it is not certainly bound.
-          resOp.expression.term.termType !== 'Quad' &&
           // If it is a var, and that var is certain, we also certain
-          isSubsetOf(termVars(resOp.expression.term), certain)) {
+          isSubsetOf(termVars(resOp.expression.term), certain) &&
+          // A triple-term construction is the one term expression that can *fail*: it raises an
+          // evaluation error - leaving the target unbound - when a component is not a term the position
+          // it lands in admits. Where the ranges of the components rule that out, and a ground one rules
+          // it out by itself, the construction is as certain as any other term.
+          (resOp.expression.term.termType !== 'Quad' ||
+            constructionCannotFail(resOp.expression.term, input.metadata.vRanges))) {
         certain.add(resOp.variable.value);
       }
       resOp.metadata.cVars = certain;

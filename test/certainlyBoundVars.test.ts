@@ -109,8 +109,11 @@ describe('the target of a triple-term BIND', () => {
   });
 
   it('is uncertain for a quad carrying a graph, which is no triple term', ({ expect }) => {
-    // An `Algebra.Pattern` *is* a quad with a graph - what a GRAPH clause parses to - so one reaches this
-    // position the moment anything builds a term expression out of one. A triple term has no graph, and
+    // Defensive, and deliberately so. The *type* admits this: `constructionCannotFail` takes an
+    // `RDF.BaseQuad`, and an `Algebra.Pattern` is one with its graph slot filled. No parse puts one here
+    // - `toAlgebra` with `quads: true` fills the graph of the top-level pattern only, leaving a triple
+    // term in its object, and every quad inside a BIND or a FILTER, on the default graph - so the rule
+    // states its own precondition instead of resting on that. A triple term has no graph, and
     // `<<( … )>>` cannot construct this, so there is nothing to call infallible however ground it is.
     // The graph is a *name* here rather than a variable on purpose: an unbindable variable would be
     // refused for the ordinary reason, and would say nothing about the graph slot itself.

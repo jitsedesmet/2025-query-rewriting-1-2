@@ -294,7 +294,7 @@ export class TermClusterSet<T, Term> extends ClusterSet<T> {
   }
 
   /** Whether a live pin holds this group as one of its components. */
-  private isComponent(group: number): boolean {
+  public isComponent(group: number): boolean {
     return Object.entries(this.groupToPin).some(([ owner, pin ]) =>
       Number(owner) !== group && pin?.kind === 'triple' && pin.children.includes(group));
   }

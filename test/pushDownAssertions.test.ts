@@ -1177,12 +1177,18 @@ GROUP BY ?x?y`,
     });
 
     it('empties the plan where the term it pins the clique to cannot occupy its position', ({ expect }) => {
-      // `?y ≡ "a"` reaches the pattern, where no triple has a literal subject.
+      // `?y ≡ "a"`, and no triple has a literal subject. Both members of the clique are strong, so the
+      // group holds one value that has to satisfy both of their ranges at once - `{Literal}` from the
+      // BIND and `subjectRange` from the pattern - and there is none. `normalisedFor` reads that off the
+      // ranges of the very filter, which is why the emptiness lands above the BIND rather than below it.
       expectTransform(
         expect,
         'SELECT * WHERE { ?y :p ?w BIND("a" AS ?t) FILTER(sameTerm(?t, ?y)) }',
-        `SELECT ( "a" AS ?t ) ?w ?y WHERE {
-  ?y <ex://p> ?w .
+        `SELECT ?t ?w ?y WHERE {
+  {
+    ?y <ex://p> ?w .
+    BIND( "a" AS ?t )
+  }
   FILTER ( FALSE )
 }`,
       );
@@ -1752,14 +1758,29 @@ GROUP BY ?x?y`,
 
     it('lets a ground triple term BIND pin the clique of its target', ({ expect }) => {
       // The construction is infallible for ground components, so `?t` is certainly bound and the term
-      // travels onto `?y` - which the pattern restricts to a subject, a position holding no triple term,
-      // so the operation is empty. The *fallible* version is the test below, where the rows leaving `?t`
-      // unbound are real.
+      // travels onto `?y` and into the object position it may occupy. The *fallible* version is the test
+      // below, where the rows leaving `?t` unbound are real.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?w :p ?y BIND(<<( :a :b :c )>> AS ?t) FILTER(sameTerm(?t, ?y)) }',
+        `SELECT ( <<( <ex://a> <ex://b> <ex://c> )>> AS ?t ) ?w ( <<( <ex://a> <ex://b> <ex://c> )>> AS ?y ) WHERE {
+  ?w <ex://p> <<( <ex://a> <ex://b> <ex://c> )>> .
+}`,
+      );
+    });
+
+    it('empties the plan where the clique it pins holds a variable no triple term can be', ({ expect }) => {
+      // The same infallible construction, with `?y` in a *subject* position this time: the group has to
+      // hold a `Quad` and a term `subjectRange` admits at once, and there is none - so this is empty for
+      // the range reason rather than for the substitution one, and stops at the filter.
       expectTransform(
         expect,
         'SELECT * WHERE { ?y :p ?w BIND(<<( :a :b :c )>> AS ?t) FILTER(sameTerm(?t, ?y)) }',
-        `SELECT ( <<( <ex://a> <ex://b> <ex://c> )>> AS ?t ) ?w ?y WHERE {
-  ?y <ex://p> ?w .
+        `SELECT ?t ?w ?y WHERE {
+  {
+    ?y <ex://p> ?w .
+    BIND( <<( <ex://a> <ex://b> <ex://c> )>> AS ?t )
+  }
   FILTER ( FALSE )
 }`,
       );
@@ -1767,13 +1788,14 @@ GROUP BY ?x?y`,
 
     it('does not let a fallible triple term BIND pin the clique of its target', ({ expect }) => {
       // `?w` may be a literal, in which case the construction errors and leaves `?t` unbound. Pinning
-      // `?y` to it below would keep exactly those rows, where `sameTerm(?t, ?y)` errored on top.
+      // `?y` to it below would keep exactly those rows, where `sameTerm(?t, ?y)` errored on top. `?y` is
+      // in an object position, so nothing about the ranges decides this one either way.
       expectTransform(
         expect,
-        'SELECT * WHERE { ?y :p ?w BIND(<<( ?w :b :c )>> AS ?t) FILTER(sameTerm(?t, ?y)) }',
+        'SELECT * WHERE { ?w :p ?y BIND(<<( ?w :b :c )>> AS ?t) FILTER(sameTerm(?t, ?y)) }',
         `SELECT ?t ?w ?y WHERE {
   {
-    ?y <ex://p> ?w .
+    ?w <ex://p> ?y .
     BIND( <<( ?w <ex://b> <ex://c> )>> AS ?t )
   }
   FILTER ( SAMETERM( ?y , ?t ) )

@@ -53,6 +53,11 @@ export class ClusterSet<T> {
     return this.groupToValues[group] ?? [];
   }
 
+  /** Whether a group id still names a group, which a merge or a removal may have ended. */
+  public hasGroup(group: number): boolean {
+    return this.groupToValues[group] !== undefined;
+  }
+
   /** Every group and its values, in the order the groups were created. */
   public groupEntries(): [ number, readonly T[] ][] {
     return Object.entries(this.groupToValues).map(([ group, values ]) => [ Number(group), values ]);

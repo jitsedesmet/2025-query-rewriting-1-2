@@ -1177,12 +1177,17 @@ GROUP BY ?x?y`,
     });
 
     it('empties the plan where the term it pins the clique to cannot occupy its position', ({ expect }) => {
-      // `?y ≡ "a"` reaches the pattern, where no triple has a literal subject.
+      // `?y ≡ "a"` cannot hold: `?y` is a subject, and no triple has a literal one. The *group* carries
+      // that range, so the contradiction is decided where the BIND hands the clique its term - before the
+      // term ever reaches the pattern that `canOccupy` would have refused it at.
       expectTransform(
         expect,
         'SELECT * WHERE { ?y :p ?w BIND("a" AS ?t) FILTER(sameTerm(?t, ?y)) }',
-        `SELECT ( "a" AS ?t ) ?w ?y WHERE {
-  ?y <ex://p> ?w .
+        `SELECT ?t ?w ?y WHERE {
+  {
+    ?y <ex://p> ?w .
+    BIND( "a" AS ?t )
+  }
   FILTER ( FALSE )
 }`,
       );
@@ -1326,6 +1331,13 @@ GROUP BY ?x?y`,
           { ?s ?p ?o FILTER(sameTerm(?s, :x)) } UNION { ?s :p ?o }
           FILTER(sameTerm(?s, ?o))
         }`,
+        // The accessor folds are what make these idempotent: the condition the assertion was read from
+        // is written back over the operation it was pushed into, and has to collapse there.
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(subject(?o), ?s)) }',
+        'SELECT * WHERE { ?s ?p ?o FILTER(isTRIPLE(?o)) }',
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(?o, <<( :a :b :c )>>)) }',
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(?o, TRIPLE(?s, ?p, ?s))) }',
+        'SELECT * WHERE { ?s ?p ?o OPTIONAL { ?o :q ?z } FILTER(isTRIPLE(?z)) }',
       ]) {
         const once = pushDownAssertions(c, parseQuery(c, prefixes + query));
         const twice = pushDownAssertions(c, pushDownAssertions(c, parseQuery(c, prefixes + query)));
@@ -1758,16 +1770,23 @@ GROUP BY ?x?y`,
       expectTransform(
         expect,
         'SELECT * WHERE { ?y :p ?w BIND(<<( :a :b :c )>> AS ?t) FILTER(sameTerm(?t, ?y)) }',
-        `SELECT ( <<( <ex://a> <ex://b> <ex://c> )>> AS ?t ) ?w ?y WHERE {
-  ?y <ex://p> ?w .
+        `SELECT ?t ?w ?y WHERE {
+  {
+    ?y <ex://p> ?w .
+    BIND( <<( <ex://a> <ex://b> <ex://c> )>> AS ?t )
+  }
   FILTER ( FALSE )
 }`,
       );
     });
 
     it('does not let a fallible triple term BIND pin the clique of its target', ({ expect }) => {
-      // `?w` may be a literal, in which case the construction errors and leaves `?t` unbound. Pinning
-      // `?y` to it below would keep exactly those rows, where `sameTerm(?t, ?y)` errored on top.
+      // `?w` may be a literal, in which case the construction errors and leaves `?t` unbound - so nothing
+      // *transfers* onto the expression, and the edge stays an edge.
+      //
+      // The plan is still empty, and for a reason that has nothing to do with the transfer: the edge
+      // implies both of its endpoints are bound, `?t` bound is a triple term ({Quad}), and `?y` is a
+      // subject. Those two ranges meet in nothing, so the group holds no value at all.
       expectTransform(
         expect,
         'SELECT * WHERE { ?y :p ?w BIND(<<( ?w :b :c )>> AS ?t) FILTER(sameTerm(?t, ?y)) }',
@@ -1776,7 +1795,7 @@ GROUP BY ?x?y`,
     ?y <ex://p> ?w .
     BIND( <<( ?w <ex://b> <ex://c> )>> AS ?t )
   }
-  FILTER ( SAMETERM( ?y , ?t ) )
+  FILTER ( FALSE )
 }`,
       );
     });
@@ -1858,6 +1877,157 @@ GROUP BY ?x?y`,
       const once = pushDownAssertions(c, parseQuery(c, query));
       const twice = pushDownAssertions(c, pushDownAssertions(c, parseQuery(c, query)));
       expect(c.generator.generate(toAst(twice))).toEqual(c.generator.generate(toAst(once)));
+    });
+  });
+
+  describe('structural assertions', () => {
+    it('keeps a shape as a condition over the pattern the terms were substituted into', ({ expect }) => {
+      // What a shape says is not a term, so the BGP cannot take it - materialising it into a triple term
+      // pattern is what will take over from here.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(subject(?o), ?s)) }',
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( SAMETERM( SUBJECT( ?o ) , ?s ) )
+}`,
+      );
+    });
+
+    it('substitutes a shape every position of which is decided, being a term after all', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(?o, TRIPLE(:a, :b, :c))) }',
+        `SELECT ( <<( <ex://a> <ex://b> <ex://c> )>> AS ?o ) ?p ?s WHERE {
+  ?s ?p <<( <ex://a> <ex://b> <ex://c> )>> .
+}`,
+      );
+    });
+
+    it('reads a triple term construction as one conjunct per position', ({ expect }) => {
+      // Not written back as itself: as *conjuncts of a FILTER* the two agree, differing only where one is
+      // `false` and the other an error, which a FILTER discards either way.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(?o, TRIPLE(?s, ?p, :c))) }',
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( ( ( SAMETERM( SUBJECT( ?o ) , ?s ) && SAMETERM( PREDICATE( ?o ) , ?p ) ) && SAMETERM( OBJECT( ?o ) , <ex://c> ) ) )
+}`,
+      );
+    });
+
+    it('empties the plan where the position a shape lands in holds no triple term', ({ expect }) => {
+      // No triple has a triple term as its subject, which the *group* range decides before anything
+      // downstream has to type-check a term.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(isTRIPLE(?s)) }',
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( FALSE )
+}`,
+      );
+    });
+
+    it('collapses an OPTIONAL over a structurally asserted variable into a join (FLBndII)', ({ expect }) => {
+      // A shape implies `bnd(?z)`, and `?z ∉ pVars` of the left hand side, so the anti-join half of the
+      // left join produces nothing the assertion keeps.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o OPTIONAL { ?o :q ?z } FILTER(isTRIPLE(?z)) }',
+        `SELECT ?o ?p ?s ?z WHERE {
+  ?s ?p ?o .
+  ?o <ex://q> ?z .
+  FILTER ( ISTRIPLE( ?z ) )
+}`,
+      );
+    });
+
+    it('deletes the UNION branch that can never bind what the shape is about', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { { ?s ?p ?o } UNION { ?s ?p ?q } FILTER(sameTerm(subject(?o), :a)) }',
+        `SELECT ?o ?p ?q ?s WHERE {
+  {
+    ?s ?p ?o .
+    FILTER ( SAMETERM( SUBJECT( ?o ) , <ex://a> ) )
+  }
+  UNION {
+    ?s ?p ?q .
+    FILTER ( FALSE )
+  }
+}`,
+      );
+    });
+
+    it('keeps an edge reading through an accessor above a join no operand licenses it for', ({ expect }) => {
+      // `?s` is bound by the union and `?o` by the pattern, so no single operand is licensed for the edge
+      // - and dropping it rather than keeping it would be a wrong answer, not a missed optimisation.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          { { ?s :q ?x } UNION { ?s :q2 ?x } }
+          ?y :r ?o
+          FILTER(sameTerm(subject(?o), ?s))
+        }`,
+        `SELECT ?o ?s ?x ?y WHERE {
+  {
+    ?s <ex://q> ?x .
+  }
+  UNION {
+    ?s <ex://q2> ?x .
+  }
+  ?y <ex://r> ?o .
+  FILTER ( SAMETERM( SUBJECT( ?o ) , ?s ) )
+}`,
+      );
+    });
+
+    it('sends the weak form of a shape into the right hand side of a MINUS', ({ expect }) => {
+      // A unary predicate on the value is admissible there: the argument turns on the two sides agreeing
+      // on that value. Here the RHS binds `?o` to a subject, which no triple term is, so it empties.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?y :r ?o MINUS { ?o :q ?z } FILTER(isTRIPLE(?o)) }',
+        `SELECT ?o ?y WHERE {
+  {
+    ?y <ex://r> ?o .
+    FILTER ( ISTRIPLE( ?o ) )
+  }
+  MINUS {
+    {
+      ?o <ex://q> ?z .
+      FILTER ( FALSE )
+    }
+  }
+}`,
+      );
+    });
+
+    it('leaves the weak form of a shape weak where the variable may be unbound', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?y :r ?o OPTIONAL { ?o :q ?z } FILTER(!bound(?z) || isTRIPLE(?z)) }',
+        `SELECT ?o ?y ?z WHERE {
+  ?y <ex://r> ?o .
+  OPTIONAL {
+    ?o <ex://q> ?z .
+  }
+  FILTER ( ( ! BOUND( ?z ) || ISTRIPLE( ?z ) ) )
+}`,
+      );
+    });
+
+    it('leaves the input tree untouched', ({ expect }) => {
+      const algebra = parseQuery(c, `${prefixes}SELECT * WHERE {
+        ?s ?p ?o
+        OPTIONAL { ?o :q ?z }
+        FILTER(sameTerm(subject(?o), ?s) && isTRIPLE(?z))
+      }`);
+      const before = JSON.stringify(algebra);
+      pushDownAssertions(c, algebra);
+      expect(JSON.stringify(algebra)).toEqual(before);
     });
   });
 
@@ -2139,6 +2309,85 @@ GROUP BY ?x?y`,
         OPTIONAL { ?m :onwards ?y }
         FILTER(bound(?y) && (!bound(?y) || sameTerm(?y, :end)))
       }`, 2);
+    });
+
+    it('keeps the rows the subject of a triple term agrees with its own subject on', async({ expect }) => {
+      // The target of this whole feature: `:a` and `:c` say a triple term whose subject is themselves,
+      // `:b` says one whose subject is someone else, and `:d` says something that is not a triple term
+      // at all - where the accessor errors, and the FILTER discards the row rather than the query
+      // failing.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :says ?o
+        FILTER(sameTerm(subject(?o), ?s))
+      }`, 2);
+    });
+
+    it('returns nothing rather than erroring where the variable is no triple term', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :says ?o
+        FILTER(sameTerm(subject(?o), :notATripleTerm))
+      }`, 0);
+    });
+
+    it('keeps the rows a shape selects, the parts of it decided one at a time', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :says ?o
+        FILTER(sameTerm(predicate(?o), :p) && sameTerm(object(?o), :shared))
+      }`, 1);
+    });
+
+    it('keeps the rows a triple term construction selects', async({ expect }) => {
+      // Read as one conjunct per position, which is not how it was written - and equivalent to it as a
+      // conjunct of a FILTER, where `false` and an error both discard the row.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :says ?o
+        FILTER(sameTerm(?o, TRIPLE(?s, :p, :shared)))
+      }`, 1);
+    });
+
+    it('keeps the rows a bare shape selects', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :says ?o
+        FILTER(isTRIPLE(?o))
+      }`, 3);
+    });
+
+    it('keeps the rows a shape pushed weakly into a join operand selects', async({ expect }) => {
+      // `?o` is bound by one operand only, so the other takes the *weak* form - and the rows it leaves
+      // `?o` unbound in have to survive that.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        { ?s :says ?o } UNION { ?s :p ?y }
+        ?s :says ?any
+        FILTER(!bound(?o) || isTRIPLE(?o))
+      }`, 4);
+    });
+
+    it('keeps the rows a shape over a VALUES with an UNDEF column selects', async({ expect }) => {
+      // The UNDEF row leaves `?s` to the pattern, so it contributes every triple term whose subject is
+      // the subject that says it; `:d` says something that is no triple term, and drops.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        VALUES (?s ?x) { (:a :one) (UNDEF :two) (:d :three) }
+        ?s :says ?o
+        FILTER(sameTerm(subject(?o), ?s))
+      }`, 3);
+    });
+
+    it('keeps the rows a shape on the right hand side of a MINUS removes', async({ expect }) => {
+      // The RHS takes the weak form, which is what keeps it from removing the rows the LHS binds `?o`
+      // in and the RHS does not.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :says ?o
+        MINUS { ?z :says ?o FILTER(sameTerm(?z, :a)) }
+        FILTER(isTRIPLE(?o))
+      }`, 2);
+    });
+
+    it('keeps the rows an OPTIONAL collapsed by a shape selects', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :p ?y
+        OPTIONAL { ?s :says ?o }
+        FILTER(isTRIPLE(?o))
+      }`, 1);
     });
   });
 });

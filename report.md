@@ -10,7 +10,8 @@ Verified against the installed traqula: both the pattern and the `BIND` generate
 so no parser/generator work is needed.
 
 > **State of play (2026-08-19).** Phases **0** (`ac6d447`, #31) and **1** (`e18a8dd`, #32) are on
-> `main`; the sections below say so where they describe something that now exists. Phases 2–5 are open.
+> `main`, and phases **2** (the pin lattice) and **3** (accesses and `T⟨?x⟩`) are in the working tree;
+> the sections below say so where they describe something that now exists. Phases 4–5 are open.
 
 The algebraic ground under all of this is Schmidt, Meier, Lausen, ["Foundations of SPARQL Query
 Optimization"](https://dl.acm.org/doi/pdf/10.1145/1804669.1804675) (ICDT 2010): the pass is (FElimI)/(FElimII) — discharge an equality by substituting
@@ -104,8 +105,11 @@ error when every component is bound and `range(c₁) ⊆ {IRI, bnode}`, `range(c
    member out of range empties, a weak one collapses to U⟨?x⟩) and the new `nullifyUnbindableVars`.
 1. ~~Ground triple terms — `isAssertableTerm`, ground `sameTerm` folding.~~ — **done, `e18a8dd` (#32)**.
    The `sameTerm` fold needed no change: RDF/JS `Quad.equals` already decides two ground triple terms.
-2. Pin lattice — data-structure level, unit-testable alone.
-3. Accesses + `T⟨?x⟩` — Θ round-trips through a condition; nothing written into patterns yet.
+2. ~~Pin lattice — data-structure level, unit-testable alone.~~ **done (working tree)**, together with
+   the per-group ranges, which is where the confinement of nesting to the `object` chain actually lives.
+3. ~~Accesses + `T⟨?x⟩` — Θ round-trips through a condition; nothing written into patterns yet.~~
+   **done (working tree)**. A shape reaching a BGP stays a condition over it (`structural()`), which is
+   what phase 4 takes over.
 4. Materialisation — namer, `patternSubstitution`, `bindAssertedTerms`. Target example works here.
 5. Operation rules — `pruneValues`, EXTEND transfer (`BIND(<<( ?a ?b ?c )>> AS ?o)` and
    `BIND(subject(?o) AS ?x)`, the `TODO(next time)` at `pushDownAssertions.ts:455`), shape-weakening in

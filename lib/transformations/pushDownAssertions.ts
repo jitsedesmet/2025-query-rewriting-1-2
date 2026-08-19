@@ -2,30 +2,32 @@ import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { PreOrderMappingReturn } from '@traqula/core';
 import type { TransformContext } from '../transformContext.js';
-import type { AssertionConjunct, AssertionFilter } from '../utils/assertionConjunction.js';
+import type { AssertionFilter } from '../utils/assertionConjunction.js';
 import {
   AssertionConjunction,
   collectAssertions,
-  conjunctVars,
   isAssertionFilter,
-  weakenedConjunct,
 } from '../utils/assertionConjunction.js';
-import type { Assertions, StrongAssertion } from '../utils/assertions.js';
+import type { AssertionConjunct, Assertions } from '../utils/assertions.js';
 import {
+  access,
   assertBound,
   assertStrong,
-  assertWeak,
+  conjunctVars,
+  hasTarget,
   impliesBound,
+  isAccessTarget,
   isAssertableTerm,
+  isBareAccess,
   substituteInPattern,
   substituteInTerm,
+  weakenedConjunct,
 } from '../utils/assertions.js';
 import type { CPMeta } from '../utils/certainlyBoundVars.js';
 import { withCpVars, withoutCpVars } from '../utils/certainlyBoundVars.js';
 import { sameTermExpression } from '../utils/expressionHelpers.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
 import { substituteInExpression } from '../utils/partialExpressionEvaluation.js';
-import { DF } from '../utils/rdfDatatypes.js';
 import { unionSets } from '../utils/setUtils.js';
 
 /**
@@ -82,6 +84,30 @@ import { unionSets } from '../utils/setUtils.js';
  * {@link AssertionConjunction}. What travels in its place is what the edge *entails*: every member of a
  * clique is bound, so B⟨?x⟩ goes down on the licence that already exists for it even where the edge itself
  * stays on top. That is what collapses `A₁ ⟕ A₂ FILTER(sameTerm(?y, ?z))` into a join.
+ *
+ * ## What a triple term adds
+ *
+ * `sameTerm(SUBJECT(?o), ?s)` is not about `?o` either: it is about *one position* of it. So a conjunct
+ * is about an {@link Access} - a variable read through a chain of accessors - and what a group carries is
+ * a **shape**, three groups of its own, rather than only a term. T⟨?x⟩ (`isTRIPLE(?x)`) is the degenerate
+ * one, and like the strong form it implies `bnd(?x)`, so it triggers (FBndII) and the OPTIONAL → JOIN
+ * collapse (FLBndII) exactly as a term does.
+ *
+ * Three consequences run through the rules below.
+ *
+ * **A shape is not a term, so it does not substitute into a pattern.** What a rewrite discharging Θ by
+ * substitution leaves behind is {@link AssertionConjunction.structural}, which stays a condition over the
+ * operation the terms went into. A shape every position of which is decided *is* a ground triple term,
+ * and travels as one. Materialising an open shape into a triple term pattern is what comes next.
+ *
+ * **A shape is a range statement.** A group carrying one holds a `Quad`, and no subject, predicate or
+ * graph position does - so `isTRIPLE(?s)` over `?s ?p ?o` empties the plan off the ranges, the same rule
+ * that empties `sameTerm(?g, "1")` under a `GRAPH ?g`, and the reason nesting runs down the `object`
+ * chain and no further.
+ *
+ * **An edge may read through an accessor**, and then it is a clique of two with nothing to split: it goes
+ * into every target licensed for both of its roots and stays on top unless one of those connects it
+ * ({@link placeAccessConjunct}).
  *
  * ## The traversal
  *
@@ -190,15 +216,33 @@ function swapWith(
     // A BGP and a path bind all of their variables, so normalisation has made every assertion that reaches
     // them strong - and a clique reaching one is substituted to its representative, which turns two free
     // variables of a pattern into the same one.
+    // What a *shape* says is not a term, so it cannot be substituted into a pattern yet - it stays a
+    // condition over the operation the terms were substituted into, which is where materialising it into
+    // triple term patterns will take over.
     case Algebra.Types.BGP: {
-      return keep(substituteIntoPatterns(c, op, assertions.strongSubstitution()));
+      return keep(assertionFilter(
+        c,
+        substituteIntoPatterns(c, op, assertions.strongSubstitution()),
+        assertions.structural(),
+      ));
     }
     case Algebra.Types.PATH: {
-      return keep(substituteIntoPath(c, op, assertions.strongSubstitution()));
+      return keep(assertionFilter(
+        c,
+        substituteIntoPath(c, op, assertions.strongSubstitution()),
+        assertions.structural(),
+      ));
     }
     // The one leaf where all of the forms do real work, since a VALUES column may be UNDEF.
     case Algebra.Types.VALUES: {
-      return keep(pruneValues(c, op, assertions));
+      // A row decides a column against a term, against another column, or against being there at all.
+      // What a shape says about a *position* of a column is none of those, so it stays above the VALUES
+      // rather than being silently discharged by the pruning.
+      const structural = assertions.structural();
+      const decidable = AssertionConjunction.of(assertions.conjuncts()
+        .filter(conjunct => structural.get(conjunct.access.name) === undefined ||
+          !isStructuralHere(conjunct)));
+      return keep(assertionFilter(c, pruneValues(c, op, decidable), structural));
     }
 
     // (FUPush) holds unconditionally for every form - a solution of a union comes from exactly one
@@ -359,7 +403,16 @@ function pruneValues(c: TransformContext, values: Algebra.Values, assertions: As
       let isPruned = false;
       for (const [ variable, value ] of Object.entries(binding)) {
         const assertion = assertions.get(variable);
-        if (assertion === undefined) {
+        if (assertion?.subType === 'triple') {
+          // T⟨?x⟩ says the value is a triple term and nothing about which one, so the row decides the
+          // column just as B⟨?x⟩ leaves it deciding it - only the rows holding something else are dropped.
+          // The algebra types a VALUES cell as an IRI or a literal, so today that is every row of one.
+          if (value !== undefined && (<RDF.Term> value).termType !== 'Quad') {
+            isPruned = true;
+            break;
+          }
+          newRow[variable] = value;
+        } else if (assertion === undefined) {
           // We do not assert on this var
           newRow[variable] = value;
         } else if (assertion.subType === 'unbound') {
@@ -375,7 +428,9 @@ function pruneValues(c: TransformContext, values: Algebra.Values, assertions: As
           // A⟨?x ≡ c⟩ or W⟨?x ≡ c⟩ against the term, and A⟨?x ≡ ?rep⟩ against whatever this row put in `?rep`.
           // The row does carry `?rep`: a clique implies B⟨?rep⟩, so `requiredBound` above already dropped
           // the rows leaving it UNDEF.
-          const requiredValue = assertion.term.termType === 'Variable' ? binding[assertion.term.value] : assertion.term;
+          const requiredValue = isAccessTarget(assertion.term) ?
+            binding[assertion.term.name] :
+            assertion.term;
           if (value === undefined || requiredValue.equals(value)) {
             if (assertion.subType === 'weak') {
               // Weak and term val is undefined or correct
@@ -482,11 +537,12 @@ function pushIntoExtend(
     return keep(AF.createExtend(
       assertionFilter(c, extend.input, below),
       extend.variable,
-      substituteInExpression(c, expression, below.strongSubstitution(), cVars),
+      substituteInExpression(c, expression, below.expressionSubstitution(), cVars),
     ));
   }
 
-  if (assertionOfTarget?.subType === 'strong' && isAssertableTerm(assertionOfTarget.term)) {
+  if (assertionOfTarget?.subType === 'strong' && !isAccessTarget(assertionOfTarget.term) &&
+    isAssertableTerm(assertionOfTarget.term)) {
     // BIND(expr as ?x) -- ?x is strongly asserted and pinned to a assertable term.
     // We know we have a strong target assertion, against a ground term, and a compound expression.
     const term = assertionOfTarget.term;
@@ -498,7 +554,7 @@ function pushIntoExtend(
         assertionFilter(c, extend.input, notAboutTarget),
         sameTermExpression(
           c,
-          substituteInExpression(c, expression, notAboutTarget.strongSubstitution(), cVars),
+          substituteInExpression(c, expression, notAboutTarget.expressionSubstitution(), cVars),
           term,
         ),
       ),
@@ -514,7 +570,7 @@ function pushIntoExtend(
     AF.createExtend(
       assertionFilter(c, extend.input, notAboutTarget),
       extend.variable,
-      substituteInExpression(c, expression, notAboutTarget.strongSubstitution(), cVars),
+      substituteInExpression(c, expression, notAboutTarget.expressionSubstitution(), cVars),
     ),
     aboutTarget,
   ));
@@ -565,7 +621,8 @@ function pushIntoGraph(
   }
   const assertedGraphName = assertions.get(graphVar);
 
-  if (assertedGraphName?.subType === 'strong' && isAssertableTerm(assertedGraphName.term) &&
+  if (assertedGraphName?.subType === 'strong' && !isAccessTarget(assertedGraphName.term) &&
+    isAssertableTerm(assertedGraphName.term) &&
     // A term outside `?g`'s range has already emptied the plan in `normalisedFor`, so what can still be
     // asserted here is a graph name: a NamedNode, or the BlankNode a dataset may equally name a graph by.
     // Only the first can be written back - `createGraph` names a graph by a Variable or a NamedNode - so
@@ -611,8 +668,8 @@ function pushIntoGraph(
   // bound forms cannot be what is asserted here: normalisation has already promoted or dropped them.
   const inside: AssertionConjunct[] = [];
   const kept: AssertionConjunct[] = [];
-  for (const conjunct of singleVariableConjuncts(assertions)) {
-    if (conjunct.name === graphVar) {
+  for (const conjunct of assertions.singleVariableConjuncts()) {
+    if (conjunct.access.name === graphVar) {
       kept.push(conjunct);
     } else {
       inside.push(conjunct);
@@ -627,6 +684,11 @@ function pushIntoGraph(
     const placed = splitClique(clique, [ clique.filter(name => name !== graphVar) ], [ true ]);
     inside.push(...placed.intoTarget[0]);
     kept.push(...placed.kept);
+  }
+  // The pattern is licensed for every variable but `?g`, and it connects what it takes, so an edge over
+  // two of them travels whole and an edge touching `?g` stays where it is.
+  for (const conjunct of assertions.accessConjuncts()) {
+    (conjunctVars(conjunct).includes(graphVar) ? kept : inside).push(conjunct);
   }
   return keep(assertionFilter(
     c,
@@ -686,8 +748,9 @@ function pushIntoJoin(
   const operandAssertions: AssertionConjunct[][] = join.input.map(() => []);
   const kept: AssertionConjunct[] = [];
   // For every assertion about a single variable, find out where it can go.
-  for (const conjunct of singleVariableConjuncts(assertions)) {
-    const { name, assertion } = conjunct;
+  for (const conjunct of assertions.singleVariableConjuncts()) {
+    const [ name ] = conjunctVars(conjunct);
+    const { assertion } = conjunct;
     let placedStrongly = false;
     const assertionImpliesBound = impliesBound(assertion);
     for (const [ index ] of join.input.entries()) {
@@ -720,6 +783,22 @@ function pushIntoJoin(
       operandAssertions[index].push(...pushed);
     }
     kept.push(...placed.kept);
+  }
+  // An edge reading one of its sides through an accessor is a clique of two with nothing to split.
+  for (const conjunct of assertions.accessConjuncts()) {
+    const placed = placeAccessConjunct(
+      conjunct,
+      join.input.map((_, index) => conjunctVars(conjunct).every(name => licensed(index, name))),
+      join.input.map(() => true),
+    );
+    for (const [ index, licence ] of placed.intoTarget.entries()) {
+      if (licence) {
+        operandAssertions[index].push(conjunct);
+      }
+    }
+    if (placed.kept) {
+      kept.push(conjunct);
+    }
   }
 
   return keep(assertionFilter(
@@ -805,8 +884,9 @@ function pushIntoLeftJoin(
   const intoLeft: AssertionConjunct[] = [];
   const intoRight: AssertionConjunct[] = [];
   const kept: AssertionConjunct[] = [];
-  for (const conjunct of singleVariableConjuncts(assertions)) {
-    const { name, assertion } = conjunct;
+  for (const conjunct of assertions.singleVariableConjuncts()) {
+    const [ name ] = conjunctVars(conjunct);
+    const { assertion } = conjunct;
     if (impliesBound(assertion) && licensedLeft(name)) {
       intoLeft.push(conjunct);
       if (licensedRight(name)) {
@@ -834,6 +914,23 @@ function pushIntoLeftJoin(
     intoRight.push(...placed.intoTarget[1]);
     kept.push(...placed.kept);
   }
+  for (const conjunct of assertions.accessConjuncts()) {
+    const roots = conjunctVars(conjunct);
+    const placed = placeAccessConjunct(
+      conjunct,
+      [ roots.every(licensedLeft), roots.every(licensedRight) ],
+      [ true, false ],
+    );
+    if (placed.intoTarget[0]) {
+      intoLeft.push(conjunct);
+    }
+    if (placed.intoTarget[1]) {
+      intoRight.push(conjunct);
+    }
+    if (placed.kept) {
+      kept.push(conjunct);
+    }
+  }
 
   const leftAssertions = AssertionConjunction.of(intoLeft);
   // Every candidate μ₁ binds the variables strongly asserted in intoLeft to their term once those are
@@ -845,7 +942,7 @@ function pushIntoLeftJoin(
     substituteInExpression(
       c,
       leftJoin.expression,
-      leftAssertions.strongSubstitution(),
+      leftAssertions.expressionSubstitution(),
       unionSets([ leftVars.cVars, rightVars.cVars ]),
     );
   // TODO: the substitution in the filter might reveal more information that we could use!
@@ -891,7 +988,7 @@ function splitClique(members: string[], licensedPer: string[][], connects: boole
   const intoTarget: AssertionConjunct[][] = licensedPer.map((licensed, index) => edgesPerBranch[index].length > 0 ?
     edgesPerBranch[index].map(([ member, hub ]) => unification(member, hub)) :
     // Means licensed.size is 0 or 1
-    licensed.map(name => ({ name, assertion: assertBound() })));
+    licensed.map(name => <AssertionConjunct> ({ access: access(name), assertion: assertBound() })));
 
   // Union-find over the members, joined by every sub-clique that both went somewhere and holds above.
   const spanningTree = new Map(members.map(name => [ name, name ]));
@@ -938,25 +1035,53 @@ function cliqueStar(members: string[]): [ string, string ][] {
 
 /** The conjunct A⟨?x ≡ ?representative⟩: one edge of a clique. */
 function unification(name: string, representative: string): AssertionConjunct {
-  return { name, assertion: assertStrong(DF.variable(representative)) };
-}
-
-/** The conjuncts of Θ that are about a single variable, which is everything but the edges of a clique. */
-function singleVariableConjuncts(assertions: AssertionConjunction): AssertionConjunct[] {
-  return assertions.conjuncts().filter(conjunct => conjunctVars(conjunct).length === 1);
+  return { access: access(name), assertion: assertStrong(access(representative)) };
 }
 
 /**
- * The assertions of Θ that fix a variable to a *term*, weakened - the only ones that may enter the right
- * hand side of a MINUS.
+ * Places one conjunct that mentions two variables and has nothing to split - an edge reading at least one
+ * of its sides through an accessor.
+ *
+ * The licence is (FJPush)'s side condition read over both roots at once, exactly as {@link splitClique}
+ * reads it per edge of a clique: a target binding both of them evaluates the edge the way the operation
+ * above it does. It goes into every target licensed for it - the operation already enforces that they
+ * agree - and stays on top unless one of those targets also *connects* it, which is what makes restating
+ * it above unnecessary.
+ */
+function placeAccessConjunct(
+  conjunct: AssertionConjunct,
+  licensedPer: boolean[],
+  connects: boolean[],
+): { intoTarget: boolean[]; kept: boolean } {
+  return {
+    intoTarget: licensedPer,
+    kept: !licensedPer.some((licensed, index) => licensed && connects[index]),
+  };
+}
+
+/**
+ * The assertions of Θ that fix *one variable* to a term or to a shape, weakened - the only ones that may
+ * enter the right hand side of a MINUS.
+ *
+ * The argument turns on the two sides agreeing on the *value* of the variable, and equal values have
+ * equal subjects, so any unary predicate on that value is admissible - a shape as much as a term. An edge
+ * between two variables is not one of those, and has no weak form to send in the first place.
  */
 function weakenedTerms(assertions: AssertionConjunction): AssertionConjunction {
-  return AssertionConjunction.of(assertions.conjuncts()
-    .filter(({ assertion }) => assertion.subType === 'strong' && isAssertableTerm(assertion.term))
-    .map(({ name, assertion }) => <AssertionConjunct> {
-      name,
-      assertion: assertWeak((<StrongAssertion> assertion).term),
-    }));
+  return AssertionConjunction.of(assertions.singleVariableConjuncts()
+    .filter(({ assertion }) => assertion.subType === 'strong' || assertion.subType === 'triple')
+    .map(conjunct => weakenedConjunct(conjunct))
+    .filter(conjunct => conjunct !== undefined));
+}
+
+/**
+ * Whether the conjunct is about the shape of a value rather than about which term it is - the ones a
+ * substitution of terms, or a VALUES row, cannot decide.
+ */
+function isStructuralHere(conjunct: AssertionConjunct): boolean {
+  return !isBareAccess(conjunct.access) || conjunct.assertion.subType === 'triple' ||
+    (hasTarget(conjunct.assertion) && isAccessTarget(conjunct.assertion.term) &&
+      !isBareAccess(conjunct.assertion.term));
 }
 
 /** The certainly and possibly bound variables of an operation, computed once and cached on it. */

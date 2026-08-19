@@ -43,5 +43,9 @@ Two of its phases are already on main:
 * **#32 `e18a8dd`** — phase 1: ground triple terms are assertable, and `BIND(<<( :a :b :c )>> AS ?t)`
   binds `?t` certainly.
 
-Left to do: the pin lattice on `TermClusterSet`, accesses and `T⟨?x⟩`, materialising derived variables
-into patterns, and the per-operation rules. See the status table at the top of `task-for-agent.md`.
+Phases **2** (the pin lattice on `TermClusterSet`, with the per-group ranges) and **3** (accesses and
+`T⟨?x⟩`) are in the working tree: Θ now holds shapes, round-trips them through a condition, and the pass
+carries them across the algebra. What they do *not* do yet is write one into a pattern.
+
+Left to do: materialising derived variables into triple term patterns (phase 4) and the remaining
+per-operation rules (phase 5). See the status table at the top of `task-for-agent.md`.

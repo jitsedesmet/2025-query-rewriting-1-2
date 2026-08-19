@@ -32,9 +32,13 @@ read them as the foundation the rest stands on, and the code as the authority.
 |---|---|---|
 | 0 | `ac6d447` (#31) | `vRanges` on `CPMeta`, holding scope and term types in one structure; the emptiness rules it decides in `normalisedFor`; `nullifyUnbindableVars`; the metadata clearing of D6. |
 | 1 | `e18a8dd` (#32) | ground triple terms: `isAssertableTerm` admits them, and `withCpVars` calls `BIND(<<( :a :b :c )>> AS ?t)` certainly bound (`constructionCannotFail`). |
+| 2 | working tree | the pin lattice of D3, plus the per-group ranges of D5.3 - `Pin`, `meetPins`, the work-list merge, the occurs check, anonymous groups, `groupToRange` lifted down from `ClusterSolver`. |
+| 3 | working tree | accesses and `T⟨?x⟩` (D1, D2), the recognisers, `toExpression`, the folds of S7. Θ round-trips through a condition; nothing is written into patterns yet. |
 
-**To build: 2 (pin lattice), 3 (accesses + `T⟨?x⟩`), 4 (materialisation), 5 (operation rules)**, and the
-optional 6.
+**To build: 4 (materialisation), 5 (operation rules)**, and the optional 6.
+
+Step 2 is not separable from step 3 in the build: `AssertionConjunction` is the only caller of
+`TermClusterSet`'s comparator, so the lattice and the conjunction that meets pins on it land together.
 
 ## Grounding
 
@@ -297,9 +301,19 @@ first is written back in accessor form, so it does not round-trip verbatim — t
    `withCpVars` calls a ground triple-term BIND certain.~~ **Done — `e18a8dd` (#32).** The `sameTerm`
    fold needed no code: RDF/JS `Quad.equals` already decides two ground triple terms in
    `constantFoldOperator`.
-2. The pin lattice (D3). Unit-testable at the data-structure level.
-3. Accesses and `T⟨?x⟩` (D1, D2), recognisers, `toExpression`, the folds of S7. At the end of this
-   commit Θ round-trips through a condition; nothing is written into patterns yet.
+2. ~~The pin lattice (D3). Unit-testable at the data-structure level.~~ **Done (working tree).** It grew
+   the per-group ranges of D5.3 with it, since a shape *is* a range statement and the positional range of
+   a child is what confines nesting to the `object` chain. `meetPins` takes two `Pin`s rather than two
+   terms (a `Pin` is not a `Term`), and returns `pendingPins` beside `pending`: a ground triple term
+   meeting a shape decides each position, which is an assignment rather than a unification. `remove` now
+   asks `isLive` rather than `carriesInformation` alone, so that a group a live pin points at survives.
+3. ~~Accesses and `T⟨?x⟩` (D1, D2), recognisers, `toExpression`, the folds of S7. At the end of this
+   commit Θ round-trips through a condition; nothing is written into patterns yet.~~ **Done (working
+   tree).** Beyond the plan: `assertionOf` returns a *list* of conjuncts, since
+   `sameTerm(?o, <<( ?a ?b ?c )>>)` is three of them; `conjuncts()` enumerates the *aliases* of every
+   group reachable from a named variable, which is what makes a shape decompose into conditions and
+   reconstruct from them; and the BGP/PATH/VALUES rules keep `structural()` on top, since a rewrite that
+   discharges Θ by substituting terms cannot carry what a shape says.
 4. Materialisation: D4, `patternSubstitution`, `bindAssertedTerms`. The target example works here.
 5. The operation rules in the table above.
 6. Follow-up, optional: `ClusterSolver` drops the `Quad` exclusion from `RawBasicTerm` and resolves its

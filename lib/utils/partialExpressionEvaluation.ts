@@ -1,9 +1,29 @@
+import type * as RDF from '@rdfjs/types';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
+import { objectRange, predicateRange, subjectRange } from '../RangeSet.js';
 import type { TransformContext } from '../transformContext.js';
-import type { Assertions } from './assertions.js';
-import { isAssertableTerm } from './assertions.js';
+import type { Access } from './assertions.js';
+import { accessOf, isAssertableTerm } from './assertions.js';
 import { booleanConstantOf, createBooleanExpression, isIriExpression } from './expressionHelpers.js';
+import { DF } from './rdfDatatypes.js';
 import { unionSets } from './setUtils.js';
+
+/**
+ * What an {@link AssertionConjunction} decides about the expressions it is substituted into.
+ *
+ * A *view* rather than the map of terms it used to be, because a conjunction now knows things no map can
+ * hold: `SUBJECT(?o)` may be decided where `?o` is not, and `?o` may be known to be a triple term without
+ * any term for it being known at all. It stays a view of *terms*, though - an open shape may never be
+ * substituted into an expression (S3), since the positions nobody named have no variable to write.
+ */
+export interface AssertionView {
+  /** The term the access is fixed to, or the variable that reads its value most directly. */
+  resolve: (access: Access) => RDF.Term | undefined;
+  /** Whether the access is known to be a triple term. */
+  isTriple: (access: Access) => boolean;
+  /** The variables proven bound, which is what makes `bound(?x)` and `sameTerm(?x, ?x)` decidable. */
+  bound: ReadonlySet<string>;
+}
 
 /**
  * Substitutes assertions (θ) into an expression and folds what becomes constant: `simplify(R[θ])`.
@@ -14,42 +34,23 @@ import { unionSets } from './setUtils.js';
  * the variable is bound, `bound(?x)` becomes `true` instead.
  *
  * `cVars` are the variables certainly bound where the expression is evaluated - the ones of the operation
- * it sits on. They are the only thing that decides `sameTerm(?x, ?x)`, and the substitution proves a few
- * more of them by itself ({@link cVarsExtensionFromAssertions}).
+ * it sits on. They are the only thing that decides `sameTerm(?x, ?x)`, and the conjunction proves a few
+ * more of them by itself - both ends of every replacement it makes, which is what lets the residual
+ * `sameTerm(?o, ?o)` a unification leaves behind fold away.
  */
 export function substituteInExpression(
   c: TransformContext,
   expression: Algebra.Expression,
-  assertions: Assertions,
+  assertions: AssertionView,
   cVars: ReadonlySet<string>,
 ): Algebra.Expression {
-  return substitute(c, expression, assertions, unionSets([ cVars, cVarsExtensionFromAssertions(assertions) ]));
-}
-
-/**
- * The variables the substitution proves bound on its own, whatever the operation below it binds: both ends
- * of every replacement it makes.
- *
- * Only a strong assertion substitutes, so the variable being replaced is certainly bound wherever the
- * substitution applies; and so is the variable it is replaced *by* - the representative of a clique, of
- * which membership implies `bnd(?x)`. The latter is what lets the residual `sameTerm(?o, ?o)` a
- * unification leaves behind fold away.
- */
-function cVarsExtensionFromAssertions(assertions: Assertions): Set<string> {
-  const result = new Set<string>();
-  for (const [ key, term ] of assertions.entries()) {
-    result.add(key);
-    if (term.termType === 'Variable') {
-      result.add(term.value);
-    }
-  }
-  return result;
+  return substitute(c, expression, assertions, unionSets([ cVars, assertions.bound ]));
 }
 
 function substitute(
   c: TransformContext,
   expression: Algebra.Expression,
-  assertions: Assertions,
+  assertions: AssertionView,
   boundVariables: ReadonlySet<string>,
 ): Algebra.Expression {
   // TODO(other PR):
@@ -58,7 +59,9 @@ function substitute(
   switch (expression.subType) {
     case Algebra.ExpressionTypes.TERM: {
       const term = expression.term;
-      const assertedValue = term.termType === 'Variable' ? assertions.get(term.value) : undefined;
+      const assertedValue = term.termType === 'Variable' ?
+        assertions.resolve({ name: term.value, positions: []}) :
+        undefined;
       return assertedValue === undefined ? expression : AF.createTermExpression(assertedValue);
     }
     case Algebra.ExpressionTypes.OPERATOR: {
@@ -67,8 +70,15 @@ function substitute(
         expression.args.length === 1 &&
         expression.args[0].subType === Algebra.ExpressionTypes.TERM &&
         expression.args[0].term.termType === 'Variable' &&
-        assertions.has(expression.args[0].term.value)) {
+        assertions.bound.has(expression.args[0].term.value)) {
         return createBooleanExpression(c, true);
+      }
+      // An accessor chain is read *before* its argument is substituted into: `SUBJECT(?o)` may be decided
+      // where `?o` is not, the shape of `?o` having a term in that position and none in the others. What
+      // the chain reads is a term here, never an open shape (S3).
+      const decided = decideAccess(c, expression, assertions);
+      if (decided !== undefined) {
+        return decided;
       }
       return constantFoldOperator(c, expression.operator, expression.args
         .map(arg => substitute(c, arg, assertions, boundVariables)), boundVariables);
@@ -89,6 +99,56 @@ function substitute(
     default:
       return expression;
   }
+}
+
+/**
+ * Reads an accessor chain - `SUBJECT(?o)`, `OBJECT(SUBJECT(?o))` - or an `isTRIPLE` of one against what Θ
+ * decides, before its argument is substituted into.
+ *
+ * These folds are what make the pass **idempotent** (S7): the very condition an assertion was read from
+ * is written back over the operation it was pushed into, and unless it collapses to `true` there, running
+ * the pass again reads it as a second assertion and stacks a second copy of the rewrite it caused.
+ */
+function decideAccess(
+  c: TransformContext,
+  expression: Algebra.OperatorExpression,
+  assertions: AssertionView,
+): Algebra.Expression | undefined {
+  if (expression.operator === 'istriple' && expression.args.length === 1) {
+    const read = accessOf(expression.args[0]);
+    return read !== undefined && assertions.isTriple(read) ? createBooleanExpression(c, true) : undefined;
+  }
+  const read = accessOf(expression);
+  if (read === undefined || read.positions.length === 0) {
+    return undefined;
+  }
+  const decided = assertions.resolve(read);
+  return decided === undefined ? undefined : c.AF.createTermExpression(decided);
+}
+
+/** The component a triple term holds in a position, `undefined` for anything that is not one. */
+function componentOf(term: RDF.Term, position: string): RDF.Term | undefined {
+  if (term.termType !== 'Quad' || term.graph.termType !== 'DefaultGraph') {
+    return undefined;
+  }
+  switch (position) {
+    case 'subject': {
+      return term.subject;
+    }
+    case 'predicate': {
+      return term.predicate;
+    }
+    default: {
+      return term.object;
+    }
+  }
+}
+
+/** The term an argument spells out, when it is a ground one. */
+function groundArgument(expression: Algebra.Expression): RDF.Term | undefined {
+  return expression.subType === Algebra.ExpressionTypes.TERM && isAssertableTerm(expression.term) ?
+    expression.term :
+    undefined;
 }
 
 /**
@@ -116,6 +176,43 @@ export function constantFoldOperator(
 ): Algebra.Expression {
   const constants = args.map(arg => booleanConstantOf(arg));
   switch (operator) {
+    case 'subject':
+    case 'predicate':
+    case 'object': {
+      // A position of a triple term written out: `SUBJECT(<<( :a :b :c )>>)` is `:a`. Of anything else it
+      // is an error, which is `false` in a FILTER and has no term to fold to, so it is left standing.
+      const ground = args.length === 1 ? groundArgument(args[0]) : undefined;
+      const component = ground === undefined ? undefined : componentOf(ground, operator);
+      if (component !== undefined) {
+        return c.AF.createTermExpression(component);
+      }
+      break;
+    }
+    case 'istriple': {
+      // Decidable of any ground term, and of a ground term only: `isTRIPLE` answers `false` rather than
+      // erroring, so both directions fold.
+      const ground = args.length === 1 ? groundArgument(args[0]) : undefined;
+      if (ground !== undefined) {
+        return createBooleanExpression(c, ground.termType === 'Quad');
+      }
+      break;
+    }
+    case 'triple': {
+      // A construction of three ground terms *is* the triple term, unless no triple term can hold them -
+      // and then it raises, which leaves the target of a BIND unbound and a FILTER false, neither of
+      // which a term folds to.
+      const ground = args.length === 3 ? args.map(arg => groundArgument(arg)) : [];
+      const ranges = [ subjectRange, predicateRange, objectRange ];
+      if (ground.length === 3 && ground.every((term, index) => term !== undefined &&
+        ranges[index].has(term.termType))) {
+        return c.AF.createTermExpression(DF.quad(
+          <RDF.Quad_Subject> ground[0]!,
+          <RDF.Quad_Predicate> ground[1]!,
+          <RDF.Quad_Object> ground[2]!,
+        ));
+      }
+      break;
+    }
     case 'sameterm': {
       // Evaluate sameTerm if LHS and RHS are static terms
       const [ left, right ] = args;

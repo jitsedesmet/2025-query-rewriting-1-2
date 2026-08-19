@@ -1,8 +1,9 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
+import type { TriplePosition } from '../datastructures/TermClusterSet.js';
+import { triplePositions } from '../datastructures/TermClusterSet.js';
 import type { TransformContext } from '../transformContext.js';
 import { termVars } from './certainlyBoundVars.js';
-import { sameTermExpression } from './expressionHelpers.js';
 import { DF } from './rdfDatatypes.js';
 
 /**
@@ -24,26 +25,87 @@ import { DF } from './rdfDatatypes.js';
 export type Assertions = ReadonlyMap<string, RDF.Term>;
 
 /**
- * One assertion about one variable, in one of the four forms this pass moves around.
+ * A variable read through a chain of accessors: `?x`, `SUBJECT(?x)`, `OBJECT(SUBJECT(?x))`.
  *
- * - `strong` is A⟨?x ≡ c⟩ ≔ `sameTerm(?x, c)`, which implies `bound(?x)`. Its term may be a variable, in
- *   which case it is A⟨?x ≡ ?y⟩ - one edge of the clique an {@link AssertionConjunction} holds.
- * - `weak` is W⟨?x ≡ c⟩ ≔ `!bound(?x) || sameTerm(?x, c)`, which does not - it is what survives a move
- *   into a place that may leave the variable unbound (the RHS of a MINUS, the unlicensed operand of a join).
+ * An assertion is about an *access* rather than about a variable, because a triple term is constrained
+ * one position at a time: `sameTerm(SUBJECT(?o), ?s)` says nothing about `?o` as a whole and everything
+ * about one of its three components. The zero-length access is the variable itself, which is what every
+ * form this pass had before this is now spelled as.
+ *
+ * The chain reads left to right from the root: `{ name: 'o', positions: [ 'subject', 'object' ]}` is
+ * `OBJECT(SUBJECT(?o))`.
+ */
+export interface Access {
+  name: string;
+  positions: readonly TriplePosition[];
+}
+
+/** The access `?name`, read through `positions`. */
+export function access(name: string, ...positions: TriplePosition[]): Access {
+  return { name, positions };
+}
+
+/**
+ * The key two accesses are the same one under - `.` separates, and no SPARQL variable name may hold one,
+ * so no access collides with another.
+ */
+export function accessId(access: Access): string {
+  return [ access.name, ...access.positions ].join('.');
+}
+
+/** Whether the two accesses read the same variable through the same chain. */
+export function sameAccessAs(left: Access, right: Access): boolean {
+  return accessId(left) === accessId(right);
+}
+
+/** Whether the access is the variable itself, which is the only thing `BOUND` and a group member can be. */
+export function isBareAccess(access: Access): boolean {
+  return access.positions.length === 0;
+}
+
+/** What an assertion fixes an access to: another access, or a ground term. */
+export type AssertionTarget = Access | RDF.Term;
+
+/** Whether the target is an access rather than a term - the two are told apart by their shape. */
+export function isAccessTarget(target: AssertionTarget): target is Access {
+  return 'positions' in target;
+}
+
+/** The root variables a target mentions: one for an access, none for a term. */
+export function targetVars(target: AssertionTarget): string[] {
+  return isAccessTarget(target) ? [ target.name ] : [];
+}
+
+/**
+ * One assertion about one *access*, in one of the five forms this pass moves around.
+ *
+ * - `strong` is A⟨a ≡ c⟩ ≔ `sameTerm(a, c)`, which implies `bound(?x)` of the root of `a`. Its target may
+ *   be another access, in which case it is A⟨a ≡ b⟩ - one edge of the clique an
+ *   {@link AssertionConjunction} holds, and, when either side reads through an accessor, one edge of the
+ *   *shape* it holds.
+ * - `weak` is W⟨a ≡ c⟩ ≔ `!bound(?x) || sameTerm(a, c)`, which does not - it is what survives a move into
+ *   a place that may leave the variable unbound (the RHS of a MINUS, the unlicensed operand of a join).
+ * - `triple` is T⟨?x⟩ ≔ `isTRIPLE(?x)`, the degenerate shape: a triple term, nothing known about its
+ *   parts. Like the strong form it implies `bound(?x)`, and like it it has a weak form
+ *   (`!bound(?x) || isTRIPLE(?x)`), which is what `weak` records.
  * - `unbound` is U⟨?x⟩ ≔ `!bound(?x)`.
  * - `bound` is B⟨?x⟩ ≔ `bound(?x)`, which fixes the variable to no term at all.
  *
- * The third form is what the conjunction of two *different* weak assertions about one variable comes to:
+ * The `weak` form is what the conjunction of two *different* weak assertions about one variable comes to:
  * `(¬b ∨ ?x ≡ c) ∧ (¬b ∨ ?x ≡ d)` distributes to `¬b ∨ (?x ≡ c ∧ ?x ≡ d)`, which for `c ≠ d` is `¬b`.
- * Without it {@link mergeAssertion} would have nowhere to put that fact - it has no term - and would have
- * to leave the conjunct behind as a residual. It is also SPARQL's negation idiom
+ * Without it {@link AssertionConjunction.assertTerm} would have nowhere to put that fact - it has no term
+ * - and would have to leave the conjunct behind as a residual. It is also SPARQL's negation idiom
  * (`OPTIONAL { … } FILTER(!bound(?x))`), so it is the form assertions most often *start* in.
  *
- * The fourth is the negation of the third, and the term-less half of the strong form: it says only that
- * the variable *is* bound, which is what SPARQL writes as `FILTER(bound(?x))`. It carries no term, so it
- * never substitutes into anything, but it decides the same emptiness rule the strong form does
- * ((FBndII): `?x ∉ pVars(A) ⟹ σ_{bound(?x)}(A) ≡ ∅`) and it *completes* a weak assertion into a strong
- * one - `b ∧ (¬b ∨ ?x ≡ c) ≡ ?x ≡ c` - which is where it earns its keep.
+ * B⟨?x⟩ is the negation of U⟨?x⟩, and the term-less half of the strong form: it says only that the
+ * variable *is* bound, which is what SPARQL writes as `FILTER(bound(?x))`. It carries no term, so it never
+ * substitutes into anything, but it decides the same emptiness rule the strong form does ((FBndII):
+ * `?x ∉ pVars(A) ⟹ σ_{bound(?x)}(A) ≡ ∅`) and it *completes* a weak assertion into a strong one -
+ * `b ∧ (¬b ∨ ?x ≡ c) ≡ ?x ≡ c` - which is where it earns its keep.
+ *
+ * `bound`, `unbound` and `triple` are restricted to a *bare* access: `BOUND` takes a `Var` by the grammar,
+ * and every position of a triple term is bound as soon as the triple term is, so `isTRIPLE(SUBJECT(?o))`
+ * is about the group `SUBJECT(?o)` names rather than about `?o`.
  *
  * Only the strong form may be substituted into a pattern: `weak` and `unbound` say what the variable is
  * *not* bound to rather than that it is bound, and `bound` says nothing about which term it is.
@@ -52,13 +114,18 @@ interface BaseAssertion {
   type: 'assertion';
   subType: string;
 }
-export interface StrongAssertion<T extends RDF.Term = RDF.Term> extends BaseAssertion {
+export interface StrongAssertion extends BaseAssertion {
   subType: 'strong';
-  term: T;
+  term: AssertionTarget;
 }
-export interface WeakAssertion<T extends RDF.Term = RDF.Term> extends BaseAssertion {
+export interface WeakAssertion extends BaseAssertion {
   subType: 'weak';
-  term: T;
+  term: AssertionTarget;
+}
+/** T⟨?x⟩, and - when `weak` - `!bound(?x) || isTRIPLE(?x)`. */
+export interface TripleAssertion extends BaseAssertion {
+  subType: 'triple';
+  weak: boolean;
 }
 export interface UnboundAssertion extends BaseAssertion {
   subType: 'unbound';
@@ -66,20 +133,39 @@ export interface UnboundAssertion extends BaseAssertion {
 export interface BoundAssertion extends BaseAssertion {
   subType: 'bound';
 }
-export type Assertion = StrongAssertion | WeakAssertion | BoundAssertion | UnboundAssertion;
+export type Assertion =
+  BoundAssertion | StrongAssertion | TripleAssertion | UnboundAssertion | WeakAssertion;
 
-export function assertStrong<T extends RDF.Term>(term: T): StrongAssertion<T> {
+export function assertStrong(term: AssertionTarget): StrongAssertion {
   return {
     type: 'assertion',
     subType: 'strong',
-    term,
+    term: normalisedTarget(term),
   };
 }
-export function assertWeak<T extends RDF.Term>(term: T): WeakAssertion<T> {
+export function assertWeak(term: AssertionTarget): WeakAssertion {
   return {
     type: 'assertion',
     subType: 'weak',
-    term,
+    term: normalisedTarget(term),
+  };
+}
+
+/**
+ * A variable on the right hand side is the zero-length access reading it, so that a target has one
+ * spelling only - everything downstream tells the two apart by asking whether it is an access, and a
+ * variable spelled as a term would answer no while being exactly one.
+ */
+function normalisedTarget(target: AssertionTarget): AssertionTarget {
+  return !isAccessTarget(target) && target.termType === 'Variable' ? access(target.value) : target;
+}
+
+/** Creates T⟨?x⟩, or its weak form `!bound(?x) || isTRIPLE(?x)`. */
+export function assertTriple(weak = false): TripleAssertion {
+  return {
+    type: 'assertion',
+    subType: 'triple',
+    weak,
   };
 }
 
@@ -96,12 +182,19 @@ export function assertUnbound(): UnboundAssertion {
   };
 }
 
+/** Whether the assertion carries a target, which is the pair the strong and weak forms are. */
+export function hasTarget(assertion: Assertion): assertion is StrongAssertion | WeakAssertion {
+  return assertion.subType === 'strong' || assertion.subType === 'weak';
+}
+
 /**
  * Whether the assertion implies `bound(?x)`, which is what the emptiness rule (FBndII) and every licence
- * that moves an assertion into a single operand are read off - the strong form and the bound form alike.
+ * that moves an assertion into a single operand are read off - the strong form, the bound form, and the
+ * shape alike, a triple term being a term like any other.
  */
-export function impliesBound(assertion: Assertion): assertion is BoundAssertion | StrongAssertion {
-  return assertion.subType === 'strong' || assertion.subType === 'bound';
+export function impliesBound(assertion: Assertion): boolean {
+  return assertion.subType === 'strong' || assertion.subType === 'bound' ||
+    (assertion.subType === 'triple' && !assertion.weak);
 }
 
 /**
@@ -126,60 +219,148 @@ export function isAssertableTerm(term: RDF.Term): boolean {
 }
 
 /**
- * Recognizes the strong assertion a single conjunct carries: `sameTerm(?x, c)`, `sameTerm(c, ?x)`, or the
- * unification `sameTerm(?x, ?y)` - which is A⟨?x ≡ ?y⟩, a strong assertion whose term is a variable.
+ * The access an expression reads, when that is all it does: a variable, or a chain of `SUBJECT` /
+ * `PREDICATE` / `OBJECT` around one.
+ *
+ * `OBJECT(SUBJECT(?o))` is `{ name: 'o', positions: [ 'subject', 'object' ]}` - the chain is unwrapped
+ * from the outside in, so the positions come out in the order they are applied.
+ */
+export function accessOf(expression: Algebra.Expression): Access | undefined {
+  if (expression.subType === Algebra.ExpressionTypes.TERM) {
+    return expression.term.termType === 'Variable' ? access(expression.term.value) : undefined;
+  }
+  if (expression.subType !== Algebra.ExpressionTypes.OPERATOR || expression.args.length !== 1) {
+    return undefined;
+  }
+  if (!triplePositions.includes(<TriplePosition> expression.operator)) {
+    return undefined;
+  }
+  const position = <TriplePosition> expression.operator;
+  const inner = accessOf(expression.args[0]);
+  return inner === undefined ? undefined : { name: inner.name, positions: [ ...inner.positions, position ]};
+}
+
+/** The target one side of a `sameTerm` stands for: the access it reads, or the ground term it is. */
+function targetOf(expression: Algebra.Expression): AssertionTarget | undefined {
+  const read = accessOf(expression);
+  if (read !== undefined) {
+    return read;
+  }
+  return expression.subType === Algebra.ExpressionTypes.TERM && isAssertableTerm(expression.term) ?
+    expression.term :
+    undefined;
+}
+
+/**
+ * Recognizes the conjuncts a `sameTerm` carries: `sameTerm(a, c)`, `sameTerm(c, a)`, the unification
+ * `sameTerm(a, b)` - A⟨a ≡ b⟩, a strong assertion whose target is an access - and the *construction*
+ * `sameTerm(?o, <<( ?a ?b ?c )>>)`, which decomposes into one conjunct per position.
+ *
+ * The construction is not written back as itself, and that is sound rather than sloppy: as *conjuncts of
+ * a FILTER*, `sameTerm(?o, TRIPLE(?a,?b,?c))` and `sameTerm(SUBJECT(?o), ?a) && …` agree. They differ only
+ * where one is `false` and the other an error - `?o` not a triple term, a component unbound, the
+ * construction ill-typed - and a FILTER discards the row either way.
  *
  * Never generalise this to `=`: `?x = "01"^^xsd:integer` holds of the *term* `"1"^^xsd:integer`, so
  * substituting under `=` would drop solutions. An `=` against an IRI is the one place the two coincide,
  * and {@link constantFoldOperator} has already rewritten that into the `sameTerm` read here.
  */
-export function asStrongAssertion(expression: Algebra.Expression):
-    { name: string; assertion: StrongAssertion } | undefined {
-  if (expression.subType === Algebra.ExpressionTypes.OPERATOR &&
-    expression.operator === 'sameterm' &&
-    expression.args.length === 2) {
-    const [ left, right ] = expression.args;
-    if (left.subType === 'term' && right.subType === 'term') {
-      // Two variables: which one is read as the subject of the assertion does not matter, since the
-      // conjunction unifies them and picks the representative of the resulting clique itself.
-      if (left.term.termType === 'Variable' &&
-        (right.term.termType === 'Variable' || isAssertableTerm(right.term))) {
-        return { name: left.term.value, assertion: assertStrong(right.term) };
-      }
-      if (right.term.termType === 'Variable' && isAssertableTerm(left.term)) {
-        return { name: right.term.value, assertion: assertStrong(left.term) };
-      }
-    }
+export function asStrongAssertion(expression: Algebra.Expression): AssertionConjunct[] | undefined {
+  if (expression.subType !== Algebra.ExpressionTypes.OPERATOR || expression.operator !== 'sameterm' ||
+    expression.args.length !== 2) {
+    return undefined;
+  }
+  const [ left, right ] = expression.args;
+  const decomposed = asConstruction(left, right) ?? asConstruction(right, left);
+  if (decomposed !== undefined) {
+    return decomposed;
+  }
+  // Which side is read as the subject of the assertion does not matter for an access on both: the
+  // conjunction unifies the two groups and picks the anchor of the result itself.
+  const leftAccess = accessOf(left);
+  if (leftAccess !== undefined) {
+    const target = targetOf(right);
+    return target === undefined ? undefined : [{ access: leftAccess, assertion: assertStrong(target) }];
+  }
+  const rightAccess = accessOf(right);
+  if (rightAccess !== undefined && left.subType === Algebra.ExpressionTypes.TERM &&
+    isAssertableTerm(left.term)) {
+    return [{ access: rightAccess, assertion: assertStrong(left.term) }];
   }
   return undefined;
+}
+
+/** `sameTerm(a, <<( x y z )>>)` read as one conjunct per position of the shape `a` has to have. */
+function asConstruction(read: Algebra.Expression, built: Algebra.Expression): AssertionConjunct[] | undefined {
+  const root = accessOf(read);
+  if (root === undefined || built.subType !== Algebra.ExpressionTypes.OPERATOR ||
+    built.operator !== 'triple' || built.args.length !== 3) {
+    return undefined;
+  }
+  const targets = built.args.map(arg => targetOf(arg));
+  if (targets.includes(undefined)) {
+    // One position this cannot name is one conjunct that would be lost, and a conjunction that no longer
+    // says what the condition said - so the whole condition stays a residual instead.
+    return undefined;
+  }
+  return triplePositions.map((position, index) => ({
+    access: { name: root.name, positions: [ ...root.positions, position ]},
+    assertion: assertStrong(targets[index]!),
+  }));
+}
+
+/** Recognizes T⟨?x⟩: `isTRIPLE(a)`, which says that `a` is a triple term and nothing about its parts. */
+export function asTripleAssertion(expression: Algebra.Expression): AssertionConjunct | undefined {
+  if (expression.subType !== Algebra.ExpressionTypes.OPERATOR || expression.operator !== 'istriple' ||
+    expression.args.length !== 1) {
+    return undefined;
+  }
+  const read = accessOf(expression.args[0]);
+  return read === undefined ? undefined : { access: read, assertion: assertTriple() };
 }
 
 /**
- * Recognizes the *weak* assertion a single conjunct carries: `!bound(?x) || sameTerm(?x, c)`.
+ * Recognizes the *weak* conjuncts a condition carries: `!bound(?x) || φ`, where `φ` is a strong assertion
+ * about `?x` and about nothing else.
  *
- * A ground term, never a variable. There is no weak form of a unification (see
- * {@link AssertionConjunction}), so reading `!bound(?x) || sameTerm(?x, ?y)` back as one would be the
- * unsound merge that form does not exist to avoid: it stays a residual condition instead.
+ * The single-variable restriction is what makes the weak form exist at all (S4): `!bound(?o) ||
+ * sameTerm(SUBJECT(?o), :a)` is one conjunct about one variable, where `sameTerm(SUBJECT(?o), ?s)` is an
+ * edge between two of them and has no weak form (see {@link AssertionConjunction}). Reading such an edge
+ * back as one would be exactly the unsound merge that form does not exist to avoid, so it stays a
+ * residual condition instead.
+ *
+ * The target has to be a ground *term* for the same reason: `!bound(?o) || sameTerm(SUBJECT(?o),
+ * OBJECT(?o))` does mention one variable only, but weakening a whole shape one edge at a time is not
+ * something the conjunction can carry, so it too is left where it is.
  */
-export function asWeakAssertion(expression: Algebra.Expression):
-    { name: string; assertion: WeakAssertion } | undefined {
-  if (expression.subType === Algebra.ExpressionTypes.OPERATOR &&
-    expression.operator === '||' && expression.args.length === 2) {
-    for (const [ index, arg ] of expression.args.entries()) {
-      const bound = variableOfNotBound(arg);
-      if (bound !== undefined) {
-        const assertion = asStrongAssertion(expression.args[index === 0 ? 1 : 0]);
-        if (assertion !== undefined && assertion.name === bound && isAssertableTerm(assertion.assertion.term)) {
-          return { name: bound, assertion: assertWeak(assertion.assertion.term) };
-        }
+export function asWeakAssertion(expression: Algebra.Expression): AssertionConjunct[] | undefined {
+  if (expression.subType !== Algebra.ExpressionTypes.OPERATOR || expression.operator !== '||' ||
+    expression.args.length !== 2) {
+    return undefined;
+  }
+  for (const [ index, arg ] of expression.args.entries()) {
+    const unbound = variableOfNotBound(arg);
+    if (unbound === undefined) {
+      continue;
+    }
+    const other = expression.args[index === 0 ? 1 : 0];
+    const shaped = asTripleAssertion(other);
+    if (shaped !== undefined && shaped.access.name === unbound && isBareAccess(shaped.access)) {
+      return [{ access: shaped.access, assertion: assertTriple(true) }];
+    }
+    const strong = asStrongAssertion(other);
+    if (strong?.length === 1) {
+      const [{ access: read, assertion }] = strong;
+      if (assertion.subType === 'strong' && read.name === unbound && !isAccessTarget(assertion.term)) {
+        return [{ access: read, assertion: assertWeak(assertion.term) }];
       }
     }
   }
   return undefined;
 }
 
-/** Recognizes the assertion a single conjunct carries, in whichever of the four forms it is written. */
-export function assertionOf(expression: Algebra.Expression): { name: string; assertion: Assertion } | undefined {
+/** Recognizes the conjuncts a single condition carries, in whichever of the forms they are written. */
+export function assertionOf(expression: Algebra.Expression): AssertionConjunct[] | undefined {
   const strong = asStrongAssertion(expression);
   if (strong !== undefined) {
     return strong;
@@ -188,12 +369,16 @@ export function assertionOf(expression: Algebra.Expression): { name: string; ass
   if (weak !== undefined) {
     return weak;
   }
+  const shaped = asTripleAssertion(expression);
+  if (shaped !== undefined) {
+    return [ shaped ];
+  }
   const unbound = variableOfNotBound(expression);
   if (unbound !== undefined) {
-    return { name: unbound, assertion: assertUnbound() };
+    return [{ access: access(unbound), assertion: assertUnbound() }];
   }
   const bound = variableOfBound(expression);
-  return bound === undefined ? undefined : { name: bound, assertion: assertBound() };
+  return bound === undefined ? undefined : [{ access: access(bound), assertion: assertBound() }];
 }
 
 /** The variable of a `bound(?x)` expression, if that is what it is. */
@@ -217,23 +402,56 @@ function variableOfNotBound(expression: Algebra.Expression): string | undefined 
   return undefined;
 }
 
-/** Creates the strong assertion A⟨?x ≡ c⟩: `sameTerm(?x, c)`. */
-export function assertionExpression(c: TransformContext, name: string, term: RDF.Term): Algebra.Expression {
-  return sameTermExpression(c, c.AF.createTermExpression(DF.variable(name)), term);
+/** The expression reading an access: the variable, wrapped in one accessor per position it reads. */
+export function accessExpression(c: TransformContext, read: Access): Algebra.Expression {
+  return read.positions.reduce<Algebra.Expression>(
+    (inner, position) => c.AF.createOperatorExpression(position, [ inner ]),
+    c.AF.createTermExpression(DF.variable(read.name)),
+  );
+}
+
+/** The expression one side of an assertion stands for. */
+function targetExpression(c: TransformContext, target: AssertionTarget): Algebra.Expression {
+  if (isAccessTarget(target)) {
+    return accessExpression(c, target);
+  }
+  return c.AF.createTermExpression(target);
+}
+
+/** Creates the strong assertion A⟨a ≡ c⟩: `sameTerm(a, c)`. */
+export function assertionExpression(c: TransformContext, read: Access, target: AssertionTarget):
+Algebra.Expression {
+  return c.AF.createOperatorExpression('sameterm', [
+    accessExpression(c, read),
+    targetExpression(c, target),
+  ]);
+}
+
+/** Creates T⟨?x⟩: `isTRIPLE(a)`. */
+export function tripleAssertionExpression(c: TransformContext, read: Access): Algebra.Expression {
+  return c.AF.createOperatorExpression('istriple', [ accessExpression(c, read) ]);
 }
 
 /**
- * Creates the weak assertion W⟨?x ≡ c⟩: `!bound(?x) || sameTerm(?x, c)`.
+ * Creates the weak form of a condition about `?x`: `!bound(?x) || φ`.
  *
  * Keeping the solutions that leave `?x` unbound is what makes it usable on the RHS of a MINUS
  * (anti-monotone in that argument) and pushable through operations that may leave `?x` unbound.
+ *
+ * `φ` may read `?x` through an accessor, and an accessor of an unbound `?x` is an *error* rather than
+ * `false`. That is exactly why this may only ever be placed as a filter condition (S1): a FILTER
+ * identifies error with `false`, and `false || error` is still an error, so the row is dropped either
+ * way - which is what the left disjunct then rescues.
  */
-export function weakAssertionExpression(c: TransformContext, name: string, term: RDF.Term): Algebra.Expression {
-  const variable = c.AF.createTermExpression(DF.variable(name));
-  return c.AF.createOperatorExpression('||', [
-    c.AF.createOperatorExpression('!', [ c.AF.createOperatorExpression('bound', [ variable ]) ]),
-    sameTermExpression(c, variable, term),
-  ]);
+export function weakenedExpression(c: TransformContext, name: string, strong: Algebra.Expression):
+Algebra.Expression {
+  return c.AF.createOperatorExpression('||', [ unboundAssertionExpression(c, name), strong ]);
+}
+
+/** Creates the weak assertion W⟨a ≡ c⟩: `!bound(?x) || sameTerm(a, c)`. */
+export function weakAssertionExpression(c: TransformContext, read: Access, target: AssertionTarget):
+Algebra.Expression {
+  return weakenedExpression(c, read.name, assertionExpression(c, read, target));
 }
 
 /** Creates the bound assertion B⟨?x⟩: `bound(?x)`. */
@@ -244,6 +462,60 @@ export function boundAssertionExpression(c: TransformContext, name: string): Alg
 /** Creates the unbound assertion U⟨?x⟩: `!bound(?x)`. */
 export function unboundAssertionExpression(c: TransformContext, name: string): Algebra.Expression {
   return c.AF.createOperatorExpression('!', [ boundAssertionExpression(c, name) ]);
+}
+
+/**
+ * One conjunct of an {@link AssertionConjunction}: what it says about one access, or one edge between two.
+ */
+export interface AssertionConjunct {
+  access: Access;
+  assertion: Assertion;
+}
+
+/**
+ * The *root* variables a conjunct mentions - two iff it is an edge between two of them.
+ *
+ * Everything that places a conjunct reads only this: (FJPush)'s side condition is quantified over
+ * `vars(R)`, and the variables an accessor conjunct is about are the ones it reads *through*. An edge
+ * between two accesses of the same variable mentions that one variable, so it travels wherever a
+ * single-variable conjunct does.
+ */
+export function conjunctVars(conjunct: AssertionConjunct): string[] {
+  const roots = [ conjunct.access.name ];
+  if (hasTarget(conjunct.assertion)) {
+    for (const name of targetVars(conjunct.assertion.term)) {
+      if (!roots.includes(name)) {
+        roots.push(name);
+      }
+    }
+  }
+  return roots;
+}
+
+/**
+ * The same conjunct, in the strongest form that survives a move somewhere its variables may be unbound:
+ * A⟨a ≡ c⟩ becomes W⟨a ≡ c⟩, T⟨?x⟩ becomes its weak self, and W and U are already that weak.
+ *
+ * B⟨?x⟩ has no such form - weakening it means allowing the unbound case, and `¬b ∨ b` is `true` - and
+ * neither has an edge between two accesses, for the reasons in {@link asWeakAssertion}. Both are
+ * `undefined`: they do not travel at all, and have to stay where they are.
+ */
+export function weakenedConjunct(conjunct: AssertionConjunct): AssertionConjunct | undefined {
+  const { access: read, assertion } = conjunct;
+  switch (assertion.subType) {
+    case 'bound': {
+      return undefined;
+    }
+    case 'triple': {
+      return assertion.weak ? conjunct : { access: read, assertion: assertTriple(true) };
+    }
+    case 'strong': {
+      return isAccessTarget(assertion.term) ? undefined : { access: read, assertion: assertWeak(assertion.term) };
+    }
+    default: {
+      return conjunct;
+    }
+  }
 }
 
 /** The position a term takes in a quad pattern, which decides what kind of term may occupy it. */

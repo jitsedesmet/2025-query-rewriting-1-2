@@ -1,5 +1,6 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
+import type { Pin, PinMeet } from '../datastructures/TermClusterSet.js';
 import { TermClusterSet } from '../datastructures/TermClusterSet.js';
 import type { TransformContext } from '../transformContext.js';
 import type { Assertion, Assertions } from './assertions.js';
@@ -82,7 +83,7 @@ export class AssertionConjunction {
   private order: Set<string>;
 
   public constructor() {
-    this.clusters = new TermClusterSet<string, RDF.Term>(name => name, (a, b) => a.equals(b));
+    this.clusters = new TermClusterSet<string, RDF.Term>(name => name, meetTermPins);
     this.strength = new Map();
     this.unbound = new Set();
     this.bound = new Set();
@@ -572,6 +573,19 @@ export class AssertionConjunction {
   private remember(name: string): void {
     this.order.add(name);
   }
+}
+
+/**
+ * The meet of two pins on one group of an assertion conjunction: the equality it has always been.
+ *
+ * A conjunction holds nothing but terms until the *shape* of a triple term becomes assertable, so the
+ * other two cases the lattice offers - two shapes decomposing, and a ground triple term deciding the
+ * positions of one - are unreachable from here, and a shape meeting anything is a contradiction.
+ */
+function meetTermPins(left: Pin<RDF.Term>, right: Pin<RDF.Term>): PinMeet<RDF.Term> | false {
+  return left.kind === 'term' && right.kind === 'term' && left.term.equals(right.term) ?
+      { pin: left, entailed: []} :
+    false;
 }
 
 /** One conjunct of a {@link AssertionConjunction}: what it says about one variable, or one clique edge. */

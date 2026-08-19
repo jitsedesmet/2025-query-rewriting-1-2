@@ -23,6 +23,49 @@ member of a clique must assert it on all of them.
 implementation contract: everything below is decided, not up for re-litigation, except where it says
 "your call".
 
+## Where this stands (main, 2026-08-19)
+
+**Steps 0 and 1 are in the codebase.** D5 and D6 below describe what is *there*, not what to build;
+read them as the foundation the rest stands on, and the code as the authority.
+
+| step | commit | in the tree |
+|---|---|---|
+| 0 | `ac6d447` (#31) | `vRanges` on `CPMeta`, holding scope and term types in one structure; the emptiness rules it decides in `normalisedFor`; `nullifyUnbindableVars`; the metadata clearing of D6. |
+| 1 | `e18a8dd` (#32) | ground triple terms: `isAssertableTerm` admits them, and `withCpVars` calls `BIND(<<( :a :b :c )>> AS ?t)` certainly bound (`constructionCannotFail`). |
+
+**To build: 2 (pin lattice), 3 (accesses + `T⟨?x⟩`), 4 (materialisation), 5 (operation rules)**, and the
+optional 6.
+
+## Grounding
+
+Schmidt, Meier, Lausen, ["Foundations of SPARQL Query
+Optimization"](https://dl.acm.org/doi/pdf/10.1145/1804669.1804675) (ICDT 2010) is the algebraic ground
+this pass stands on, and every rule name in parentheses in the code refers to its Figure 2. The PDF is
+not in the repo (`*.pdf` is ignored) — fetch it from the link. Four groups of it are load-bearing here,
+and the new work extends them rather than replacing them:
+
+* **(FElimI) / (FElimII)** (Lemma 4) — `π_{S∖{?x}}(σ_{?x=?y}(A)) ≡ π_{S∖{?x}}(A^{?y}_{?x})`, and the
+  same for a constant `c`. This is *the* rule the pass generalises, in three directions. The paper needs
+  `A` in the `⋈`/`∪`/triple-pattern fragment with `?x, ?y ∈ cVars(A)`, where this pass descends through
+  the whole algebra and carries the four strengths precisely so it can keep going where that no longer
+  holds. The paper needs the enclosing projection to drop `?x`, so it cannot appear on one side and not
+  the other; this pass keeps `?x` by re-binding it instead (the mandatory `BIND(?rep AS ?x)`, the `JOIN`
+  with `{?g ↦ c}` in `pushIntoGraph`), which is what "preserves `pVars` exactly" means throughout
+  `pushDownAssertions.ts`. And triple terms extend the right-hand side from a *term* to a **shape**,
+  which is materialised into a pattern rather than substituted (S3).
+* **(FBndI)–(FBndIV)** — the four `bnd(?x)` rules, read off `cVars` and `pVars`. They decide the
+  emptiness and the collapses: A and B empty by (FBndII), U empties by (FBndIII), B vanishes by (FBndI)
+  and U by (FBndIV). `T⟨?x⟩` implies `bnd(?x)` and so triggers exactly the same set.
+* **(FUPush), (FMPush), (FJPush), (FLPush)** — the pushing licences. (FJPush)'s side condition,
+  `∀?x ∈ vars(R): ?x ∈ cVars(A₁) ∨ ?x ∉ pVars(A₂)`, is literally the licence `splitClique` reads per
+  conjunct; an accessor conjunct is licensed on its **root names** for exactly this reason (D1).
+* **(FLBndI) / (FLBndII)** — for `?x ∈ cVars(A₂) ∖ pVars(A₁)`, `σ_{¬bnd(?x)}(A₁ ⟕ A₂) ≡ A₁ ∖ A₂` and
+  `σ_{bnd(?x)}(A₁ ⟕ A₂) ≡ A₁ ⋈ A₂`. The second is what collapses a left join over a structurally
+  asserted variable into a join (S5), since a shape implies `bnd` of its root.
+
+The refinement this repo adds on top: the paper's rules read `?x ∉ pVars(A)` as their emptiness proof,
+where `vRanges` decides the finer *type*-level fact — in scope, and no term left to take. See D5.
+
 ## Orientation (read before writing code)
 
 | file | why |
@@ -31,9 +74,11 @@ implementation contract: everything below is decided, not up for re-litigation, 
 | `lib/utils/assertions.ts` | the four assertion forms, their recognisers and builders, substitution into terms/patterns |
 | `lib/datastructures/ClusterSet.ts`, `TermClusterSet.ts` | the union-find Θ is built on |
 | `lib/transformations/pushDownAssertions.ts` | the pass; its file comment explains the rules per operation |
-| `lib/utils/certainlyBoundVars.ts` | `cVars`/`pVars` metadata, computed by dynamic programming |
+| `lib/utils/certainlyBoundVars.ts` | `cVars`/`vRanges` metadata, computed by dynamic programming — `vRanges` is scope *and* term types in one (D5) |
+| `lib/transformations/nullifyUnbindableVars.ts` | the type-level emptiness proof step 0 added; a range consumer to keep working |
 | `lib/utils/partialExpressionEvaluation.ts` | substitution into expressions + constant folding |
 | `lib/RangeSet.ts`, `lib/ClusterSolver.ts` | positional term-type ranges, already used by the rewriting side |
+| Schmidt et al., *Foundations of SPARQL Query Optimization* | the equivalences every rule name refers to; see **Grounding** above |
 
 The codebase documents *why* rather than *what*, in dense prose, with the rule names of Schmidt et al.
 Match that: every new rule you add needs the argument for its soundness written next to it.
@@ -114,52 +159,79 @@ functionally determined by the variable they already joined on. Do **not** use `
 its sequential naming depends on call order. Add a `derivedVarNamer(existing)` sibling in
 `lib/utils.ts`.
 
-### D5 — `vRanges`, a third `CPMeta` field
+### D5 — `vRanges` (in the tree, step 0)
 
-`withCpVars` also computes `vRanges: Map<string, RangeSet>` — the term types each variable can take —
-with a missing entry meaning "any type" (`objectRange` is the top of the lattice).
+`CPMeta` is `{ cVars, vRanges }`. `vRanges` is a `VRanges extends Map<string, RangeSet>` that carries
+`pVars` and the term types in one structure: its **key set is the scope** — what `SELECT *` expands to —
+and the range stored per key is the term types the variable can hold *when bound*. `pVars ⊇
+keys(vRanges)` is therefore structural rather than hand-kept, which is what closed the two places it was
+already violated (PROJECT copied every input range while `pVars` intersected; SERVICE returned an empty
+map while `pVars` united).
+
+Key presence and range are independent on purpose, and that is what makes a third state expressible: a
+key at `emptyRange` is a variable **in scope that provably never binds**, where absence is out of scope.
+`VRanges.rangeOf` reports the bottom for both and `neverBinds` / `canBind` are what every consumer
+reads, because `bnd(?x)` is false either way. A missing entry is not "any type": `addAtTop` is how a
+variable enters at `objectRange`.
+
+One deliberate exception, documented in the file header: `FILTER(!bound(?x))` **deletes** the key rather
+than bottoming its range, because (FBndII) reads absence as its emptiness proof.
 
 | operation | rule |
 |---|---|
-| PATTERN | per position, intersected over every occurrence, recursing into triple terms with the nested positions; a graph variable is an IRI |
+| PATTERN | per position, intersected over every occurrence, recursing into triple terms with the nested positions; a graph variable takes `graphRange` |
 | BGP | intersect per variable over patterns |
 | PATH | endpoints `objectRange` (a path may start at a literal), graph as above |
-| JOIN | **intersect** per variable over the operands that possibly bind it |
-| UNION | **union** per variable over the branches |
-| LEFT JOIN | left's range for what the left binds; right's for right-only variables |
+| JOIN | **intersect** per variable — but only over the operands that bind it **certainly**; where none is certain the ranges **unite** |
+| UNION | **union** per variable over the branches that have it in scope |
+| LEFT JOIN | left's range for what the left binds *certainly*; united with the right's otherwise |
 | MINUS | left's |
-| VALUES | the term types actually present in the column |
+| VALUES | the term types actually present in the column; an all-UNDEF column lands on the bottom |
 | EXTEND | input's, plus the target: a term expression gives its own type, a triple-term construction `{Quad}`, anything else top |
-| FILTER, PROJECT, DISTINCT, REDUCED, SLICE, ORDER BY, FROM | pass through |
-| GRAPH | input's, plus `?g` → IRI |
-| SERVICE, GROUP aggregates | top |
+| FILTER, PROJECT, DISTINCT, REDUCED, SLICE, ORDER BY, FROM | pass through (PROJECT drops the keys it does not project; FILTER drops a `!bound` key) |
+| GRAPH | input's, plus `?g` → `graphRange` |
+| GROUP aggregates | top |
+| SERVICE | keeps its pattern's ranges; a variable endpoint is assumed an IRI |
 
 Note the inversion against `cVars`: **UNION unions where `cVars` intersects, JOIN intersects where
-`cVars` unions.** Easy to get backwards; write the reason down.
+`cVars` unions** — easy to get backwards, and the reason is written down at `intersectRanges`. Note also
+that only a **certain** binder narrows: intersecting the range of an operand that may leave the variable
+*unbound* reports `{ VALUES (?x) { (UNDEF) } } . { VALUES (?x) { ("l") } }` as unbindable, where the join
+binds `?x` to `"l"`. And `graphRange` is `{NamedNode, BlankNode}`: a dataset may name a graph by a blank
+node, the grammar only restricting what may be *written* in a `GRAPH` clause.
 
-This buys three things:
+Three things read the ranges, two of them already:
 
-1. `BIND(<<( c₁ c₂ c₃ )>> AS ?o)` is certainly bound when every `cᵢ` is bound and
-   `range(c₁) ⊆ {NamedNode, BlankNode}`, `range(c₂) ⊆ {NamedNode}` — i.e. the construction cannot
-   error. Without this the re-binding the pass emits drops `?o` out of `cVars` and degrades every later
-   assertion about it. A *ground* well-formed triple term is admitted outright, which also settles the
-   TODO at `assertions.ts:106`.
-2. `normalisedFor(cVars, pVars, vRanges)` intersects the plan range into each group's range and returns
-   `undefined` when a group empties or no longer admits its pin. New emptiness rule for the *existing*
-   forms too: `?s ?p ?o FILTER(sameTerm(?s, "lit"))` is empty, today only noticed at the BGP.
-3. Together with the group-level range (lift `groupToRange` down from `ClusterSolver.ts:43` into the
-   shared base), it confines nesting to the `object` chain: a `triple` pin on a subject or predicate
-   child is an immediate contradiction.
+1. **`cVars` through a triple-term BIND.** `BIND(<<( c₁ c₂ c₃ )>> AS ?o)` is certainly bound when every
+   `cᵢ` is bound and `range(c₁) ⊆ {NamedNode, BlankNode}`, `range(c₂) ⊆ {NamedNode}` — i.e. the
+   construction cannot error (`constructionCannotFail`, recursing into nested constructions and
+   requiring a default graph). Without this the re-binding the pass emits drops `?o` out of `cVars` and
+   degrades every later assertion about it. A ground well-formed triple term is admitted outright.
+2. **Emptiness per variable, in `normalisedFor({ cVars, vRanges })`.** It returns `undefined` when a
+   member implying `bnd` cannot bind — (FBndII) read one level finer than `?x ∉ pVars` — and prunes W/U
+   where their `!bound(?x)` disjunct carries them. A member pinned to a term outside a *non*-empty range
+   is the same rule for one term rather than all of them: **strong** empties the plan, **weak** loses its
+   right disjunct and collapses to U⟨?x⟩. So `?s ?p ?o FILTER(sameTerm(?s, "lit"))` is decided here
+   rather than at the BGP, and no rewrite downstream needs a term-type check of its own — which is what
+   let `pushIntoGraph` drop its hardcoded NamedNode one. The order is pinned by a test: a `cVars`
+   promotion to strong happens *before* the out-of-range split, so that case empties rather than
+   collapsing.
+3. **Emptiness per group — yours to add, with step 2.** Lift `groupToRange` down from
+   `ClusterSolver.ts:43` into the shared base and intersect the plan range into each group's range;
+   `normalisedFor` then also returns `undefined` when a group empties or no longer admits its pin. This
+   is what confines nesting to the `object` chain: a `triple` pin on a subject or predicate child is an
+   immediate contradiction, for the same reason a `Literal` pin on a subject is.
 
 ### D6 — metadata
 
-* `pVars` may grow by derived variables. That is fine: a licence is always about a name in Θ, Θ only
-  ever holds query variables, and a derived name is never written into a condition, so no licence is
-  ever about one.
-* **Clear metadata on the way out**: `return withoutCpVars(result)` at the end of `pushDownAssertions`,
-  mirroring the `withoutCpVars(op)` on the way in. Do **not** drop metadata inside
-  `mapOperationPreOrder` — `keepMetadata` (`pushDownAssertions.ts:102`) is how `assertionFilter` hands
-  a conjunction to the `pushFilter` that meets it, and how `reTransform: true` keeps its work.
+* The scope — the key set of `vRanges` — may grow by derived variables. That is fine: a licence is
+  always about a name in Θ, Θ only ever holds query variables, and a derived name is never written into
+  a condition, so no licence is ever about one.
+* **Metadata is cleared on both sides of the traversal** (step 0):
+  `withoutCpVars(mapOperationPreOrder(withoutCpVars(op), …))` at `pushDownAssertions.ts:134`. Do **not**
+  drop metadata inside `mapOperationPreOrder` — `keepMetadata` (`pushDownAssertions.ts:102`) is how
+  `assertionFilter` hands a conjunction to the `pushFilter` that meets it, and how `reTransform: true`
+  keeps its work.
 
 ## Soundness rules you must not break
 
@@ -207,19 +279,24 @@ pass stacks a second copy. The substitution argument becomes a view (`resolve(ac
 | BGP / PATH | `patternSubstitution`; `bindAssertedTerms` gains the quad case. `canOccupy` already refuses a quad outside object position. |
 | VALUES | prune *rows* by asserting the row into a clone of Θ (a ground triple-term value decomposes against a shape by itself); drop a *column* iff Θ can rebuild its value from the columns that survive. Worked examples in `report.md` §4. Whether you rewrite the per-variable `switch` or extend it is **your call** — keep the existing evaluation tests green. |
 | UNION, PROJECT, DISTINCT, REDUCED, ORDER BY, FROM, FILTER, GROUP | nothing beyond D1 |
-| GRAPH | a shape pin on `?g` is a contradiction (graph names are IRIs) |
+| GRAPH | a shape pin on `?g` is a contradiction — state it as a *range* fact (`graphRange` is `{NamedNode, BlankNode}`, no `Quad`) and let `normalisedFor` empty the plan, the way the term case now does; `pushIntoGraph` no longer type-checks terms itself |
 | JOIN / LEFT JOIN | licences already read `conjunctVars`; generalise `splitClique` to groups and add S6 |
 | MINUS | `weakenedTerms` per S4 |
-| EXTEND | `transferred` gains: `BIND(<<( ?a ?b ?c )>> AS ?o)` under a shape on `?o` transfers onto `?a ?b ?c`; `BIND(subject(?o) AS ?x)` transfers onto the access. This is the `TODO(next time)` at `pushDownAssertions.ts:455`. |
+| EXTEND | `transferred` gains: `BIND(<<( ?a ?b ?c )>> AS ?o)` under a shape on `?o` transfers onto `?a ?b ?c`; `BIND(subject(?o) AS ?x)` transfers onto the access. This is the `TODO(next time)` at `pushDownAssertions.ts:459`. |
 
 Also recognise `FILTER(sameTerm(?o, <<( ?a ?b ?c )>>))` and `FILTER(isTRIPLE(?o))` as assertions. The
 first is written back in accessor form, so it does not round-trip verbatim — that is accepted (S1).
 
 ## Work plan (one commit each, one PR)
 
-0. `vRanges` in `CPMeta` + the metadata clearing of D6. Independent of triple terms; testable alone.
-1. Ground triple terms: `isAssertableTerm` admits ground quads, `sameTerm` folds between two of them,
-   `withCpVars` calls a ground triple-term BIND certain. Works with the existing machinery.
+0. ~~`vRanges` in `CPMeta` + the metadata clearing of D6.~~ **Done — `ac6d447` (#31).** It grew two
+   consumers of the bottom range beyond the plan: the out-of-range rules in `normalisedFor`, and
+   `nullifyUnbindableVars`, a type-level emptiness proof where `nullifyJoinOverIncompatibleBounds` is a
+   term-level one.
+1. ~~Ground triple terms: `isAssertableTerm` admits ground quads, `sameTerm` folds between two of them,
+   `withCpVars` calls a ground triple-term BIND certain.~~ **Done — `e18a8dd` (#32).** The `sameTerm`
+   fold needed no code: RDF/JS `Quad.equals` already decides two ground triple terms in
+   `constantFoldOperator`.
 2. The pin lattice (D3). Unit-testable at the data-structure level.
 3. Accesses and `T⟨?x⟩` (D1, D2), recognisers, `toExpression`, the folds of S7. At the end of this
    commit Θ round-trips through a condition; nothing is written into patterns yet.
@@ -231,7 +308,9 @@ first is written back in accessor form, so it does not round-trip verbatim — t
 
 ## Tests
 
-Extend the three layers that already exist; keep every current test green (204 passing today).
+Extend the three layers that already exist; keep every current test green (**261 passing, 1 skipped**
+after steps 0 and 1 — the 204 of the original brief plus what those two commits added, including the
+new `test/nullifyUnbindableVars.test.ts` and the range rules in `test/certainlyBoundVars.test.ts`).
 
 * `test/assertionConjunction.test.ts` — decomposition (`?o ≡ <<( ?a ?b ?c )>>` asserted twice),
   congruence (unify `?o` with `?x`, then read a child of `?x`), ground-meets-shape, the occurs check,
@@ -241,8 +320,9 @@ Extend the three layers that already exist; keep every current test green (204 p
   (`sameTerm(?x, object(?o)) && sameTerm(?s, predicate(?x))`, see `report.md` §4); and the two
   meta-tests that already exist and must keep passing: *"applying the transformation twice yields the
   same result as once"* and *"leaves the input tree untouched"*.
-* the `semantic equivalence (evaluation)` block — the real safety net. Add triple-term data to
-  `test/statics/assertionPushdown.ttl` and cover: a shape pushed weakly into a join operand that never
+* the `semantic equivalence (evaluation)` block — the real safety net. The triple-term data is
+  **already in `test/statics/assertionPushdown.ttl`** (step 1 added `:a`/`:b`/`:c` `:says` a triple
+  term, and `:d` says a non-triple term); extend it as needed and cover: a shape pushed weakly into a join operand that never
   binds the variable; a shape over a VALUES with an UNDEF column; a shape on the RHS of a MINUS; a
   shape under an OPTIONAL that the implied `bound` collapses into a join; and a query where the
   asserted variable is bound to something that is *not* a triple term, which must return nothing rather

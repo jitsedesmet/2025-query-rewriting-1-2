@@ -9,6 +9,15 @@ SELECT * { ?s ?p <<( ?s ?o_p ?o_o )>> . BIND(<<( ?s ?o_p ?o_o )>> AS ?o) }
 Verified against the installed traqula: both the pattern and the `BIND` generate and re-parse exactly,
 so no parser/generator work is needed.
 
+> **State of play (2026-08-19).** Phases **0** (`ac6d447`, #31) and **1** (`e18a8dd`, #32) are on
+> `main`; the sections below say so where they describe something that now exists. Phases 2–5 are open.
+
+The algebraic ground under all of this is Schmidt, Meier, Lausen, ["Foundations of SPARQL Query
+Optimization"](https://dl.acm.org/doi/pdf/10.1145/1804669.1804675) (ICDT 2010): the pass is (FElimI)/(FElimII) — discharge an equality by substituting
+it — carried across the whole algebra rather than only under a projection that drops the variable, with
+the (FBnd\*) rules deciding emptiness and the (F\*Push) side conditions supplying the licences. Triple
+terms extend the right-hand side of the elimination from a *term* to a *shape*.
+
 ## 1. Design (settled)
 
 **Conjuncts are about an *access*, not a variable.** An access is a variable read through a chain of
@@ -52,36 +61,49 @@ mention unbound derived variables. `strongSubstitution()` splits into `patternSu
 argument for resolving a group to a term.
 
 **Ranges, in two places that meet in `normalisedFor`.** On the group (`groupToRange`, lifted down from
-`ClusterSolver`) and on the operation (`vRanges`, a third `CPMeta` field: the term types a variable can
-take, unioned over UNION branches, intersected over JOIN operands). This is what makes nesting run
-only down the `object` chain, and it gives emptiness rules for the *existing* forms too
-(`?s ?p ?o FILTER(sameTerm(?s, "lit"))`).
+`ClusterSolver` — still to do) and on the operation (`vRanges` — **done**). This is what makes nesting
+run only down the `object` chain, and it gives emptiness rules for the *existing* forms too
+(`?s ?p ?o FILTER(sameTerm(?s, "lit"))`, which `normalisedFor` now decides).
 
-**`pVars` may grow by derived variables; metadata is cleared on the way out** (`withoutCpVars(result)`
-at the end of the pass — not inside `mapOperationPreOrder`, whose `keepMetadata` is load-bearing
-during the traversal). Safe to read stale-but-grown metadata mid-pass: a derived name never enters Θ,
-so no licence is ever about one.
+The operation half carries the scope with it: `vRanges` is a `VRanges extends Map<string, RangeSet>`
+whose **key set is `pVars`**, the range per key being the term types the variable takes *when bound*.
+`pVars ⊇ keys(vRanges)` is structural rather than hand-kept, and the bottom range is expressible — *in
+scope, never binds* — which `neverBinds` reads as one fact together with *out of scope*, and which
+`nullifyUnbindableVars` turns into a type-level emptiness proof. It also sharpens (FBndII): the paper
+empties on `?x ∉ pVars(A)`, this empties one level finer, on nothing being left for `?x` to take.
+Ranges unite over UNION branches and intersect over the JOIN operands that bind **certainly** — an
+operand that may leave the variable unbound must not narrow it, or `{ VALUES (?x) { (UNDEF) } } . {
+VALUES (?x) { ("l") } }` is called unbindable. `graphRange` admits a BlankNode.
 
-**`BIND(<<( … )>> AS ?o)` keeps `?o` in `cVars`** via `vRanges`: the construction cannot error when
-every component is bound and `range(c₁) ⊆ {IRI, bnode}`, `range(c₂) ⊆ {IRI}`. Ground triple terms are
-admitted outright, which also settles the `isAssertableTerm` TODO (`assertions.ts:106`).
+**Scope may grow by derived variables; metadata is cleared on the way out** — the clearing is **done**
+(`withoutCpVars(result)` at the end of the pass, not inside `mapOperationPreOrder`, whose
+`keepMetadata` is load-bearing during the traversal). Safe to read stale-but-grown metadata mid-pass: a
+derived name never enters Θ, so no licence is ever about one.
+
+**`BIND(<<( … )>> AS ?o)` keeps `?o` in `cVars`** via `vRanges` — **done**: the construction cannot
+error when every component is bound and `range(c₁) ⊆ {IRI, bnode}`, `range(c₂) ⊆ {IRI}`
+(`constructionCannotFail`). Ground triple terms are admitted outright, which also settled the
+`isAssertableTerm` TODO.
 
 ## 2. Files
 
 | file | change |
 |---|---|
 | `datastructures/TermClusterSet.ts` | pin lattice, `meetPins`, work-list merge, occurs check, `carriesInformation` must count child references (else a pin dangles) |
-| `utils/assertions.ts` | `Access`; recognisers for `subject/predicate/object` equalities and `istriple`; accessor builders; `isAssertableTerm` admits ground quads |
+| `utils/assertions.ts` | `Access`; recognisers for `subject/predicate/object` equalities and `istriple`; accessor builders; ~~`isAssertableTerm` admits ground quads~~ **done** |
 | `utils/assertionConjunction.ts` | conjuncts over accesses, path walking in `assert`, `toExpression`, the two substitutions, `boundImpliedBy` covers named children |
 | `utils/partialExpressionEvaluation.ts` | substitution argument becomes a view (`resolve`, `isTriple`); fold accessors and `istriple` — without this the filter's own residual never folds and the pass is not idempotent |
-| `utils/certainlyBoundVars.ts` | `vRanges` + the EXTEND rule |
-| `transformations/pushDownAssertions.ts` | pattern substitution + namer, `pruneValues`, `transferred` through triple-term/accessor BINDs, metadata strip |
+| `utils/certainlyBoundVars.ts` | ~~`vRanges` + the EXTEND rule~~ **done** (as the `pVars` merge) |
+| `transformations/pushDownAssertions.ts` | pattern substitution + namer, `pruneValues`, `transferred` through triple-term/accessor BINDs, ~~metadata strip~~ (strip done) |
 | `ClusterSolver.ts` | follow-up: drop the `Quad` exclusion, resolve its TODO at line 191 |
 
-## 3. Phasing (commits, all in this PR)
+## 3. Phasing
 
-0. `vRanges` in `CPMeta` + metadata clearing — independent of triple terms, useful on its own.
-1. Ground triple terms — `isAssertableTerm`, ground `sameTerm` folding. Works with existing machinery.
+0. ~~`vRanges` in `CPMeta` + metadata clearing~~ — **done, `ac6d447` (#31)**. Landed as the `pVars`
+   merge, and grew two consumers of the bottom range: the emptiness rules in `normalisedFor` (a strong
+   member out of range empties, a weak one collapses to U⟨?x⟩) and the new `nullifyUnbindableVars`.
+1. ~~Ground triple terms — `isAssertableTerm`, ground `sameTerm` folding.~~ — **done, `e18a8dd` (#32)**.
+   The `sameTerm` fold needed no change: RDF/JS `Quad.equals` already decides two ground triple terms.
 2. Pin lattice — data-structure level, unit-testable alone.
 3. Accesses + `T⟨?x⟩` — Θ round-trips through a condition; nothing written into patterns yet.
 4. Materialisation — namer, `patternSubstitution`, `bindAssertedTerms`. Target example works here.
@@ -89,7 +111,8 @@ admitted outright, which also settles the `isAssertableTerm` TODO (`assertions.t
    `BIND(subject(?o) AS ?x)`, the `TODO(next time)` at `pushDownAssertions.ts:455`), shape-weakening in
    `splitClique`, the GRAPH and MINUS cases.
 
-**Evaluation harness — checked** on `n3@2` and `@comunica/query-sparql-file@5.3` (upgraded from 5.1.3
+**Evaluation harness — checked and in use** (the triple-term fixtures are in
+`test/statics/assertionPushdown.ttl` as of phase 1) on `n3@2` and `@comunica/query-sparql-file@5.3` (upgraded from 5.1.3
 for this). Turtle `<<( :a :b :c )>>` parses to a `Quad` object; triple-term patterns with variables,
 `SUBJECT(…)`, `isTRIPLE(…)` and `<<( ?s ?p ?o )>>` in a `BIND` all evaluate; an accessor on a
 non-triple or unbound argument errors into `false`, so the row is dropped rather than the query

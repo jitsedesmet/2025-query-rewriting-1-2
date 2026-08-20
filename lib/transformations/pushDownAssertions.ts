@@ -235,14 +235,19 @@ function swapWith(
     }
     // The one leaf where all of the forms do real work, since a VALUES column may be UNDEF.
     case Algebra.Types.VALUES: {
-      // A row decides a column against a term, against another column, or against being there at all.
-      // What a shape says about a *position* of a column is none of those, so it stays above the VALUES
-      // rather than being silently discharged by the pruning.
-      const structural = assertions.structural();
-      const decidable = AssertionConjunction.of(assertions.conjuncts()
-        .filter(conjunct => structural.get(conjunct.access.name) === undefined ||
-          !isStructuralHere(conjunct)));
-      return keep(assertionFilter(c, pruneValues(c, op, decidable), structural));
+      // A row decides a column against a term, against another column, against which kind of term it is,
+      // and against being there at all. What a shape says about a *position* of a column is none of
+      // those, so it stays above the VALUES rather than being silently discharged by the pruning.
+      const decidable: AssertionConjunct[] = [];
+      const kept: AssertionConjunct[] = [];
+      for (const conjunct of assertions.conjuncts()) {
+        (readsThroughAccessor(conjunct) ? kept : decidable).push(conjunct);
+      }
+      return keep(assertionFilter(
+        c,
+        pruneValues(c, op, AssertionConjunction.of(decidable)),
+        AssertionConjunction.of(kept),
+      ));
     }
 
     // (FUPush) holds unconditionally for every form - a solution of a union comes from exactly one
@@ -403,11 +408,10 @@ function pruneValues(c: TransformContext, values: Algebra.Values, assertions: As
       let isPruned = false;
       for (const [ variable, value ] of Object.entries(binding)) {
         const assertion = assertions.get(variable);
-        if (assertion?.subType === 'triple') {
-          // T⟨?x⟩ says the value is a triple term and nothing about which one, so the row decides the
-          // column just as B⟨?x⟩ leaves it deciding it - only the rows holding something else are dropped.
-          // The algebra types a VALUES cell as an IRI or a literal, so today that is every row of one.
-          if (value !== undefined && (<RDF.Term> value).termType !== 'Quad') {
+        if (assertion?.subType === 'termType') {
+          // T⟨?x : τ⟩ says which kind of term the value is and nothing about which one, so the row decides
+          // the column just as B⟨?x⟩ leaves it deciding it - only the rows holding another kind are dropped.
+          if (value !== undefined && (<RDF.Term> value).termType !== assertion.termType) {
             isPruned = true;
             break;
           }
@@ -1069,17 +1073,21 @@ function placeAccessConjunct(
  */
 function weakenedTerms(assertions: AssertionConjunction): AssertionConjunction {
   return AssertionConjunction.of(assertions.singleVariableConjuncts()
-    .filter(({ assertion }) => assertion.subType === 'strong' || assertion.subType === 'triple')
+    .filter(({ assertion }) => assertion.subType === 'strong' || assertion.subType === 'termType')
     .map(conjunct => weakenedConjunct(conjunct))
     .filter(conjunct => conjunct !== undefined));
 }
 
 /**
- * Whether the conjunct is about the shape of a value rather than about which term it is - the ones a
- * substitution of terms, or a VALUES row, cannot decide.
+ * Whether either side of the conjunct reads a *position* of a value rather than a value.
+ *
+ * Which is what a VALUES row cannot decide: it holds the value of a column, so it decides which term that
+ * is and which kind of term it is, but it has no say over the positions of a triple term inside it. Not
+ * the same question {@link AssertionConjunction.structural} asks - a row decides `isIRI(?x)` where a
+ * substitution of terms has no way to carry it.
  */
-function isStructuralHere(conjunct: AssertionConjunct): boolean {
-  return !isBareAccess(conjunct.access) || conjunct.assertion.subType === 'triple' ||
+function readsThroughAccessor(conjunct: AssertionConjunct): boolean {
+  return !isBareAccess(conjunct.access) ||
     (hasTarget(conjunct.assertion) && isAccessTarget(conjunct.assertion.term) &&
       !isBareAccess(conjunct.assertion.term));
 }

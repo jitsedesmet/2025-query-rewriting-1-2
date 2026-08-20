@@ -26,8 +26,12 @@ accessors: `?x`, `subject(?x)`, `object(subject(?x))`. `AssertionConjunct` becom
 `{ access, assertion }`, the RHS of a strong/weak assertion becomes `Access | RDF.Term`, and A/W/B/U
 all keep their meaning. `U`/`B` stay restricted to accesses of length 0 (`BOUND` takes a `Var`).
 
-**One new form: `T⟨?x⟩ ≔ isTRIPLE(?x)`** — the degenerate shape, "a triple term, nothing known about
-its parts". Implies bound, has a weak form, absorbed by anything stronger.
+**One new form: `T⟨?x : τ⟩`** — originally `isTRIPLE(?x)`, the degenerate shape, "a triple term, nothing
+known about its parts". Implies bound, has a weak form, absorbed by anything stronger. Generalised in
+review to all four term-type predicates (`isIRI`/`isURI`, `isBLANK`, `isLITERAL`, `isTRIPLE`), which are
+one fact — a narrowing of the group's range — and so one form. It costs the lattice one distinction: the
+*asserted* part of a range, which has to be written back, against the *derived* part, which holds wherever
+the group is written and must not be.
 
 **Groups get a pin lattice.** `TermClusterSet`'s `groupToTerm` becomes
 `{kind:'term', term} | {kind:'triple', children:[groupId × 3]}`. `compareTerm` (equal / contradiction)

@@ -1,9 +1,10 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
 import { objectRange, predicateRange, subjectRange } from '../RangeSet.js';
+import type { RangeSet } from '../RangeSet.js';
 import type { TransformContext } from '../transformContext.js';
 import type { Access } from './assertions.js';
-import { accessOf, isAssertableTerm } from './assertions.js';
+import { accessOf, isAssertableTerm, rangeOfTermType, termTypeOfPredicate } from './assertions.js';
 import { booleanConstantOf, createBooleanExpression, isIriExpression } from './expressionHelpers.js';
 import { DF } from './rdfDatatypes.js';
 import { unionSets } from './setUtils.js';
@@ -19,8 +20,13 @@ import { unionSets } from './setUtils.js';
 export interface AssertionView {
   /** The term the access is fixed to, or the variable that reads its value most directly. */
   resolve: (access: Access) => RDF.Term | undefined;
-  /** Whether the access is known to be a triple term. */
-  isTriple: (access: Access) => boolean;
+  /**
+   * The term types left to the access, when the access is proven bound - `undefined` otherwise.
+   *
+   * Boundedness is what makes both directions of `isIRI(a)` foldable: it is `false` of a bound term of
+   * another kind, but an *error* of an unbound one, and an error is not `false` in every context.
+   */
+  typeRange: (access: Access) => RangeSet | undefined;
   /** The variables proven bound, which is what makes `bound(?x)` and `sameTerm(?x, ?x)` decidable. */
   bound: ReadonlySet<string>;
 }
@@ -114,9 +120,18 @@ function decideAccess(
   expression: Algebra.OperatorExpression,
   assertions: AssertionView,
 ): Algebra.Expression | undefined {
-  if (expression.operator === 'istriple' && expression.args.length === 1) {
+  const stated = termTypeOfPredicate(expression.operator);
+  if (stated !== undefined && expression.args.length === 1) {
     const read = accessOf(expression.args[0]);
-    return read !== undefined && assertions.isTriple(read) ? createBooleanExpression(c, true) : undefined;
+    const range = read === undefined ? undefined : assertions.typeRange(read);
+    if (range === undefined) {
+      return undefined;
+    }
+    // `⊆` answers it `true`, an empty meet answers it `false`, and anything between leaves it standing.
+    if (range.size === range.disjunct(rangeOfTermType(stated)).size) {
+      return createBooleanExpression(c, true);
+    }
+    return range.has(stated) ? undefined : createBooleanExpression(c, false);
   }
   const read = accessOf(expression);
   if (read === undefined || read.positions.length === 0) {
@@ -188,12 +203,16 @@ export function constantFoldOperator(
       }
       break;
     }
+    case 'isiri':
+    case 'isuri':
+    case 'isblank':
+    case 'isliteral':
     case 'istriple': {
-      // Decidable of any ground term, and of a ground term only: `isTRIPLE` answers `false` rather than
+      // Decidable of any ground term, and of a ground term only: these answer `false` rather than
       // erroring, so both directions fold.
       const ground = args.length === 1 ? groundArgument(args[0]) : undefined;
       if (ground !== undefined) {
-        return createBooleanExpression(c, ground.termType === 'Quad');
+        return createBooleanExpression(c, ground.termType === termTypeOfPredicate(operator));
       }
       break;
     }

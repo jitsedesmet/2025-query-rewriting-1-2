@@ -11,7 +11,7 @@ import {
   accessId,
   assertBound,
   assertStrong,
-  assertTriple,
+  assertTermType,
   assertUnbound,
   assertWeak,
 } from '../lib/utils/assertions.js';
@@ -62,9 +62,10 @@ function conjunctsOf(assertions: AssertionConjunction | undefined): string[] {
       const target = 'positions' in assertion.term ? accessId(assertion.term) : assertion.term.value;
       return `${accessId(read)}=${assertion.subType}(${target})`;
     }
-    return `${accessId(read)}=${assertion.subType === 'triple' && assertion.weak ?
-      'weakTriple' :
-      assertion.subType}`;
+    if (assertion.subType === 'termType') {
+      return `${accessId(read)}=${assertion.weak ? 'weakType' : 'type'}(${assertion.termType})`;
+    }
+    return `${accessId(read)}=${assertion.subType}`;
   });
 }
 
@@ -79,7 +80,10 @@ function stateOf(assertions: AssertionConjunction | undefined, name: string): st
       accessId(assertion.term) :
       assertion.term.value})`;
   }
-  return assertion.subType === 'triple' && assertion.weak ? 'weakTriple' : assertion.subType;
+  if (assertion.subType === 'termType') {
+    return `${assertion.weak ? 'weakType' : 'type'}(${assertion.termType})`;
+  }
+  return assertion.subType;
 }
 
 /** The conjunction, serialised through the generator - which is also how the pass writes it into a plan. */
@@ -433,16 +437,16 @@ describe('assertionConjunction', () => {
     const objectOfO = access('o', 'object');
 
     it('reads a shape back as the degenerate one it is', ({ expect }) => {
-      expect(stateOf(conjunctionOf([ 'o', assertTriple() ]), 'o')).toBe('triple');
-      expect(conditionOf(<AssertionConjunction> conjunctionOf([ 'o', assertTriple() ])))
+      expect(stateOf(conjunctionOf([ 'o', assertTermType('Quad') ]), 'o')).toBe('type(Quad)');
+      expect(conditionOf(<AssertionConjunction> conjunctionOf([ 'o', assertTermType('Quad') ])))
         .toBe('FILTER ( ISTRIPLE( ?o ) )');
     });
 
     it('implies bound, which is what collapses an OPTIONAL over it', ({ expect }) => {
-      const assertions = <AssertionConjunction> conjunctionOf([ 'o', assertTriple() ]);
+      const assertions = <AssertionConjunction> conjunctionOf([ 'o', assertTermType('Quad') ]);
       expect([ ...assertions.boundImpliedBy() ]).toEqual([ 'o' ]);
       // The weak form does not, being satisfied by every solution leaving `?o` unbound.
-      expect([ ...(<AssertionConjunction> conjunctionOf([ 'o', assertTriple(true) ])).boundImpliedBy() ])
+      expect([ ...(<AssertionConjunction> conjunctionOf([ 'o', assertTermType('Quad', true) ])).boundImpliedBy() ])
         .toEqual([]);
     });
 
@@ -451,7 +455,7 @@ describe('assertionConjunction', () => {
       // restated - which is what keeps a second run of the pass from stacking a copy of it.
       const assertions = structuralConjunctionOf(
         [ subjectOfO, assertStrong(termC) ],
-        [ access('o'), assertTriple() ],
+        [ access('o'), assertTermType('Quad') ],
       );
       expect(conjunctsOf(assertions)).toEqual([ 'o.subject=strong(ex://c)' ]);
     });
@@ -494,14 +498,14 @@ describe('assertionConjunction', () => {
     });
 
     it('contradicts a shape against a term that is no triple term', ({ expect }) => {
-      expect(structuralConjunctionOf([ access('o'), assertTriple() ], [ access('o'), assertStrong(termC) ]))
+      expect(structuralConjunctionOf([ access('o'), assertTermType('Quad') ], [ access('o'), assertStrong(termC) ]))
         .toBeUndefined();
       expect(structuralConjunctionOf([ access('o'), assertStrong(termC) ], [ subjectOfO, assertStrong(termD) ]))
         .toBeUndefined();
     });
 
     it('contradicts the unbound form, a triple term being a term', ({ expect }) => {
-      expect(structuralConjunctionOf([ access('o'), assertTriple() ], [ access('o'), assertUnbound() ]))
+      expect(structuralConjunctionOf([ access('o'), assertTermType('Quad') ], [ access('o'), assertUnbound() ]))
         .toBeUndefined();
       expect(structuralConjunctionOf([ subjectOfO, assertStrong(termC) ], [ access('o'), assertUnbound() ]))
         .toBeUndefined();
@@ -528,7 +532,7 @@ describe('assertionConjunction', () => {
       const assertions = <AssertionConjunction> structuralConjunctionOf([ subjectOfO, assertWeak(termC) ]);
       expect(conditionOf(assertions))
         .toBe('FILTER ( ( ! BOUND( ?o ) || SAMETERM( SUBJECT( ?o ) , <ex://c> ) ) )');
-      expect(conditionOf(<AssertionConjunction> conjunctionOf([ 'o', assertTriple(true) ])))
+      expect(conditionOf(<AssertionConjunction> conjunctionOf([ 'o', assertTermType('Quad', true) ])))
         .toBe('FILTER ( ( ! BOUND( ?o ) || ISTRIPLE( ?o ) ) )');
     });
 
@@ -544,12 +548,12 @@ describe('assertionConjunction', () => {
       // The subject of a triple term is no literal, which is the same rule a `GRAPH ?g` reads for a term
       // outside `graphRange` - and it is what confines the nesting of shapes to the `object` chain.
       expect(structuralConjunctionOf([ subjectOfO, assertStrong(DF.literal('1')) ])).toBeUndefined();
-      expect(structuralConjunctionOf([ subjectOfO, assertTriple() ])).toBeUndefined();
+      expect(structuralConjunctionOf([ subjectOfO, assertTermType('Quad') ])).toBeUndefined();
     });
 
     it('empties the plan where the operation leaves the shape no term to take', ({ expect }) => {
       // A shape is a `Quad`, so a variable a graph position restricts to a graph name cannot carry one.
-      const assertions = <AssertionConjunction> conjunctionOf([ 'g', assertTriple() ]);
+      const assertions = <AssertionConjunction> conjunctionOf([ 'g', assertTermType('Quad') ]);
       expect(assertions.normalisedFor(rangedMeta([ 'g' ], 'g', graphRange))).toBeUndefined();
     });
 
@@ -559,6 +563,62 @@ describe('assertionConjunction', () => {
         [ access('x'), assertStrong(access('y', 'object')) ],
       );
       expect(conjunctsOf(assertions.weakened())).toEqual([ 'o.subject=weak(ex://c)' ]);
+    });
+
+    it('reads the four term-type predicates as one form', ({ expect }) => {
+      expect(stateOf(conjunctionOf([ 'x', assertTermType('NamedNode') ]), 'x')).toBe('type(NamedNode)');
+      expect(stateOf(conjunctionOf([ 'x', assertTermType('BlankNode') ]), 'x')).toBe('type(BlankNode)');
+      expect(stateOf(conjunctionOf([ 'x', assertTermType('Literal') ]), 'x')).toBe('type(Literal)');
+      expect(conditionOf(<AssertionConjunction> conjunctionOf([ 'x', assertTermType('Literal') ])))
+        .toBe('FILTER ( ISLITERAL( ?x ) )');
+      expect(conditionOf(<AssertionConjunction> conjunctionOf([ 'x', assertTermType('BlankNode') ])))
+        .toBe('FILTER ( ISBLANK( ?x ) )');
+      expect(conditionOf(<AssertionConjunction> conjunctionOf([ 'x', assertTermType('NamedNode', true) ])))
+        .toBe('FILTER ( ( ! BOUND( ?x ) || ISIRI( ?x ) ) )');
+    });
+
+    it('contradicts on two kinds of term at once, a term having one', ({ expect }) => {
+      expect(conjunctionOf([ 'x', assertTermType('NamedNode') ], [ 'x', assertTermType('Literal') ]))
+        .toBeUndefined();
+      // And against a term of another kind, which says which kind it is by saying which term it is.
+      expect(conjunctionOf([ 'x', assertTermType('Literal') ], [ 'x', assertStrong(termC) ]))
+        .toBeUndefined();
+      expect(conjunctionOf([ 'x', assertStrong(termC) ], [ 'x', assertTermType('Literal') ]))
+        .toBeUndefined();
+    });
+
+    it('is absorbed by the term that decides which kind it is', ({ expect }) => {
+      // `?x ≡ :c` already says `isIRI(?x)`, so restating it would say the same thing twice.
+      const assertions = conjunctionOf([ 'x', assertTermType('NamedNode') ], [ 'x', assertStrong(termC) ]);
+      expect(conjunctsOf(assertions)).toEqual([ 'x=strong(ex://c)' ]);
+    });
+
+    it('travels onto every member of a clique, being about the group', ({ expect }) => {
+      const assertions = conjunctionOf(
+        [ 'x', assertTermType('Literal') ],
+        [ 'y', assertStrong(DF.variable('x')) ],
+      );
+      expect(stateOf(assertions, 'y')).toBe('strong(x)');
+      // The edge comes first: the group writes itself out from its anchor, and `?x` is that anchor.
+      expect(conjunctsOf(assertions)).toEqual([ 'y=strong(x)', 'x=type(Literal)' ]);
+    });
+
+    it('empties the plan where the kind of term is one the operation cannot bind', ({ expect }) => {
+      // A graph name is never a literal, which is the same rule that empties it for a shape.
+      const assertions = <AssertionConjunction> conjunctionOf([ 'g', assertTermType('Literal') ]);
+      expect(assertions.normalisedFor(rangedMeta([ 'g' ], 'g', graphRange))).toBeUndefined();
+      // One it *can* bind survives, and stays exactly as strong as it was.
+      const named = <AssertionConjunction> conjunctionOf([ 'g', assertTermType('NamedNode') ]);
+      expect(stateOf(named.normalisedFor(rangedMeta([ 'g' ], 'g', graphRange)), 'g')).toBe('type(NamedNode)');
+    });
+
+    it('states the kind of a position of a shape, which is a group like any other', ({ expect }) => {
+      const assertions = <AssertionConjunction> structuralConjunctionOf(
+        [ objectOfO, assertTermType('Literal') ],
+      );
+      // No `isTRIPLE(?o)` beside it: reading a position already entails what it is read through.
+      expect(conjunctsOf(assertions)).toEqual([ 'o.object=type(Literal)' ]);
+      expect(conditionOf(assertions)).toBe('FILTER ( ISLITERAL( OBJECT( ?o ) ) )');
     });
 
     it('hands an edge reading through an accessor over one at a time', ({ expect }) => {

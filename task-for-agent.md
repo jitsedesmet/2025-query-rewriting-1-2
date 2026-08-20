@@ -109,12 +109,26 @@ export function accessId(a: Access): string { return [ a.name, ...a.positions ].
   (`weakenedConjunct`, `split`, the join/left-join licences) already reads only that and must keep
   doing so.
 
-### D2 — one new form, `T⟨?x⟩ ≔ isTRIPLE(?x)`
+### D2 — one new form, `T⟨?x : τ⟩`
 
-The degenerate shape: "a triple term, nothing known about its parts". It **implies bound** (so it joins
-`strong` and `bound` in `impliesBound`, and triggers (FBndII) and the OPTIONAL→JOIN collapse), it
-**has a weak form** (`!bound(?x) || isTRIPLE(?x)`), it is absorbed by anything stronger, and it
-contradicts `U⟨?x⟩` and any pin to a non-quad term.
+Originally `T⟨?x⟩ ≔ isTRIPLE(?x)`: the degenerate shape, "a triple term, nothing known about its parts".
+It **implies bound** (so it joins `strong` and `bound` in `impliesBound`, and triggers (FBndII) and the
+OPTIONAL→JOIN collapse), it **has a weak form** (`!bound(?x) || isTRIPLE(?x)`), it is absorbed by
+anything stronger, and it contradicts `U⟨?x⟩` and any pin to a non-quad term.
+
+**Generalised, post-review, to all four term-type predicates** — `isIRI` / `isURI`, `isBLANK`,
+`isLITERAL`, `isTRIPLE` — as one form `T⟨?x : τ⟩`, because every word of the paragraph above holds of
+each of them: they are one fact, "the group `?x` names holds this kind of term", which is a narrowing of
+the group range D5.3 already put on the lattice. `isTRIPLE` keeps nothing special: which positions a
+triple term has is the business of the accesses that read them, and `assertTriplePin` narrows to the same
+`{Quad}` from the other side. `isNUMERIC` is *not* one of them — it asks after the datatype of a literal
+rather than after the kind of term, so there is no range for it to narrow.
+
+The one thing the generalisation needs that a single `isTRIPLE` did not: a group has to remember which
+part of its range was **asserted** as against **derived**. That a subject holds no literal, or that a
+group pinned to an IRI is one, holds wherever the group is written, so restating it would say nothing and
+would grow the condition on every pass; only what a caller asserted has to survive the round trip. Hence
+`assertedRangeOf` / `assertTermTypeRange` beside `rangeOf` / `narrowRange` in `TermClusterSet`.
 
 ### D3 — groups are pinned to a shape, not a term
 

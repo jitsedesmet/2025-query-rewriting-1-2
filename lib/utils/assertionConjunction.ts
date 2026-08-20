@@ -10,15 +10,22 @@ import type {
 import { childGroupsOf, TermClusterSet, triplePositions } from '../datastructures/TermClusterSet.js';
 import type { RangeSet } from '../RangeSet.js';
 import type { TransformContext } from '../transformContext.js';
-import type { Access, Assertion, AssertionConjunct, Assertions } from './assertions.js';
+import type {
+  Access,
+  AssertableTermType,
+  Assertion,
+  AssertionConjunct,
+  Assertions,
+} from './assertions.js';
 import {
   access,
   accessId,
+  assertableTermTypes,
   assertBound,
   assertionExpression,
   assertionOf,
   assertStrong,
-  assertTriple,
+  assertTermType,
   assertUnbound,
   assertWeak,
   boundAssertionExpression,
@@ -27,8 +34,9 @@ import {
   impliesBound,
   isAccessTarget,
   isBareAccess,
+  rangeOfTermType,
   sameAccessAs,
-  tripleAssertionExpression,
+  termTypeAssertionExpression,
   unboundAssertionExpression,
   weakAssertionExpression,
   weakenedConjunct,
@@ -191,7 +199,19 @@ export class AssertionConjunction {
     if (representative !== undefined && representative !== name) {
       return assertStrong(access(representative));
     }
-    return pin?.kind === 'triple' ? assertTriple(weak) : assertBound();
+    const termType = this.termTypeOf(group);
+    return termType === undefined ? assertBound() : assertTermType(termType, weak);
+  }
+
+  /**
+   * The one kind of term a group may hold, when its range has been narrowed that far - which a shape
+   * narrows to `{Quad}` as much as an `isTRIPLE` does.
+   */
+  private termTypeOf(group: number): AssertableTermType | undefined {
+    const range = this.clusters.rangeOf(group);
+    return range.size === 1 ?
+      assertableTermTypes.find(termType => range.has(termType)) :
+      undefined;
   }
 
   /**
@@ -382,7 +402,7 @@ export class AssertionConjunction {
     return {
       bound: this.boundImpliedBy(),
       resolve: read => this.resolveAccessValue(read),
-      isTriple: read => this.strength.get(read.name) === 'strong' && this.shapeKnownFor(read),
+      typeRange: read => this.strength.get(read.name) === 'strong' ? this.rangeKnownFor(read) : undefined,
     };
   }
 
@@ -538,8 +558,8 @@ export class AssertionConjunction {
       case 'bound': {
         return this.assertBound(rootOfBare(read, 'bound'));
       }
-      case 'triple': {
-        return this.assertShape(read, assertion.weak);
+      case 'termType': {
+        return this.assertTermType(read, assertion.termType, assertion.weak);
       }
       case 'strong': {
         return isAccessTarget(assertion.term) ?
@@ -581,13 +601,18 @@ export class AssertionConjunction {
   }
 
   /**
-   * Conjoins T⟨a⟩ - `isTRIPLE(a)` - or its weak form, giving the group `a` names the shape of a triple
-   * term without saying anything about the three positions of it.
+   * Conjoins T⟨a : τ⟩ - `isIRI(a)`, `isBLANK(a)`, `isLITERAL(a)`, `isTRIPLE(a)` - or its weak form,
+   * narrowing the group `a` names to the one kind of term it may hold.
+   *
+   * It is only the *range* of the group, even for a triple term: which positions that triple term has is
+   * the business of the accesses that read them, and `isTRIPLE(?o)` says nothing about any of them. The
+   * shape follows from the range wherever one is needed - {@link TermClusterSet.assertTriplePin} narrows
+   * to the same `{Quad}` - so the two never disagree.
    */
-  public assertShape(read: Access, weak = false): boolean {
+  public assertTermType(read: Access, termType: AssertableTermType, weak = false): boolean {
     const apply = (target: AssertionConjunction): boolean => {
       const group = target.openAccess(read);
-      return group !== false && target.clusters.assertTriplePin(group) !== false;
+      return group !== false && target.clusters.assertTermTypeRange(group, rangeOfTermType(termType));
     };
     return weak ? this.assertWeakly(read.name, apply) : this.assertStrongly(read.name, apply);
   }
@@ -679,9 +704,9 @@ export class AssertionConjunction {
         case 'weak': {
           return weakAssertionExpression(c, read, assertion.term);
         }
-        case 'triple': {
-          const shaped = tripleAssertionExpression(c, read);
-          return assertion.weak ? weakenedExpression(c, read.name, shaped) : shaped;
+        case 'termType': {
+          const typed = termTypeAssertionExpression(c, read, assertion.termType);
+          return assertion.weak ? weakenedExpression(c, read.name, typed) : typed;
         }
       }
     }));
@@ -791,26 +816,52 @@ export class AssertionConjunction {
     for (const read of rest) {
       result.push({ access: read, assertion: assertStrong(anchor) });
     }
-    if (pin?.kind === 'triple') {
-      if (!this.shapeIsWitnessed(group, aliases)) {
-        result.push({ access: anchor, assertion: assertTriple(this.isWeak(anchor)) });
-      }
-    } else if (result.length === 0 && isBareAccess(anchor)) {
+    const termType = this.termTypeToState(group, aliases);
+    if (termType !== undefined) {
+      result.push({ access: anchor, assertion: assertTermType(termType, this.isWeak(anchor)) });
+    } else if (result.length === 0 && isBareAccess(anchor) &&
+      this.clusters.childrenOf(group) === undefined) {
       // A group of one, with nothing for that one to equal: all that is left of it is that it is bound.
-      // A position of a shape nobody else names is not that - it says nothing the shape does not already
-      // say, and `bnd` of it is not even expressible, `BOUND` taking a variable.
+      // A shape is never that - what it holds says everything this would - and neither is a position of
+      // one nobody else names, `bnd` of which is not even expressible, `BOUND` taking a variable.
       result.push({ access: anchor, assertion: assertBound() });
     }
     return result;
   }
 
   /**
-   * Whether a position of the shape says something of its own, in which case T⟨anchor⟩ need not be stated:
-   * reading a position already entails that what it is read through is a triple term.
+   * The kind of term the group has to be *told* to be, `undefined` when nothing has to be told.
+   *
+   * Only what is not already entailed by the rest of what the group writes out: a term pin says which
+   * kind of term it is by saying which term it is, and so does any position of a shape that says
+   * something of its own - reading a position entails that what it is read through is a triple term.
+   * Restating either would say the same thing twice and stop the pass being idempotent.
+   *
+   * A shape *nothing* says anything about is the one case where the group has to say it itself, and it
+   * is a triple term by being one at all rather than by anyone having asserted it.
+   */
+  private termTypeToState(group: number, aliases: Map<number, Access[]>): AssertableTermType | undefined {
+    if (this.clusters.pinOf(group)?.kind === 'term') {
+      return undefined;
+    }
+    if (this.clusters.childrenOf(group) !== undefined) {
+      return this.shapeIsWitnessed(group, aliases) ? undefined : 'Quad';
+    }
+    const asserted = this.clusters.assertedRangeOf(group);
+    return asserted.size === 1 ? assertableTermTypes.find(termType => asserted.has(termType)) : undefined;
+  }
+
+  /**
+   * Whether a position of the shape says something of its own, in which case T⟨anchor : Quad⟩ need not be
+   * stated: reading a position already entails that what it is read through is a triple term.
+   *
+   * "Says something" is asked of the position by writing it out, rather than by listing the ways it might
+   * - which is what keeps the two from drifting apart as more of them appear. A position with an alias of
+   * its own writes an edge back to this one; one without writes whatever it writes from here.
    */
   private shapeIsWitnessed(group: number, aliases: Map<number, Access[]>): boolean {
     return childGroupsOf(this.clusters.childrenOf(group)).some(child =>
-      this.clusters.pinOf(child) !== undefined || (aliases.get(child)?.length ?? 0) > 1);
+      (aliases.get(child)?.length ?? 0) > 1 || this.groupConjuncts(child, aliases).length > 0);
   }
 
   /**
@@ -880,10 +931,10 @@ export class AssertionConjunction {
     return this.namedMembers(group)[0];
   }
 
-  /** Whether Θ knows the access to be a triple term, which is what a shape on the group it names is. */
-  private shapeKnownFor(read: Access): boolean {
+  /** The term types Θ leaves the group an access names, `undefined` when it does not name one yet. */
+  private rangeKnownFor(read: Access): RangeSet | undefined {
     const group = this.resolveAccess(read);
-    return group !== undefined && this.clusters.childrenOf(group) !== undefined;
+    return group === undefined ? undefined : this.clusters.rangeOf(group);
   }
 
   /** Whether what is said about an access is only said where its root is bound. */
@@ -1021,7 +1072,7 @@ function isCliqueEdge(conjunct: AssertionConjunct): boolean {
 
 /** Whether the conjunct is about the *shape* of a value rather than about which term it is. */
 function isStructuralConjunct(conjunct: AssertionConjunct): boolean {
-  return !isBareAccess(conjunct.access) || conjunct.assertion.subType === 'triple' ||
+  return !isBareAccess(conjunct.access) || conjunct.assertion.subType === 'termType' ||
     (hasTarget(conjunct.assertion) && isAccessTarget(conjunct.assertion.term) &&
       !isBareAccess(conjunct.assertion.term));
 }

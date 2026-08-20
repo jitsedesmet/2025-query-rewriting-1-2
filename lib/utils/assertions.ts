@@ -2,6 +2,7 @@ import type * as RDF from '@rdfjs/types';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { TriplePosition } from '../datastructures/TermClusterSet.js';
 import { triplePositions } from '../datastructures/TermClusterSet.js';
+import { RangeSet } from '../RangeSet.js';
 import type { TransformContext } from '../transformContext.js';
 import { termVars } from './certainlyBoundVars.js';
 import { DF } from './rdfDatatypes.js';
@@ -63,6 +64,43 @@ export function isBareAccess(access: Access): boolean {
   return access.positions.length === 0;
 }
 
+/**
+ * The term types a SPARQL condition can name with a predicate of its own, and so the ones an assertion
+ * can be about.
+ *
+ * `isNUMERIC` is deliberately not one: it asks after the *datatype* of a literal rather than after the
+ * kind of term, so there is no range for it to narrow and no group fact for it to be.
+ */
+export type AssertableTermType = 'BlankNode' | 'Literal' | 'NamedNode' | 'Quad';
+
+/** The predicate a condition states a term type with, which is also how one is written back. */
+const termTypePredicates: Readonly<Record<AssertableTermType, string>> = {
+  NamedNode: 'isiri',
+  BlankNode: 'isblank',
+  Literal: 'isliteral',
+  Quad: 'istriple',
+};
+
+/** The term types, in the order the lattice writes them, for iterating over all of them. */
+export const assertableTermTypes = <AssertableTermType[]> Object.keys(termTypePredicates);
+
+/**
+ * The term type a predicate states, or `undefined` for anything that is not one of them.
+ *
+ * `isURI` is SPARQL's own synonym for `isIRI`, so it reads as the same fact and is written back as
+ * `isIRI` - the same kind of non-verbatim round trip the other forms already make.
+ */
+export function termTypeOfPredicate(operator: string): AssertableTermType | undefined {
+  return operator === 'isuri' ?
+    'NamedNode' :
+    assertableTermTypes.find(termType => termTypePredicates[termType] === operator);
+}
+
+/** The range a term type narrows a group to - a singleton, a term having exactly one kind. */
+export function rangeOfTermType(termType: AssertableTermType): RangeSet {
+  return new RangeSet([ termType ]);
+}
+
 /** What an assertion fixes an access to: another access, or a ground term. */
 export type AssertionTarget = Access | RDF.Term;
 
@@ -85,9 +123,10 @@ export function targetVars(target: AssertionTarget): string[] {
  *   *shape* it holds.
  * - `weak` is W⟨a ≡ c⟩ ≔ `!bound(?x) || sameTerm(a, c)`, which does not - it is what survives a move into
  *   a place that may leave the variable unbound (the RHS of a MINUS, the unlicensed operand of a join).
- * - `triple` is T⟨?x⟩ ≔ `isTRIPLE(?x)`, the degenerate shape: a triple term, nothing known about its
- *   parts. Like the strong form it implies `bound(?x)`, and like it it has a weak form
- *   (`!bound(?x) || isTRIPLE(?x)`), which is what `weak` records.
+ * - `termType` is T⟨?x : τ⟩ ≔ `isIRI(?x)` / `isBLANK(?x)` / `isLITERAL(?x)` / `isTRIPLE(?x)`: which kind
+ *   of term `?x` is, and nothing about which one. Like the strong form it implies `bound(?x)` - reading
+ *   the kind of an unbound variable is an error - and like it it has a weak form (`!bound(?x) ||
+ *   is<τ>(?x)`), which is what `weak` records.
  * - `unbound` is U⟨?x⟩ ≔ `!bound(?x)`.
  * - `bound` is B⟨?x⟩ ≔ `bound(?x)`, which fixes the variable to no term at all.
  *
@@ -103,9 +142,9 @@ export function targetVars(target: AssertionTarget): string[] {
  * `?x ∉ pVars(A) ⟹ σ_{bound(?x)}(A) ≡ ∅`) and it *completes* a weak assertion into a strong one -
  * `b ∧ (¬b ∨ ?x ≡ c) ≡ ?x ≡ c` - which is where it earns its keep.
  *
- * `bound`, `unbound` and `triple` are restricted to a *bare* access: `BOUND` takes a `Var` by the grammar,
- * and every position of a triple term is bound as soon as the triple term is, so `isTRIPLE(SUBJECT(?o))`
- * is about the group `SUBJECT(?o)` names rather than about `?o`.
+ * `bound` and `unbound` are restricted to a *bare* access, `BOUND` taking a `Var` by the grammar. A
+ * `termType` is not: `isTRIPLE(SUBJECT(?o))` is a perfectly good fact, about the group `SUBJECT(?o)`
+ * names rather than about `?o`.
  *
  * Only the strong form may be substituted into a pattern: `weak` and `unbound` say what the variable is
  * *not* bound to rather than that it is bound, and `bound` says nothing about which term it is.
@@ -122,9 +161,10 @@ export interface WeakAssertion extends BaseAssertion {
   subType: 'weak';
   term: AssertionTarget;
 }
-/** T⟨?x⟩, and - when `weak` - `!bound(?x) || isTRIPLE(?x)`. */
-export interface TripleAssertion extends BaseAssertion {
-  subType: 'triple';
+/** T⟨?x : τ⟩, and - when `weak` - `!bound(?x) || is<τ>(?x)`. */
+export interface TermTypeAssertion extends BaseAssertion {
+  subType: 'termType';
+  termType: AssertableTermType;
   weak: boolean;
 }
 export interface UnboundAssertion extends BaseAssertion {
@@ -134,7 +174,7 @@ export interface BoundAssertion extends BaseAssertion {
   subType: 'bound';
 }
 export type Assertion =
-  BoundAssertion | StrongAssertion | TripleAssertion | UnboundAssertion | WeakAssertion;
+  BoundAssertion | StrongAssertion | TermTypeAssertion | UnboundAssertion | WeakAssertion;
 
 export function assertStrong(term: AssertionTarget): StrongAssertion {
   return {
@@ -160,11 +200,12 @@ function normalisedTarget(target: AssertionTarget): AssertionTarget {
   return !isAccessTarget(target) && target.termType === 'Variable' ? access(target.value) : target;
 }
 
-/** Creates T⟨?x⟩, or its weak form `!bound(?x) || isTRIPLE(?x)`. */
-export function assertTriple(weak = false): TripleAssertion {
+/** Creates T⟨?x : τ⟩, or its weak form `!bound(?x) || is<τ>(?x)`. */
+export function assertTermType(termType: AssertableTermType, weak = false): TermTypeAssertion {
   return {
     type: 'assertion',
-    subType: 'triple',
+    subType: 'termType',
+    termType,
     weak,
   };
 }
@@ -194,7 +235,7 @@ export function hasTarget(assertion: Assertion): assertion is StrongAssertion | 
  */
 export function impliesBound(assertion: Assertion): boolean {
   return assertion.subType === 'strong' || assertion.subType === 'bound' ||
-    (assertion.subType === 'triple' && !assertion.weak);
+    (assertion.subType === 'termType' && !assertion.weak);
 }
 
 /**
@@ -309,14 +350,24 @@ function asConstruction(read: Algebra.Expression, built: Algebra.Expression): As
   }));
 }
 
-/** Recognizes T⟨?x⟩: `isTRIPLE(a)`, which says that `a` is a triple term and nothing about its parts. */
-export function asTripleAssertion(expression: Algebra.Expression): AssertionConjunct | undefined {
-  if (expression.subType !== Algebra.ExpressionTypes.OPERATOR || expression.operator !== 'istriple' ||
-    expression.args.length !== 1) {
+/**
+ * Recognizes T⟨a : τ⟩ - `isIRI(a)`, `isBLANK(a)`, `isLITERAL(a)`, `isTRIPLE(a)` - which says which kind of
+ * term `a` is and nothing about which one.
+ *
+ * The four are one form because they are one fact: each narrows the range of the group `a` names to a
+ * single term type, which is what the emptiness rules and the folds already read. `isTRIPLE` is the only
+ * one with anything below it - the three positions of a shape - and that is a property of the *group*
+ * rather than of this conjunct, which says nothing about the parts.
+ */
+export function asTermTypeAssertion(expression: Algebra.Expression): AssertionConjunct | undefined {
+  if (expression.subType !== Algebra.ExpressionTypes.OPERATOR || expression.args.length !== 1) {
     return undefined;
   }
-  const read = accessOf(expression.args[0]);
-  return read === undefined ? undefined : { access: read, assertion: assertTriple() };
+  const termType = termTypeOfPredicate(expression.operator);
+  const read = termType === undefined ? undefined : accessOf(expression.args[0]);
+  return read === undefined || termType === undefined ?
+    undefined :
+      { access: read, assertion: assertTermType(termType) };
 }
 
 /**
@@ -344,9 +395,10 @@ export function asWeakAssertion(expression: Algebra.Expression): AssertionConjun
       continue;
     }
     const other = expression.args[index === 0 ? 1 : 0];
-    const shaped = asTripleAssertion(other);
-    if (shaped !== undefined && shaped.access.name === unbound && isBareAccess(shaped.access)) {
-      return [{ access: shaped.access, assertion: assertTriple(true) }];
+    const typed = asTermTypeAssertion(other);
+    if (typed?.assertion.subType === 'termType' && typed.access.name === unbound &&
+      isBareAccess(typed.access)) {
+      return [{ access: typed.access, assertion: assertTermType(typed.assertion.termType, true) }];
     }
     const strong = asStrongAssertion(other);
     if (strong?.length === 1) {
@@ -369,9 +421,9 @@ export function assertionOf(expression: Algebra.Expression): AssertionConjunct[]
   if (weak !== undefined) {
     return weak;
   }
-  const shaped = asTripleAssertion(expression);
-  if (shaped !== undefined) {
-    return [ shaped ];
+  const typed = asTermTypeAssertion(expression);
+  if (typed !== undefined) {
+    return [ typed ];
   }
   const unbound = variableOfNotBound(expression);
   if (unbound !== undefined) {
@@ -427,9 +479,13 @@ Algebra.Expression {
   ]);
 }
 
-/** Creates T⟨?x⟩: `isTRIPLE(a)`. */
-export function tripleAssertionExpression(c: TransformContext, read: Access): Algebra.Expression {
-  return c.AF.createOperatorExpression('istriple', [ accessExpression(c, read) ]);
+/** Creates T⟨a : τ⟩: the predicate that states `τ`, applied to `a`. */
+export function termTypeAssertionExpression(
+  c: TransformContext,
+  read: Access,
+  termType: AssertableTermType,
+): Algebra.Expression {
+  return c.AF.createOperatorExpression(termTypePredicates[termType], [ accessExpression(c, read) ]);
 }
 
 /**
@@ -506,8 +562,8 @@ export function weakenedConjunct(conjunct: AssertionConjunct): AssertionConjunct
     case 'bound': {
       return undefined;
     }
-    case 'triple': {
-      return assertion.weak ? conjunct : { access: read, assertion: assertTriple(true) };
+    case 'termType': {
+      return assertion.weak ? conjunct : { access: read, assertion: assertTermType(assertion.termType, true) };
     }
     case 'strong': {
       return isAccessTarget(assertion.term) ? undefined : { access: read, assertion: assertWeak(assertion.term) };

@@ -82,6 +82,8 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
   public groupToPin: Record<number, Pin<Term> | undefined>;
   /** Maps group ID to the term types its value may have, needed for groups that are e.g. the subject of a TripleTerm */
   protected groupToRange: Record<number, RangeSet>;
+  /** Maps group ID to the part of that range a caller *asserted*, as against the part we worked out */
+  protected groupToAssertedRange: Record<number, RangeSet>;
   /**
    * A history of oldGroups (keys) that got merged into newGroups (values).
    * Needed to dereference removed groups still used in a pin.
@@ -105,6 +107,7 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
     super.clear();
     this.groupToPin = {};
     this.groupToRange = {};
+    this.groupToAssertedRange = {};
     this.groupMergeHistory = {};
   }
 
@@ -119,6 +122,7 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
     const copy = <TermClusterSet<T, Term>> target;
     copy.groupToPin = { ...this.groupToPin };
     copy.groupToRange = { ...this.groupToRange };
+    copy.groupToAssertedRange = { ...this.groupToAssertedRange };
     copy.groupMergeHistory = { ...this.groupMergeHistory };
   }
 
@@ -196,6 +200,33 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
   }
 
   /**
+   * The part of {@link rangeOf} a caller asserted, as against the part we worked out for ourselves.
+   *
+   * Anything writing a group back out as a condition has to tell the two apart. That a subject holds no
+   * literal, or that a group pinned to an IRI is one, are facts of where the group sits and of what it
+   * already says - they hold wherever it is written, so restating them would say nothing and would grow
+   * the condition on every pass. What a caller asserted is the part that has to survive the round trip.
+   * @param group - The group to look up
+   * @returns the asserted term types, the top of the lattice when nothing was asserted
+   */
+  public assertedRangeOf(group: number): RangeSet {
+    return this.groupToAssertedRange[this.resolveGroup(group)] ?? objectRange;
+  }
+
+  /**
+   * Narrows the group's range with something a caller *asserts* of it, which {@link assertedRangeOf}
+   * reports back and everything else treats as an ordinary narrowing.
+   * @param group - The group to narrow
+   * @param range - The term types the caller asserts its value has
+   * @returns `false` when nothing is left for it to be, or when its pin is not one of those terms.
+   */
+  public assertTermTypeRange(group: number, range: RangeSet): boolean {
+    const resolved = this.resolveGroup(group);
+    this.groupToAssertedRange[resolved] = this.assertedRangeOf(resolved).disjunct(range);
+    return this.narrowRange(resolved, range);
+  }
+
+  /**
    * Narrows what terms the group's value may have.
    * @returns `false` when nothing is left for it to be, or when its pin is not one of those terms.
    */
@@ -263,10 +294,13 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
     this.groupMergeHistory[oldGroup] = newGroup;
     this.migrateGroupData(oldGroup, newGroup);
     const oldRange = this.groupToRange[oldGroup] ?? objectRange;
+    const oldAssertedRange = this.groupToAssertedRange[oldGroup] ?? objectRange;
     const oldPin = this.groupToPin[oldGroup];
     delete this.groupToRange[oldGroup];
+    delete this.groupToAssertedRange[oldGroup];
     delete this.groupToPin[oldGroup];
-    if (!this.narrowRange(newGroup, oldRange)) {
+    // The asserted half first: it narrows the other one too, so the reverse order would lose it.
+    if (!this.assertTermTypeRange(newGroup, oldAssertedRange) || !this.narrowRange(newGroup, oldRange)) {
       return false;
     }
     return oldPin === undefined || this.place(newGroup, oldPin, work);
@@ -358,6 +392,7 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
     const group = super.createEmptyGroup();
     this.groupToPin[group] = undefined;
     this.groupToRange[group] = objectRange;
+    this.groupToAssertedRange[group] = objectRange;
     return group;
   }
 
@@ -365,6 +400,7 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
     super.dropGroup(group);
     delete this.groupToPin[group];
     delete this.groupToRange[group];
+    delete this.groupToAssertedRange[group];
   }
 }
 

@@ -1338,6 +1338,8 @@ GROUP BY ?x?y`,
         'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(?o, <<( :a :b :c )>>)) }',
         'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(?o, TRIPLE(?s, ?p, ?s))) }',
         'SELECT * WHERE { ?s ?p ?o OPTIONAL { ?o :q ?z } FILTER(isTRIPLE(?z)) }',
+        'SELECT * WHERE { ?s ?p ?o FILTER(isLITERAL(?o)) }',
+        'SELECT * WHERE { ?s ?p ?o FILTER(isIRI(object(?o))) }',
       ]) {
         const once = pushDownAssertions(c, parseQuery(c, prefixes + query));
         const twice = pushDownAssertions(c, pushDownAssertions(c, parseQuery(c, prefixes + query)));
@@ -2019,11 +2021,73 @@ GROUP BY ?x?y`,
       );
     });
 
+    it('empties the plan where a position cannot be the kind of term asserted', ({ expect }) => {
+      // The predicate of a triple term is an IRI, so no solution has a literal there - the same rule for
+      // a position of a shape that `isLITERAL(?s)` is for a subject of a pattern.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(isLITERAL(predicate(?o))) }',
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( FALSE )
+}`,
+      );
+    });
+
+    it('states the kind of term without restating that it is a triple term', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(isIRI(subject(?o))) }',
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( ISIRI( SUBJECT( ?o ) ) )
+}`,
+      );
+    });
+
+    it('empties the plan on a kind of term the position of a pattern cannot hold', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(isLITERAL(?s)) }',
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( FALSE )
+}`,
+      );
+    });
+
+    it('reads `isURI` as the synonym of `isIRI` that it is', ({ expect }) => {
+      // Written back as `isIRI`, which is the same non-verbatim round trip the other forms make.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(isURI(?o)) }',
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( ISIRI( ?o ) )
+}`,
+      );
+    });
+
+    it('prunes the VALUES rows holding another kind of term', ({ expect }) => {
+      // A row decides which kind of term its column holds, so the assertion is discharged here rather
+      // than left on top - what it cannot decide is a *position* of one.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { VALUES (?o) { (:a) ("l") (:b) } FILTER(isIRI(?o)) }',
+        `SELECT ?o WHERE {
+  VALUES ?o {
+    <ex://a>
+    <ex://b>
+  }
+}`,
+      );
+    });
+
     it('leaves the input tree untouched', ({ expect }) => {
       const algebra = parseQuery(c, `${prefixes}SELECT * WHERE {
         ?s ?p ?o
         OPTIONAL { ?o :q ?z }
-        FILTER(sameTerm(subject(?o), ?s) && isTRIPLE(?z))
+        FILTER(sameTerm(subject(?o), ?s) && isTRIPLE(?z) && isIRI(?p))
       }`);
       const before = JSON.stringify(algebra);
       pushDownAssertions(c, algebra);
@@ -2380,6 +2444,38 @@ GROUP BY ?x?y`,
         MINUS { ?z :says ?o FILTER(sameTerm(?z, :a)) }
         FILTER(isTRIPLE(?o))
       }`, 2);
+    });
+
+    it('keeps the rows a kind of term selects', async({ expect }) => {
+      // `:a :value "1"^^xsd:integer` is the only literal object in the fixture.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s ?p ?o
+        FILTER(isLITERAL(?o))
+      }`, 1);
+    });
+
+    it('keeps the rows a kind of term over a position of a triple term selects', async({ expect }) => {
+      // Every triple term in the fixture has an IRI subject, and `:d` says something that is no triple
+      // term at all - where the accessor errors and the row drops.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :says ?o
+        FILTER(isIRI(subject(?o)))
+      }`, 3);
+    });
+
+    it('returns nothing for a kind of term no position can hold', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :says ?o
+        FILTER(isLITERAL(subject(?o)))
+      }`, 0);
+    });
+
+    it('keeps the rows a weak kind of term leaves under an OPTIONAL', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :says ?any
+        OPTIONAL { ?s :value ?o }
+        FILTER(!bound(?o) || isLITERAL(?o))
+      }`, 4);
     });
 
     it('keeps the rows an OPTIONAL collapsed by a shape selects', async({ expect }) => {

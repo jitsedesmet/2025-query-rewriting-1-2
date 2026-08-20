@@ -76,16 +76,16 @@ describe('termClusterSet', () => {
   describe('shapes', () => {
     it('gives a group three positions of its own', ({ expect }) => {
       const set = newSet();
-      const children = <PinChildren> set.shapeOf(set.getGroup('o'));
+      const children = <PinChildren> set.assertTriplePin(set.getGroup('o'));
       expect(children).not.toBe(false);
       expect(new Set(Object.values(children)).size).toBe(3);
       // Asking again is the same shape, not a second one.
-      expect(set.shapeOf(set.getGroup('o'))).toEqual(children);
+      expect(set.assertTriplePin(set.getGroup('o'))).toEqual(children);
     });
 
     it('holds the positions in groups nothing names, which survive on their own', ({ expect }) => {
       const set = newSet();
-      const { subject } = <PinChildren> set.shapeOf(set.getGroup('o'));
+      const { subject } = <PinChildren> set.assertTriplePin(set.getGroup('o'));
       expect(set.valuesOf(subject)).toEqual([]);
       expect(set.setTerm(subject, termA)).toBe(true);
       expect(set.termOf(subject)).toEqual(termA);
@@ -94,9 +94,9 @@ describe('termClusterSet', () => {
     it('unifies the positions of two shapes met on one group', ({ expect }) => {
       const set = newSet();
       // `?o ≡ <<( ?a … )>>` and `?o ≡ <<( ?b … )>>` say `?a ≡ ?b`, which is what the decomposition is.
-      const first = <PinChildren> set.shapeOf(set.getGroup('o'));
+      const first = <PinChildren> set.assertTriplePin(set.getGroup('o'));
       set.setTerm(first.subject, termA);
-      set.shapeOf(set.getGroup('x'));
+      set.assertTriplePin(set.getGroup('x'));
       expect(set.mergeGroups('o', 'x')?.conflict).toBe(false);
       // Everything known about the subject of `?o` is now known about the subject of `?x`.
       expect(set.termOf(<number> set.childrenOf(set.getGroup('x'))?.subject)).toEqual(termA);
@@ -104,42 +104,42 @@ describe('termClusterSet', () => {
 
     it('decomposes a ground triple term against a shape', ({ expect }) => {
       const set = newSet();
-      const { subject } = <PinChildren> set.shapeOf(set.getGroup('o'));
+      const { subject } = <PinChildren> set.assertTriplePin(set.getGroup('o'));
       expect(set.setTerm(set.getGroup('o'), ground)).toBe(true);
       expect(set.termOf(subject)).toEqual(termA);
     });
 
     it('contradicts a shape against a term that is not a triple term', ({ expect }) => {
       const set = newSet();
-      set.shapeOf(set.getGroup('o'));
+      set.assertTriplePin(set.getGroup('o'));
       expect(set.setTerm(set.getGroup('o'), termA)).toBe(false);
     });
 
     it('refuses a shape a group whose range holds no triple term', ({ expect }) => {
       const set = newSet();
       expect(set.narrowRange(set.getGroup('g'), subjectRange)).toBe(true);
-      expect(set.shapeOf(set.getGroup('g'))).toBe(false);
+      expect(set.assertTriplePin(set.getGroup('g'))).toBe(false);
     });
 
     it('gives every position the range that position admits', ({ expect }) => {
       const set = newSet();
-      const { predicate } = <PinChildren> set.shapeOf(set.getGroup('o'));
+      const { predicate } = <PinChildren> set.assertTriplePin(set.getGroup('o'));
       expect([ ...set.rangeOf(predicate) ]).toEqual([ ...predicateRange ]);
       // Which is the same reason a shape on a *subject* position is a contradiction: it confines the
       // nesting of shapes to the `object` chain.
-      const { subject } = <PinChildren> set.shapeOf(set.getGroup('t'));
-      expect(set.shapeOf(subject)).toBe(false);
+      const { subject } = <PinChildren> set.assertTriplePin(set.getGroup('t'));
+      expect(set.assertTriplePin(subject)).toBe(false);
     });
 
     it('drains the merges a decomposition sets off through a work list', ({ expect }) => {
       const set = newSet();
       // `?o ≡ <<( ?a ?b ?c )>>` twice over, with a nested shape in the object of one of them: merging the
       // two decomposes, and merging the objects decomposes again.
-      const first = <PinChildren> set.shapeOf(set.getGroup('o'));
-      const nested = <PinChildren> set.shapeOf(first.object);
+      const first = <PinChildren> set.assertTriplePin(set.getGroup('o'));
+      const nested = <PinChildren> set.assertTriplePin(first.object);
       set.setTerm(nested.subject, termA);
-      const second = <PinChildren> set.shapeOf(set.getGroup('x'));
-      const otherNested = <PinChildren> set.shapeOf(second.object);
+      const second = <PinChildren> set.assertTriplePin(set.getGroup('x'));
+      const otherNested = <PinChildren> set.assertTriplePin(second.object);
       set.setTerm(otherNested.predicate, termB);
       expect(set.mergeGroups('o', 'x')?.conflict).toBe(false);
       const object = <number> set.childrenOf(set.getGroup('o'))?.object;
@@ -152,15 +152,15 @@ describe('termClusterSet', () => {
   describe('the occurs check', () => {
     it('refuses a group a shape it is itself a position of', ({ expect }) => {
       const set = newSet();
-      const children = <PinChildren> set.shapeOf(set.getGroup('o'));
+      const children = <PinChildren> set.assertTriplePin(set.getGroup('o'));
       // `?o ≡ <<( … ?o )>>` - a triple term is strictly larger than each of its positions.
       expect(set.unifyGroups(set.getGroup('o'), children.object)).toBe(false);
     });
 
     it('refuses a merge that closes a cycle rather than one that only makes one deeper', ({ expect }) => {
       const set = newSet();
-      const outer = <PinChildren> set.shapeOf(set.getGroup('o'));
-      const inner = <PinChildren> set.shapeOf(outer.object);
+      const outer = <PinChildren> set.assertTriplePin(set.getGroup('o'));
+      const inner = <PinChildren> set.assertTriplePin(outer.object);
       expect(set.unifyGroups(set.getGroup('o'), inner.object)).toBe(false);
     });
   });
@@ -168,7 +168,7 @@ describe('termClusterSet', () => {
   describe('liveness', () => {
     it('keeps a group a live shape points at when its last member leaves', ({ expect }) => {
       const set = newSet();
-      const { subject } = <PinChildren> set.shapeOf(set.getGroup('o'));
+      const { subject } = <PinChildren> set.assertTriplePin(set.getGroup('o'));
       // `?s ≡ SUBJECT(?o)`: the position is now the group of `?s`.
       expect(set.unifyGroups(set.getGroup('s'), subject)).toBe(true);
       const shared = set.getGroup('s');

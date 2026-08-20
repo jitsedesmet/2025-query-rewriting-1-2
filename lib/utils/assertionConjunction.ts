@@ -587,7 +587,7 @@ export class AssertionConjunction {
   public assertShape(read: Access, weak = false): boolean {
     const apply = (target: AssertionConjunction): boolean => {
       const group = target.openAccess(read);
-      return group !== false && target.clusters.shapeOf(group) !== false;
+      return group !== false && target.clusters.assertTriplePin(group) !== false;
     };
     return weak ? this.assertWeakly(read.name, apply) : this.assertStrongly(read.name, apply);
   }
@@ -741,7 +741,7 @@ export class AssertionConjunction {
   private openAccess(read: Access): number | false {
     let group = this.clusters.getGroup(read.name);
     for (const position of read.positions) {
-      const children = this.clusters.shapeOf(group);
+      const children = this.clusters.assertTriplePin(group);
       if (children === false) {
         return false;
       }

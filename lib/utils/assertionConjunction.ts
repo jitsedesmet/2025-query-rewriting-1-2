@@ -17,24 +17,24 @@ import {
   accessId,
   assertableTermTypes,
   assertBound,
-  assertionExpression,
-  assertionOf,
+  strongAssertionAsExpression,
+  asAssertionConjuncts,
   assertStrong,
   assertTermType,
   assertUnbound,
   assertWeak,
   boundAssertionExpression,
-  conjunctVars,
+  variablesReadByConjunct,
   hasTarget,
   impliesBound,
   isAccessTarget,
   isBareAccess,
   rangeOfTermType,
   sameAccessAs,
-  termTypeAssertionExpression,
+  termTypeAssertionAsExpression,
   unboundAssertionExpression,
   weakAssertionExpression,
-  weakenedConjunct,
+  asWeakenedConjunct,
   weakenedExpression,
 } from './assertions.js';
 import type { CPMeta } from './certainlyBoundVars.js';
@@ -261,7 +261,7 @@ export class AssertionConjunction {
 
   /** The conjuncts of Θ that mention a single variable, which is everything but an edge between two. */
   public singleVariableConjuncts(): AssertionConjunct[] {
-    return this.conjuncts().filter(conjunct => conjunctVars(conjunct).length === 1);
+    return this.conjuncts().filter(conjunct => variablesReadByConjunct(conjunct).length === 1);
   }
 
   /**
@@ -273,7 +273,7 @@ export class AssertionConjunction {
    */
   public accessConjuncts(): AssertionConjunct[] {
     return this.conjuncts().filter(conjunct =>
-      conjunctVars(conjunct).length > 1 && !isCliqueEdge(conjunct));
+      variablesReadByConjunct(conjunct).length > 1 && !isCliqueEdge(conjunct));
   }
 
   /**
@@ -305,7 +305,7 @@ export class AssertionConjunction {
     const inside: AssertionConjunct[] = [];
     const outside: AssertionConjunct[] = [];
     for (const conjunct of this.conjuncts()) {
-      (conjunctVars(conjunct).every(predicate) ? inside : outside).push(conjunct);
+      (variablesReadByConjunct(conjunct).every(predicate) ? inside : outside).push(conjunct);
     }
     return { inside: AssertionConjunction.of(inside), outside: AssertionConjunction.of(outside) };
   }
@@ -321,7 +321,7 @@ export class AssertionConjunction {
    */
   public structural(): AssertionConjunction {
     return AssertionConjunction.of(this.conjuncts().filter(conjunct =>
-      isStructuralConjunct(conjunct) && conjunctVars(conjunct).some(name => !this.decidesTerm(name))));
+      isStructuralConjunct(conjunct) && variablesReadByConjunct(conjunct).some(name => !this.decidesTerm(name))));
   }
 
   /**
@@ -331,7 +331,7 @@ export class AssertionConjunction {
    */
   public weakened(): AssertionConjunction {
     return AssertionConjunction.of(this.conjuncts()
-      .map(conjunct => weakenedConjunct(conjunct))
+      .map(conjunct => asWeakenedConjunct(conjunct))
       .filter(conjunct => conjunct !== undefined));
   }
 
@@ -694,13 +694,13 @@ export class AssertionConjunction {
           return boundAssertionExpression(c, read.name);
         }
         case 'strong': {
-          return assertionExpression(c, read, assertion.term);
+          return strongAssertionAsExpression(c, read, assertion.term);
         }
         case 'weak': {
           return weakAssertionExpression(c, read, assertion.term);
         }
         case 'termType': {
-          const typed = termTypeAssertionExpression(c, read, assertion.termType);
+          const typed = termTypeAssertionAsExpression(c, read, assertion.termType);
           return assertion.weak ? weakenedExpression(c, read.name, typed) : typed;
         }
       }
@@ -1150,7 +1150,7 @@ export function collectAssertions(
         continue;
       }
       // Each form has its own top level shape, so at most one of these recognizes a conjunct.
-      const met = assertionOf(conjunct);
+      const met = asAssertionConjuncts(conjunct);
       if (met === undefined) {
         // Not an assertion we recognize, so goes into the residuals
         residual.push(conjunct);
@@ -1187,4 +1187,4 @@ function sameSubstitution(left: Assertions, right: Assertions): boolean {
 }
 
 export type { AssertionConjunct } from './assertions.js';
-export { conjunctVars, weakenedConjunct } from './assertions.js';
+export { variablesReadByConjunct, asWeakenedConjunct } from './assertions.js';

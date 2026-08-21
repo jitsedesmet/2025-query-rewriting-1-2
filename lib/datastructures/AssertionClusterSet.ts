@@ -48,9 +48,9 @@ export class AssertionClusterSet extends TermClusterSet<string, RDF.Term> {
     return copy;
   }
 
-  protected override copyInto(target: TermClusterSet<string, RDF.Term>): void {
+  protected override copyInto(target: AssertionClusterSet): void {
     super.copyInto(target);
-    (<AssertionClusterSet> target).groupToAssertedRange = { ...this.groupToAssertedRange };
+    target.groupToAssertedRange = { ...this.groupToAssertedRange };
   }
 
   /**
@@ -114,13 +114,14 @@ export class AssertionClusterSet extends TermClusterSet<string, RDF.Term> {
  */
 function meetTermPins(left: Pin<RDF.Term>, right: Pin<RDF.Term>): PinMeet<RDF.Term> | false {
   if (left.kind === 'triple') {
-    return right.kind === 'triple' ?
-        {
-          pin: left,
-          entailed: triplePositions.map(position =>
-            ({ kind: 'unify', left: left[position], right: right[position] })),
-        } :
-      decomposedAgainst(left, right.term);
+    if (right.kind === 'triple') {
+      return {
+        pin: left,
+        entailed: triplePositions.map(position =>
+          ({ kind: 'unify', left: left[position], right: right[position] })),
+      };
+    }
+    return decomposedAgainst(left, right.term);
   }
   if (right.kind === 'triple') {
     return decomposedAgainst(right, left.term);
@@ -137,12 +138,12 @@ function meetTermPins(left: Pin<RDF.Term>, right: Pin<RDF.Term>): PinMeet<RDF.Te
  * positions are decided.
  */
 function decomposedAgainst(shape: TriplePin, ground: RDF.Term): PinMeet<RDF.Term> | false {
-  if (ground.termType !== 'Quad' || ground.graph.termType !== 'DefaultGraph') {
-    return false;
+  if (ground.termType === 'Quad' && ground.graph.termType === 'DefaultGraph') {
+    return {
+      pin: shape,
+      entailed: triplePositions.map(position =>
+        ({ kind: 'pin', group: shape[position], pin: { kind: 'term', term: ground[position] }})),
+    };
   }
-  return {
-    pin: shape,
-    entailed: triplePositions.map(position =>
-      ({ kind: 'pin', group: shape[position], pin: { kind: 'term', term: ground[position] }})),
-  };
+  return false;
 }

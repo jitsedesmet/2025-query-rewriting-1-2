@@ -13,7 +13,7 @@ import {
   access,
   assertBound,
   assertStrong,
-  conjunctVars,
+  variablesReadByConjunct,
   hasTarget,
   impliesBound,
   isAccessTarget,
@@ -21,7 +21,7 @@ import {
   isBareAccess,
   substituteInPattern,
   substituteInTerm,
-  weakenedConjunct,
+  asWeakenedConjunct,
 } from '../utils/assertions.js';
 import type { CPMeta } from '../utils/certainlyBoundVars.js';
 import { withCpVars, withoutCpVars } from '../utils/certainlyBoundVars.js';
@@ -692,7 +692,7 @@ function pushIntoGraph(
   // The pattern is licensed for every variable but `?g`, and it connects what it takes, so an edge over
   // two of them travels whole and an edge touching `?g` stays where it is.
   for (const conjunct of assertions.accessConjuncts()) {
-    (conjunctVars(conjunct).includes(graphVar) ? kept : inside).push(conjunct);
+    (variablesReadByConjunct(conjunct).includes(graphVar) ? kept : inside).push(conjunct);
   }
   return keep(assertionFilter(
     c,
@@ -753,7 +753,7 @@ function pushIntoJoin(
   const kept: AssertionConjunct[] = [];
   // For every assertion about a single variable, find out where it can go.
   for (const conjunct of assertions.singleVariableConjuncts()) {
-    const [ name ] = conjunctVars(conjunct);
+    const [ name ] = variablesReadByConjunct(conjunct);
     const { assertion } = conjunct;
     let placedStrongly = false;
     const assertionImpliesBound = impliesBound(assertion);
@@ -762,7 +762,7 @@ function pushIntoJoin(
         operandAssertions[index].push(conjunct);
         placedStrongly = true;
       } else if (operands[index].vRanges.canBind(name)) {
-        const demoted = weakenedConjunct(conjunct);
+        const demoted = asWeakenedConjunct(conjunct);
         // Bound assertion knows no weak form and cannot be pushed
         if (demoted !== undefined) {
           operandAssertions[index].push(demoted);
@@ -792,7 +792,7 @@ function pushIntoJoin(
   for (const conjunct of assertions.accessConjuncts()) {
     const placed = placeAccessConjunct(
       conjunct,
-      join.input.map((_, index) => conjunctVars(conjunct).every(name => licensed(index, name))),
+      join.input.map((_, index) => variablesReadByConjunct(conjunct).every(name => licensed(index, name))),
       join.input.map(() => true),
     );
     for (const [ index, licence ] of placed.intoTarget.entries()) {
@@ -889,7 +889,7 @@ function pushIntoLeftJoin(
   const intoRight: AssertionConjunct[] = [];
   const kept: AssertionConjunct[] = [];
   for (const conjunct of assertions.singleVariableConjuncts()) {
-    const [ name ] = conjunctVars(conjunct);
+    const [ name ] = variablesReadByConjunct(conjunct);
     const { assertion } = conjunct;
     if (impliesBound(assertion) && licensedLeft(name)) {
       intoLeft.push(conjunct);
@@ -899,7 +899,7 @@ function pushIntoLeftJoin(
     } else {
       // Not licensed as itself, but the weaker forms always are on the left - except B⟨?x⟩, which has none.
       // It stays here as well, since the right hand side can still introduce a binding that violates it.
-      const demoted = leftVars.vRanges.canBind(name) ? weakenedConjunct(conjunct) : undefined;
+      const demoted = leftVars.vRanges.canBind(name) ? asWeakenedConjunct(conjunct) : undefined;
       if (demoted !== undefined) {
         intoLeft.push(demoted);
       }
@@ -919,7 +919,7 @@ function pushIntoLeftJoin(
     kept.push(...placed.kept);
   }
   for (const conjunct of assertions.accessConjuncts()) {
-    const roots = conjunctVars(conjunct);
+    const roots = variablesReadByConjunct(conjunct);
     const placed = placeAccessConjunct(
       conjunct,
       [ roots.every(licensedLeft), roots.every(licensedRight) ],
@@ -1074,7 +1074,7 @@ function placeAccessConjunct(
 function weakenedTerms(assertions: AssertionConjunction): AssertionConjunction {
   return AssertionConjunction.of(assertions.singleVariableConjuncts()
     .filter(({ assertion }) => assertion.subType === 'strong' || assertion.subType === 'termType')
-    .map(conjunct => weakenedConjunct(conjunct))
+    .map(conjunct => asWeakenedConjunct(conjunct))
     .filter(conjunct => conjunct !== undefined));
 }
 

@@ -101,12 +101,12 @@ export function accessId(a: Access): string { return [ a.name, ...a.positions ].
 * `AssertionConjunct` becomes `{ access, assertion }`; today's `{ name, assertion }` is
   `positions: []`.
 * The RHS of a strong/weak assertion becomes `Access | RDF.Term`. Normalise a *variable* RHS to the
-  zero-length `Access` so there is only one spelling; `conjunctVars` and `splitClique` currently match
+  zero-length `Access` so there is only one spelling; `variablesReadByConjunct` and `splitClique` currently match
   on `term.termType === 'Variable'`.
 * `bound` / `unbound` stay restricted to `positions.length === 0` — `BOUND` takes a `Var` by grammar,
   and the subject of a triple term is always bound.
 * `conjunctVars(conjunct)` returns the **root names** of both sides. Everything downstream
-  (`weakenedConjunct`, `split`, the join/left-join licences) already reads only that and must keep
+  (`asWeakenedConjunct`, `split`, the join/left-join licences) already reads only that and must keep
   doing so.
 
 ### D2 — one new form, `T⟨?x : τ⟩`
@@ -278,7 +278,7 @@ shape-pinned group: `isTRIPLE(anchor)` when no position is informative, otherwis
 
 **S4 — a conjunct weakens iff it mentions exactly one variable.** `!bound(?o) || sameTerm(subject(?o), :a)`
 and `!bound(?o) || isTRIPLE(?o)` are fine; `sameTerm(subject(?o), ?s)` is a clique edge and does not
-weaken. `weakenedConjunct` keeps its current shape, reading `conjunctVars(conjunct).length === 1`.
+weaken. `asWeakenedConjunct` keeps its current shape, reading `conjunctVars(conjunct).length === 1`.
 Same generalisation for `weakenedTerms` (the MINUS RHS): its argument turns on the two sides agreeing
 on the value, and equal values have equal subjects, so any *unary* predicate on the value is admissible.
 
@@ -305,7 +305,7 @@ pass stacks a second copy. The substitution argument becomes a view (`resolve(ac
 | VALUES | prune *rows* by asserting the row into a clone of Θ (a ground triple-term value decomposes against a shape by itself); drop a *column* iff Θ can rebuild its value from the columns that survive. Worked examples in `report.md` §4. Whether you rewrite the per-variable `switch` or extend it is **your call** — keep the existing evaluation tests green. |
 | UNION, PROJECT, DISTINCT, REDUCED, ORDER BY, FROM, FILTER, GROUP | nothing beyond D1 |
 | GRAPH | a shape pin on `?g` is a contradiction — state it as a *range* fact (`graphRange` is `{NamedNode, BlankNode}`, no `Quad`) and let `normalisedFor` empty the plan, the way the term case now does; `pushIntoGraph` no longer type-checks terms itself |
-| JOIN / LEFT JOIN | licences already read `conjunctVars`; generalise `splitClique` to groups and add S6 |
+| JOIN / LEFT JOIN | licences already read `variablesReadByConjunct`; generalise `splitClique` to groups and add S6 |
 | MINUS | `weakenedTerms` per S4 |
 | EXTEND | `transferred` gains: `BIND(<<( ?a ?b ?c )>> AS ?o)` under a shape on `?o` transfers onto `?a ?b ?c`; `BIND(subject(?o) AS ?x)` transfers onto the access. This is the `TODO(next time)` at `pushDownAssertions.ts:459`. |
 
@@ -330,7 +330,7 @@ first is written back in accessor form, so it does not round-trip verbatim — t
    asks `isLive` rather than `carriesInformation` alone, so that a group a live pin points at survives.
 3. ~~Accesses and `T⟨?x⟩` (D1, D2), recognisers, `toExpression`, the folds of S7. At the end of this
    commit Θ round-trips through a condition; nothing is written into patterns yet.~~ **Done (working
-   tree).** Beyond the plan: `assertionOf` returns a *list* of conjuncts, since
+   tree).** Beyond the plan: `asAssertionConjuncts` returns a *list* of conjuncts, since
    `sameTerm(?o, <<( ?a ?b ?c )>>)` is three of them; `conjuncts()` enumerates the *aliases* of every
    group reachable from a named variable, which is what makes a shape decompose into conditions and
    reconstruct from them; and the BGP/PATH/VALUES rules keep `structural()` on top, since a rewrite that

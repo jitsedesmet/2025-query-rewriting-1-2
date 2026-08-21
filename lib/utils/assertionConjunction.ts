@@ -111,7 +111,9 @@ import { DF } from './rdfDatatypes.js';
  * A conjunction they returned `false` for holds no meaningful state and has to be discarded.
  */
 export class AssertionConjunction {
-  /** Variable to its group; a group may be pinned to the term or the shape all of its members equal. */
+  /**
+   * Variable to its group; a group may be pinned to the term or the shape all of its members equal.
+   */
   private clusters: AssertionClusterSet;
   /**
    * Strength only applies to variables in groups. If you are not in a group, you are a stale leftover.
@@ -253,7 +255,7 @@ export class AssertionConjunction {
    * would state the same thing twice and stop the pass being idempotent.
    */
   public conjuncts(): AssertionConjunct[] {
-    const aliases = this.aliases();
+    const aliases = this.anchoredAccessesPerGroup();
     const result: AssertionConjunct[] = [];
     const emitted = new Set<number>();
     const emit = (group: number): void => {
@@ -567,27 +569,31 @@ export class AssertionConjunction {
    *
    * The inverse of {@link conjuncts}: a strong assertion whose target is an access is the view of an edge,
    * and reading it back unifies the two groups.
+   * @return false on contradiction
    */
-  public assert(read: Access, assertion: Assertion): boolean {
+  public assert(access: Access, assertion: Assertion): boolean {
     switch (assertion.subType) {
       case 'unbound': {
-        return this.assertUnbound(rootOfBare(read, 'unbound'));
+        return this.assertUnbound(rootOfBare(access, 'unbound'));
       }
       case 'bound': {
-        return this.assertBound(rootOfBare(read, 'bound'));
+        return this.assertBound(rootOfBare(access, 'bound'));
       }
       case 'termType': {
-        return this.assertTermType(read, assertion.termType, assertion.weak);
+        return this.assertTermType(access, assertion.termType, assertion.weak);
       }
       case 'strong': {
         return isAccessTarget(assertion.term) ?
-          this.assertUnify(read, assertion.term) :
-          this.assertPin(read, assertion.term, true);
+          this.assertUnify(access, assertion.term) :
+          this.assertPin(access, assertion.term, true);
       }
       case 'weak': {
         // A weak *edge* is not a state this can be in (weak ⇔ pinned group), and neither the recognisers
         // nor {@link asWeakenedConjunct} ever produce one, so the target of a weak assertion is a term.
-        return isAccessTarget(assertion.term) || this.assertPin(read, assertion.term, false);
+        if (isAccessTarget(assertion.term)) {
+          return true;
+        }
+        return this.assertPin(access, assertion.term, false);
       }
     }
   }
@@ -610,12 +616,15 @@ export class AssertionConjunction {
    * `?o` is a triple term as much as it says what its subject is, and under the weak form it says both
    * only where `?o` is bound at all.
    */
-  public assertPin(read: Access, term: RDF.Term, strong: boolean): boolean {
-    const apply = (target: AssertionConjunction): boolean => {
-      const group = target.openAccess(read);
-      return group !== false && target.clusters.setTerm(group, term);
-    };
-    return strong ? this.assertStrongly(read.name, apply) : this.assertWeakly(read.name, apply);
+  public assertPin(access: Access, term: RDF.Term, strong: boolean): boolean {
+    function apply(target: AssertionConjunction): boolean {
+      const group = target.assertAccessAndResolve(access);
+      if (group === false) {
+        return false;
+      }
+      return target.clusters.setTerm(group, term);
+    }
+    return strong ? this.assertStrongly(access.name, apply) : this.assertWeakly(access.name, apply);
   }
 
   /**
@@ -628,10 +637,13 @@ export class AssertionConjunction {
    * to the same `{Quad}` - so the two never disagree.
    */
   public assertTermType(read: Access, termType: AssertableTermType, weak = false): boolean {
-    const apply = (target: AssertionConjunction): boolean => {
-      const group = target.openAccess(read);
-      return group !== false && target.clusters.assertTermTypeRange(group, rangeOfTermType(termType));
-    };
+    function apply(target: AssertionConjunction): boolean {
+      const group = target.assertAccessAndResolve(read);
+      if (group === false) {
+        return false;
+      }
+      return target.clusters.assertTermTypeRange(group, rangeOfTermType(termType));
+    }
     return weak ? this.assertWeakly(read.name, apply) : this.assertStrongly(read.name, apply);
   }
 
@@ -648,7 +660,7 @@ export class AssertionConjunction {
       // the access shapes every group on the way to it and leaves the group it names alone.
       return isBareAccess(left) ?
         this.assertBound(left.name) :
-        this.assertStrongly(left.name, target => target.openAccess(left) !== false);
+        this.assertStrongly(left.name, target => target.assertAccessAndResolve(left) !== false);
     }
     this.remember(left.name);
     this.remember(right.name);
@@ -660,8 +672,8 @@ export class AssertionConjunction {
     this.bound.delete(right.name);
     this.strength.set(left.name, 'strong');
     this.strength.set(right.name, 'strong');
-    const leftGroup = this.openAccess(left);
-    const rightGroup = this.openAccess(right);
+    const leftGroup = this.assertAccessAndResolve(left);
+    const rightGroup = this.assertAccessAndResolve(right);
     if (leftGroup === false || rightGroup === false) {
       return false;
     }
@@ -769,6 +781,7 @@ export class AssertionConjunction {
     }
     const attempt = this.clone();
     attempt.strength.set(root, 'weak');
+    // If adding the assertion fails, we know we can only be unbound
     if (apply(attempt)) {
       this.adopt(attempt);
       return true;
@@ -777,13 +790,14 @@ export class AssertionConjunction {
   }
 
   /**
-   * The group an access names, giving every group on the way the shape of a triple term - which is what
-   * reading a position of it asserts.
+   * An access that is not a plain variable need to assert a chain o groups and
+   * thereby create the group the access refers to.
    * @returns `false` when one of those shapes contradicts what the group already holds.
+   *   Otherwise, the group the access represents.
    */
-  private openAccess(read: Access): number | false {
-    let group = this.clusters.getGroup(read.name);
-    for (const position of read.positions) {
+  private assertAccessAndResolve(access: Access): number | false {
+    let group = this.clusters.getGroup(access.name);
+    for (const position of access.positions) {
       const children = this.clusters.assertTriplePin(group);
       if (children === false) {
         return false;
@@ -794,10 +808,13 @@ export class AssertionConjunction {
   }
 
   /** The group an access names, without asserting anything - `undefined` when Θ does not name it yet. */
-  private resolveAccess(read: Access): number | undefined {
-    let group = this.clusters.groupOf(read.name);
-    for (const position of read.positions) {
-      const children = group === undefined ? undefined : this.clusters.childrenOf(group);
+  private resolveAccess(access: Access): number | undefined {
+    let group = this.clusters.groupOf(access.name);
+    for (const position of access.positions) {
+      if (group === undefined) {
+        return undefined;
+      }
+      const children = this.clusters.childrenOf(group);
       if (children === undefined) {
         return undefined;
       }
@@ -897,6 +914,12 @@ export class AssertionConjunction {
 
   /**
    * Every group Θ can reach from a variable it names, with the accesses reading it, anchor first.
+   * - FILTER(sameTerm(?x, ?y)) — one group, two members. Entry: [?x, ?y], anchor ?x. The conjunct is the edge ?y ≡ ?x.
+   * - FILTER(sameTerm(SUBJECT(?o), ?s)) — two groups. ?o's group: [?o]. The subject position:
+   *      [?s, SUBJECT(?o)], anchor ?s, giving the edge SUBJECT(?o) ≡ ?s.
+   *      The other two positions are anonymous: [PREDICATE(?o)] and [OBJECT(?o)], one reading each, nothing to say.
+   * - FILTER(sameTerm(SUBJECT(?o), :a)) — the subject position has only [SUBJECT(?o)], so no edge;
+   *      it writes SUBJECT(?o) ≡ :a from that single reading.
    *
    * Two passes, because an access reading a group through a shape is written from the *anchor* of the
    * group holding that shape: the anchors are settled first, shortest path and lexicographic first within
@@ -904,19 +927,20 @@ export class AssertionConjunction {
    * result at all - it is what is left of a shape a variable was taken out of, and nothing may be written
    * about it, since there is no way left to name it.
    */
-  private aliases(): Map<number, Access[]> {
+  private anchoredAccessesPerGroup(): Map<number, Access[]> {
     const anchors = new Map<number, Access>();
-    let frontier: number[] = [];
+    let groupsToDo: number[] = [];
+    // Iterate all groups, also groups taht were created to represent un-asserted positions of a tripleTerm variable.
     for (const [ group ] of this.clusters.groupEntries()) {
-      const [ first ] = this.namedMembers(group);
-      if (first !== undefined) {
-        anchors.set(group, access(first));
-        frontier.push(group);
+      const [ representative ] = this.namedMembers(group);
+      if (representative !== undefined) {
+        anchors.set(group, access(representative));
+        groupsToDo.push(group);
       }
     }
-    while (frontier.length > 0) {
+    while (groupsToDo.length > 0) {
       const next = new Map<number, Access>();
-      for (const group of frontier) {
+      for (const group of groupsToDo) {
         const children = this.clusters.childrenOf(group);
         for (const [ position, child ] of childEntriesOf(children)) {
           if (anchors.has(child)) {
@@ -932,7 +956,7 @@ export class AssertionConjunction {
       for (const [ group, via ] of next) {
         anchors.set(group, via);
       }
-      frontier = [ ...next.keys() ];
+      groupsToDo = [ ...next.keys() ];
     }
 
     const result = new Map<number, Access[]>();

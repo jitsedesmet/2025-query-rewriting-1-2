@@ -856,7 +856,20 @@ export class AssertionConjunction {
    */
   private shapeIsWitnessed(group: number, aliases: Map<number, Access[]>): boolean {
     return childGroupsOf(this.clusters.childrenOf(group)).some(child =>
-      (aliases.get(child)?.length ?? 0) > 1 || this.groupConjuncts(child, aliases).length > 0);
+      (aliases.get(child)?.length ?? 0) > 1 || this.writesAnything(child, aliases));
+  }
+
+  /**
+   * Whether the group, or anything the shape of it reaches, writes a conjunct of its own.
+   *
+   * The whole subtree rather than the group alone: a position that says nothing itself may hold one that
+   * does, and `SUBJECT(OBJECT(?o)) ≡ :c` entails that `?o` is a triple term just as surely from two
+   * levels down as from one. Asking only the position would restate it - and a position that says nothing
+   * with *nothing* below it is the one case that has to be stated, which is the T⟨…⟩ it writes.
+   */
+  private writesAnything(group: number, aliases: Map<number, Access[]>): boolean {
+    return this.groupConjuncts(group, aliases).length > 0 ||
+      childGroupsOf(this.clusters.childrenOf(group)).some(child => this.writesAnything(child, aliases));
   }
 
   /**

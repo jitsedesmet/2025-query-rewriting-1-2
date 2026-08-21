@@ -4,7 +4,7 @@ import { objectRange, predicateRange, subjectRange } from '../RangeSet.js';
 import type { RangeSet } from '../RangeSet.js';
 import type { TransformContext } from '../transformContext.js';
 import type { Access } from './assertions.js';
-import { asAccess, isAssertableTerm, rangeOfTermType, asAssertabletermType } from './assertions.js';
+import { asAccess, isAssertableTerm, rangeOfTermType, asAssertableTermType } from './assertions.js';
 import { booleanConstantOf, createBooleanExpression, isIriExpression } from './expressionHelpers.js';
 import { DF } from './rdfDatatypes.js';
 import { unionSets } from './setUtils.js';
@@ -120,7 +120,7 @@ function decideAccess(
   expression: Algebra.OperatorExpression,
   assertions: AssertionView,
 ): Algebra.Expression | undefined {
-  const stated = asAssertabletermType(expression.operator);
+  const stated = asAssertableTermType(expression.operator);
   if (stated !== undefined && expression.args.length === 1) {
     const read = asAccess(expression.args[0]);
     const range = read === undefined ? undefined : assertions.typeRange(read);
@@ -212,7 +212,7 @@ export function constantFoldOperator(
       // erroring, so both directions fold.
       const ground = args.length === 1 ? groundArgument(args[0]) : undefined;
       if (ground !== undefined) {
-        return createBooleanExpression(c, ground.termType === asAssertabletermType(operator));
+        return createBooleanExpression(c, ground.termType === asAssertableTermType(operator));
       }
       break;
     }

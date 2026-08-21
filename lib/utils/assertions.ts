@@ -75,7 +75,7 @@ export type AssertableTermType = 'BlankNode' | 'Literal' | 'NamedNode' | 'Quad';
 
 /**
  * The predicate a condition states a term type with, which is also how one is written back.
- * We need to harmonize isIri and isUri manualy using {@link asAssertabletermType}.
+ * We need to harmonize isIri and isUri manualy using {@link asAssertableTermType}.
  */
 const termTypePredicates: Readonly<Record<AssertableTermType, string>> = {
   NamedNode: 'isiri',
@@ -93,7 +93,7 @@ export const assertableTermTypes = <AssertableTermType[]> Object.keys(termTypePr
  * `isURI` is SPARQL's own synonym for `isIRI`, so it reads as the same fact and is written back as
  * `isIRI` - the same kind of non-verbatim round trip the other forms already make.
  */
-export function asAssertabletermType(operator: string): AssertableTermType | undefined {
+export function asAssertableTermType(operator: string): AssertableTermType | undefined {
   const termAssertion = operator === 'isuri' ? 'isiri' : operator;
   return assertableTermTypes.find(termType => termTypePredicates[termType] === termAssertion);
 }
@@ -109,11 +109,6 @@ export type AssertionTarget = Access | RDF.Term;
 /** Whether the target is an access rather than a term - the two are told apart by their shape. */
 export function isAccessTarget(target: AssertionTarget): target is Access {
   return 'positions' in target;
-}
-
-/** The variables a target reads: one for an access, none for a term. */
-export function targetVars(target: AssertionTarget): string[] {
-  return isAccessTarget(target) ? [ target.name ] : [];
 }
 
 /**
@@ -270,17 +265,21 @@ export function isAssertableTerm(term: RDF.Term): boolean {
  *
  * `OBJECT(SUBJECT(?o))` is `{ name: 'o', positions: [ 'subject', 'object' ]}` - the chain is unwrapped
  * from the outside in, so the positions come out in the order they are applied.
+ * @param expression - The expression to read
+ * @param acc - The accessors met so far, outermost first; a caller starts with none
+ * @returns the access, or `undefined` when the expression does more than read one
  */
-export function asAccess(expression: Algebra.Expression, acc: TriplePosition[] = []): Access | undefined {
+export function asAccess(expression: Algebra.Expression, acc: readonly TriplePosition[] = []):
+Access | undefined {
   if (expression.subType === Algebra.ExpressionTypes.TERM) {
+    // The accessors were met from the outside in, so the innermost one read is the first one applied.
     return expression.term.termType === 'Variable' ?
-        { name: expression.term.value, positions: acc.reverse() } :
+        { name: expression.term.value, positions: [ ...acc ].reverse() } :
       undefined;
   }
-  if (expression.subType === Algebra.ExpressionTypes.OPERATOR && expression.args.length !== 1 &&
+  if (expression.subType === Algebra.ExpressionTypes.OPERATOR && expression.args.length === 1 &&
       triplePositions.includes(<TriplePosition> expression.operator)) {
-    acc.push(<TriplePosition> expression.operator);
-    return asAccess(expression.args[0], acc);
+    return asAccess(expression.args[0], [ ...acc, <TriplePosition> expression.operator ]);
   }
   return undefined;
 }
@@ -369,7 +368,7 @@ function decomposedConstruction(read: Algebra.Expression, built: Algebra.Express
 export function asTermTypeAssertion(expression: Algebra.Expression):
     (AssertionConjunct & { assertion: TermTypeAssertion }) | undefined {
   if (expression.subType === Algebra.ExpressionTypes.OPERATOR && expression.args.length === 1) {
-    const termType = asAssertabletermType(expression.operator);
+    const termType = asAssertableTermType(expression.operator);
     if (termType !== undefined) {
       const access = asAccess(expression.args[0]);
       if (access !== undefined) {
@@ -541,16 +540,19 @@ export interface AssertionConjunct {
   assertion: Assertion;
 }
 
+/**
+ * The *root* variables a conjunct reads - two iff it is an edge between two of them, and one where both
+ * of its sides read the same variable through different accessors.
+ *
+ * Everything that places a conjunct reads only this: (FJPush)'s side condition is quantified over
+ * `vars(R)`, and the variables an accessor conjunct is about are the ones it reads *through*.
+ * @param conjunct - The conjunct to read
+ * @returns the variables it mentions, without repetition, the one it is about first
+ */
 export function variablesReadByConjunct(conjunct: AssertionConjunct): string[] {
-  const result = [ conjunct.access.name ];
-  if (hasTarget(conjunct.assertion)) {
-    for (const name of targetVars(conjunct.assertion.term)) {
-      if (!result.includes(name)) {
-        result.push(name);
-      }
-    }
-  }
-  return result;
+  const { access: read, assertion } = conjunct;
+  const target = hasTarget(assertion) && isAccessTarget(assertion.term) ? [ assertion.term.name ] : [];
+  return [ ...new Set([ read.name, ...target ]) ];
 }
 
 /**

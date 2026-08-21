@@ -1,4 +1,5 @@
 import { toAst } from '@traqula/algebra-sparql-1-2';
+import type { Algebra as AlgebraTypes } from '@traqula/algebra-transformations-1-2';
 import { describe, it } from 'vitest';
 import type { RangeSet } from '../lib/RangeSet.js';
 import { emptyRange, graphRange, predicateRange } from '../lib/RangeSet.js';
@@ -84,6 +85,14 @@ function stateOf(assertions: AssertionConjunction | undefined, name: string): st
     return `${assertion.weak ? 'weakType' : 'type'}(${assertion.termType})`;
   }
   return assertion.subType;
+}
+
+/** The expression `positions` read off `?name`, outermost accessor last: `OBJECT(SUBJECT(?o))`. */
+function reads(name: string, ...positions: string[]): AlgebraTypes.Expression {
+  return positions.reduce<AlgebraTypes.Expression>(
+    (inner, position) => c.AF.createOperatorExpression(position, [ inner ]),
+    c.AF.createTermExpression(DF.variable(name)),
+  );
 }
 
 /** The conjunction, serialised through the generator - which is also how the pass writes it into a plan. */
@@ -640,6 +649,37 @@ describe('assertionConjunction', () => {
       const assertions = <AssertionConjunction> conjunctionOf([ 'x', assertStrong(DF.variable('p')) ]);
       const normalised = assertions.normalisedFor({ cVars: new Set([ 'x', 'p' ]), vRanges });
       expect(conjunctsOf(normalised)).toEqual([ 'x=strong(p)' ]);
+    });
+
+    it('reads a condition about a position as an assertion, not as a residual', ({ expect }) => {
+      // Worth pinning on its own, because a *failure* to recognise one is close to invisible further out:
+      // what the pass writes back for an assertion it cannot move is the condition it started from, so a
+      // broken recogniser shows up as a residual that happens to read the same. Only the cases where the
+      // assertion does travel - a deleted UNION branch, an emptied plan - tell the two apart.
+      const collected = collectAssertions(c, c.AF.createOperatorExpression('sameterm', [
+        reads('o', 'subject'),
+        c.AF.createTermExpression(DF.variable('s')),
+      ]));
+      expect(collected?.residual).toBeUndefined();
+      expect(conjunctsOf(collected?.assertions)).toEqual([ 'o.subject=strong(s)' ]);
+    });
+
+    it('reads a chain of accessors in the order they are applied', ({ expect }) => {
+      // `SUBJECT(OBJECT(?o))` is `?o` read at its object and *then* at that object's subject - the
+      // expression nests the other way round, so the two orders are easy to swap by accident. Read
+      // backwards it would be `OBJECT(SUBJECT(?o))`, which is not even satisfiable: no subject is a
+      // triple term, which is what confines the nesting to the `object` chain.
+      const collected = collectAssertions(c, c.AF.createOperatorExpression('sameterm', [
+        reads('o', 'object', 'subject'),
+        c.AF.createTermExpression(termC),
+      ]));
+      expect(collected?.residual).toBeUndefined();
+      expect(conjunctsOf(collected?.assertions)).toEqual([ 'o.object.subject=strong(ex://c)' ]);
+      // And the impossible direction is empty rather than misread.
+      expect(collectAssertions(c, c.AF.createOperatorExpression('sameterm', [
+        reads('o', 'subject', 'object'),
+        c.AF.createTermExpression(termC),
+      ]))).toBeUndefined();
     });
 
     it('hands an edge reading through an accessor over one at a time', ({ expect }) => {

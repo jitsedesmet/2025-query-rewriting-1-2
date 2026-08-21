@@ -675,6 +675,9 @@ describe('assertionConjunction', () => {
       ]));
       expect(collected?.residual).toBeUndefined();
       expect(conjunctsOf(collected?.assertions)).toEqual([ 'o.object.subject=strong(ex://c)' ]);
+      // And back out as the chain it came in as, which is what keeps a second run from re-deriving it.
+      expect(conditionOf(<AssertionConjunction> collected?.assertions))
+        .toBe('FILTER ( SAMETERM( SUBJECT( OBJECT( ?o ) ) , <ex://c> ) )');
       // And the impossible direction is empty rather than misread.
       expect(collectAssertions(c, c.AF.createOperatorExpression('sameterm', [
         reads('o', 'subject', 'object'),

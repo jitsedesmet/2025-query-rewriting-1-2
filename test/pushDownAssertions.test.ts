@@ -1340,6 +1340,8 @@ GROUP BY ?x?y`,
         'SELECT * WHERE { ?s ?p ?o OPTIONAL { ?o :q ?z } FILTER(isTRIPLE(?z)) }',
         'SELECT * WHERE { ?s ?p ?o FILTER(isLITERAL(?o)) }',
         'SELECT * WHERE { ?s ?p ?o FILTER(isIRI(object(?o))) }',
+        'SELECT * WHERE { ?s ?p ?o FILTER(subject(object(?o)) = :subj) }',
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(subject(?o), subject(?o))) }',
       ]) {
         const once = pushDownAssertions(c, parseQuery(c, prefixes + query));
         const twice = pushDownAssertions(c, pushDownAssertions(c, parseQuery(c, prefixes + query)));
@@ -2083,6 +2085,70 @@ GROUP BY ?x?y`,
       );
     });
 
+    it('reads and writes back a chain of accessors', ({ expect }) => {
+      // Two levels down, which is where a chain can go at all: only the object of a triple term holds
+      // another one. Written back as the chain it was read from, and it re-parses as one.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { { ?s ?p ?o } UNION { ?x ?y ?z } FILTER(sameTerm(subject(object(?o)), :subj)) }',
+        `SELECT ?o ?p ?s ?x ?y ?z WHERE {
+  {
+    ?s ?p ?o .
+    FILTER ( SAMETERM( SUBJECT( OBJECT( ?o ) ) , <ex://subj> ) )
+  }
+  UNION {
+    ?x ?y ?z .
+    FILTER ( FALSE )
+  }
+}`,
+      );
+    });
+
+    it('reads an `=` against an IRI over a chain as the `sameTerm` it is', ({ expect }) => {
+      // `=` and `sameTerm` coincide against an IRI - `=` only raises a type error where both sides are
+      // literals - so the fold rewrites it before the recognisers ever see it.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { { ?s ?p ?o } UNION { ?x ?y ?z } FILTER(subject(object(?o)) = :subj) }',
+        `SELECT ?o ?p ?s ?x ?y ?z WHERE {
+  {
+    ?s ?p ?o .
+    FILTER ( SAMETERM( SUBJECT( OBJECT( ?o ) ) , <ex://subj> ) )
+  }
+  UNION {
+    ?x ?y ?z .
+    FILTER ( FALSE )
+  }
+}`,
+      );
+    });
+
+    it('reads `sameTerm(a, a)` over an accessor as what it reads *through* being a triple term', ({ expect }) => {
+      // Not that `SUBJECT(?o)` is a triple term - that would be unsatisfiable, no subject being one.
+      // Asserting the access shapes the groups on the way to it and leaves the one it names alone.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(subject(?o), subject(?o))) }',
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( ISTRIPLE( ?o ) )
+}`,
+      );
+    });
+
+    it('empties the plan where a chain would make a value its own position', ({ expect }) => {
+      // `OBJECT(?o) ≡ OBJECT(OBJECT(?o))` asks a triple term to be its own object, which the occurs
+      // check refuses: a triple term is strictly larger than each of its positions.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(object(object(?o)), object(?o))) }',
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( FALSE )
+}`,
+      );
+    });
+
     it('leaves the input tree untouched', ({ expect }) => {
       const algebra = parseQuery(c, `${prefixes}SELECT * WHERE {
         ?s ?p ?o
@@ -2476,6 +2542,31 @@ GROUP BY ?x?y`,
         OPTIONAL { ?s :value ?o }
         FILTER(!bound(?o) || isLITERAL(?o))
       }`, 4);
+    });
+
+    it('keeps the rows a chain of accessors selects', async({ expect }) => {
+      // `:e` nests a triple term inside one, `:f` holds an IRI there - so reading two levels down errors
+      // on `:f` and the row drops, which is the answer the rewritten plan has to reproduce.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :nests ?o
+        FILTER(sameTerm(subject(object(?o)), :b))
+      }`, 1);
+    });
+
+    it('keeps the rows an `=` over a chain selects', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :nests ?o
+        FILTER(subject(object(?o)) = :b)
+      }`, 1);
+    });
+
+    it('keeps the rows `sameTerm(a, a)` over an accessor selects', async({ expect }) => {
+      // Both rows hold a triple term, so both survive - the assertion is about `?o`, not about the
+      // subject it reads.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :nests ?o
+        FILTER(sameTerm(subject(?o), subject(?o)))
+      }`, 2);
     });
 
     it('keeps the rows an OPTIONAL collapsed by a shape selects', async({ expect }) => {

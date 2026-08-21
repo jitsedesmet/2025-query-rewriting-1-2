@@ -345,9 +345,9 @@ export class AssertionConjunction {
    * a ground triple term, {@link strongSubstitution} hands it over as one, and restating it would only
    * write the same fact twice.
    */
-  public structural(): AssertionConjunction {
+  public structuralPartOfConjunction(): AssertionConjunction {
     return AssertionConjunction.of(this.conjuncts().filter(conjunct =>
-      isStructuralConjunct(conjunct) && variablesReadByConjunct(conjunct).some(name => !this.decidesTerm(name))));
+      isStructuralConjunct(conjunct) && !variablesReadByConjunct(conjunct).every(name => this.decidesTerm(name))));
   }
 
   /**
@@ -393,17 +393,16 @@ export class AssertionConjunction {
     const result = new Map<string, RDF.Term>();
     for (const name of this.names()) {
       const group = this.clusters.groupOf(name);
-      if (this.strength.get(name) !== 'strong' || group === undefined) {
-        continue;
-      }
-      const term = this.resolveTerm(group);
-      if (term !== undefined) {
-        result.set(name, term);
-        continue;
-      }
-      const representative = this.representativeOf(group);
-      if (representative !== undefined && representative !== name) {
-        result.set(name, DF.variable(representative));
+      if (this.strength.get(name) === 'strong' && group !== undefined) {
+        const term = this.resolveTerm(group);
+        if (term === undefined) {
+          const representative = this.representativeOf(group);
+          if (representative !== undefined && representative !== name) {
+            result.set(name, DF.variable(representative));
+          }
+        } else {
+          result.set(name, term);
+        }
       }
     }
     return result;
@@ -422,8 +421,8 @@ export class AssertionConjunction {
   public expressionSubstitution(): AssertionView {
     return {
       bound: this.boundImpliedBy(),
-      resolve: read => this.resolveAccessValue(read),
-      typeRange: read => this.strength.get(read.name) === 'strong' ? this.rangeKnownFor(read) : undefined,
+      resolve: access => this.resolveAccessValue(access),
+      typeRange: access => this.strength.get(access.name) === 'strong' ? this.rangeKnownFor(access) : undefined,
     };
   }
 
@@ -575,10 +574,10 @@ export class AssertionConjunction {
   public assert(access: Access, assertion: Assertion): boolean {
     switch (assertion.subType) {
       case 'unbound': {
-        return this.assertUnbound(rootOfBare(access, 'unbound'));
+        return this.assertUnbound(rootVarOfBare(access, 'unbound'));
       }
       case 'bound': {
-        return this.assertBound(rootOfBare(access, 'bound'));
+        return this.assertBound(rootVarOfBare(access, 'bound'));
       }
       case 'termType': {
         return this.assertTermType(access, assertion.termType, assertion.strong);
@@ -856,8 +855,7 @@ export class AssertionConjunction {
     const termType = this.termTypeToState(group, accessesPerGroup);
     if (termType !== undefined) {
       result.push({ access: representative, assertion: assertTermType(termType, this.isStrong(representative)) });
-    } else if (result.length === 0 && isBareAccess(representative) &&
-      this.clusters.childrenOf(group) === undefined) {
+    } else if (result.length === 0 && isBareAccess(representative) && this.clusters.childrenOf(group) === undefined) {
       // A group of one, with nothing for that one to equal: all that is left of it is that it is bound.
       // A shape is never that - what it holds says everything this would - and neither is a position of
       // one nobody else names, `bnd` of which is not even expressible, `BOUND` taking a variable.
@@ -882,6 +880,7 @@ export class AssertionConjunction {
       return undefined;
     }
     if (this.clusters.childrenOf(group) !== undefined) {
+      // I have kids, so I should assert that if they don't speak up
       return this.shapeIsWitnessed(group, accessesPerGroup) ? undefined : 'Quad';
     }
     const asserted = this.clusters.assertedRangeOf(group);
@@ -896,9 +895,13 @@ export class AssertionConjunction {
    * - which is what keeps the two from drifting apart as more of them appear. A position with an alias of
    * its own writes an edge back to this one; one without writes whatever it writes from here.
    */
-  private shapeIsWitnessed(group: number, aliases: Map<number, Access[]>): boolean {
-    return childGroupsOf(this.clusters.childrenOf(group)).some(child =>
-      (aliases.get(child)?.length ?? 0) > 1 || this.writesAnything(child, aliases));
+  private shapeIsWitnessed(group: number, accessesPerGroup: Map<number, Access[]>): boolean {
+    const childGroups = childGroupsOf(this.clusters.childrenOf(group));
+    // Any of my kids write something, or I am getting accessed.
+    return childGroups.some((child) => {
+      const lengthOfAccessPath = (accessesPerGroup.get(child)?.length ?? 0);
+      return lengthOfAccessPath > 1 || this.writesAnything(child, accessesPerGroup);
+    });
   }
 
   /**
@@ -909,9 +912,14 @@ export class AssertionConjunction {
    * levels down as from one. Asking only the position would restate it - and a position that says nothing
    * with *nothing* below it is the one case that has to be stated, which is the T⟨…⟩ it writes.
    */
-  private writesAnything(group: number, aliases: Map<number, Access[]>): boolean {
-    return this.groupConjuncts(group, aliases).length > 0 ||
-      childGroupsOf(this.clusters.childrenOf(group)).some(child => this.writesAnything(child, aliases));
+  private writesAnything(group: number, accessesPerGroup: Map<number, Access[]>): boolean {
+    // Either I write something
+    if (this.groupConjuncts(group, accessesPerGroup).length > 0) {
+      return true;
+    }
+    // Or my children do (recursively)
+    const childGroups = childGroupsOf(this.clusters.childrenOf(group));
+    return childGroups.some(child => this.writesAnything(child, accessesPerGroup));
   }
 
   /**
@@ -1023,13 +1031,16 @@ export class AssertionConjunction {
     const predicate = this.resolveTerm(children.predicate);
     const object = this.resolveTerm(children.object);
     if (subject === undefined || predicate === undefined || object === undefined ||
+    // TODO: why? These next checks seem so arbitrary?
+    //  Also: are they not enforced already by our clustering algeorthm/ ranges?
       predicate.termType !== 'NamedNode' || subject.termType === 'Literal') {
       return undefined;
     }
     return DF.quad(<RDF.Quad_Subject> subject, predicate, <RDF.Quad_Object> object);
   }
 
-  /** The term an access reads, or the variable that reads its group most directly (S3). */
+  // TODO this function does not sound like what it does. I would frm the name, expect it to behave like resolveTerm
+  /** The term an access reads, or the variable that reads its group most directly. */
   private resolveAccessValue(read: Access): RDF.Term | undefined {
     // A weak member says what the variable is *if* bound, which is not something an expression may assume.
     if (this.strength.get(read.name) !== 'strong') {
@@ -1086,9 +1097,13 @@ function isCliqueEdge(conjunct: AssertionConjunct): boolean {
 
 /** Whether the conjunct is about the *shape* of a value rather than about which term it is. */
 function isStructuralConjunct(conjunct: AssertionConjunct): boolean {
-  return !isBareAccess(conjunct.access) || conjunct.assertion.subType === 'termType' ||
-    (hasTarget(conjunct.assertion) && isAccessTarget(conjunct.assertion.term) &&
-      !isBareAccess(conjunct.assertion.term));
+  // You assert triple term or assert termtype -- so not a value assertion
+  if (!isBareAccess(conjunct.access) || conjunct.assertion.subType === 'termType') {
+    return true;
+  }
+  // You are equal to something that is not a precise value, but rather a true access
+  return hasTarget(conjunct.assertion) && isAccessTarget(conjunct.assertion.term) &&
+      !isBareAccess(conjunct.assertion.term);
 }
 
 /**
@@ -1098,11 +1113,11 @@ function isStructuralConjunct(conjunct: AssertionConjunct): boolean {
  * builds coins one about a position of a shape - a position is bound exactly when the triple term holding
  * it is, so there would be nothing for it to say.
  */
-function rootOfBare(read: Access, form: string): string {
-  if (!isBareAccess(read)) {
-    throw new Error(`Unreachable: ${form} is only ever asserted of a variable, not of ${accessId(read)}`);
+function rootVarOfBare(access: Access, form: string): string {
+  if (!isBareAccess(access)) {
+    throw new Error(`Unreachable: ${form} is only ever asserted of a variable, not of ${accessId(access)}`);
   }
-  return read.name;
+  return access.name;
 }
 
 /**

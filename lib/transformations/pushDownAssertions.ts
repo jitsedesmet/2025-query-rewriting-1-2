@@ -96,7 +96,7 @@ import { unionSets } from '../utils/setUtils.js';
  * Three consequences run through the rules below.
  *
  * **A shape is not a term, so it does not substitute into a pattern.** What a rewrite discharging Θ by
- * substitution leaves behind is {@link AssertionConjunction.structural}, which stays a condition over the
+ * substitution leaves behind is {@link AssertionConjunction.structuralPartOfConjunction}, which stays a condition over the
  * operation the terms went into. A shape every position of which is decided *is* a ground triple term,
  * and travels as one. Materialising an open shape into a triple term pattern is what comes next.
  *
@@ -223,14 +223,14 @@ function swapWith(
       return keep(assertionFilter(
         c,
         substituteIntoPatterns(c, op, assertions.strongSubstitution()),
-        assertions.structural(),
+        assertions.structuralPartOfConjunction(),
       ));
     }
     case Algebra.Types.PATH: {
       return keep(assertionFilter(
         c,
         substituteIntoPath(c, op, assertions.strongSubstitution()),
-        assertions.structural(),
+        assertions.structuralPartOfConjunction(),
       ));
     }
     // The one leaf where all of the forms do real work, since a VALUES column may be UNDEF.
@@ -1083,7 +1083,7 @@ function admissibleOnMinusRhs(assertions: AssertionConjunction): AssertionConjun
  *
  * Which is what a VALUES row cannot decide: it holds the value of a column, so it decides which term that
  * is and which kind of term it is, but it has no say over the positions of a triple term inside it. Not
- * the same question {@link AssertionConjunction.structural} asks - a row decides `isIRI(?x)` where a
+ * the same question {@link AssertionConjunction.structuralPartOfConjunction} asks - a row decides `isIRI(?x)` where a
  * substitution of terms has no way to carry it.
  */
 function readsThroughAccessor(conjunct: AssertionConjunct): boolean {

@@ -66,19 +66,29 @@ import { DF } from './rdfDatatypes.js';
 /**
  * A set of assertions Θ, in the states an assertion about an access can be in:
  *
- * | state                                  | means                             |
- * |----------------------------------------|-----------------------------------|
- * | strong member of a pinned group        | `sameTerm(?x, c)`                 |
- * | weak member of a pinned group          | `!bound(?x) \|\| sameTerm(?x, c)` |
- * | member of an anchorless group (clique) | `sameTerm(?x, ?rep)`              |
- * | member of a shaped group               | `isTRIPLE(?x)`, plus what its positions say |
- * | unbound                                | `!bound(?x)`                      |
- * | bound                                  | `bound(?x)`, no term              |
+ * | state                                  | means                                             |
+ * |----------------------------------------|---------------------------------------------------|
+ * | strong member of a pinned group        | `sameTerm(?x, c)`                                 |
+ * | weak member of a pinned group          | `!bound(?x) \|\| sameTerm(?x, c)`                 |
+ * | member of an anchorless group (clique) | `sameTerm(?x, ?rep)`                              |
+ * | group with an asserted term type       | `isIRI(?x)`, `isBLANK(?x)`, `isLITERAL(?x)`, `isTRIPLE(?x)` |
+ * | the same, asserted weakly              | `!bound(?x) \|\| is<τ>(?x)`                       |
+ * | member of a shaped group               | one conjunct per position of the shape that says something |
+ * | unbound                                | `!bound(?x)`                                      |
+ * | bound                                  | `bound(?x)`, no term                              |
  *
  * Nothing new is serialised: every row is the form the parser reads straight back into the same state,
  * which is what {@link toExpression} and {@link collectAssertions} being inverses of each other means.
  *
- * **A shape is never written as `sameTerm(?o, <<( … )>>)`** (S2), only as `isTRIPLE(?o)` plus one
+ * A term type and a shape meet in one place. A shape narrows its group to `{Quad}` by *being* a triple
+ * term, where `isTRIPLE(?x)` narrows it by saying so, and each makes the other add nothing - which is why
+ * a shape writes `isTRIPLE(?x)` exactly when none of its positions says anything, and why the four
+ * predicates are one form ({@link assertTermType}) rather than `isTRIPLE` being a shape of its own.
+ * Only what a condition *asserted* is written back: that a subject holds no literal, or that a shaped
+ * group holds a triple term, is derived, holds wherever the group is written, and is left unsaid
+ * ({@link AssertionClusterSet}).
+ *
+ * **A shape is never written as `sameTerm(?o, <<( … )>>)`** (S2), only as one
  * `sameTerm(SUBJECT(?o), …)` per position that says something. The positions nobody named are *anonymous*
  * groups, and writing them out would mention variables that are unbound wherever the filter sits, so the
  * condition would error and drop every row.

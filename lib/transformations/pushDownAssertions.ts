@@ -293,7 +293,7 @@ function swapWith(
         // the weak and unbound forms do not give us: under those, an RHS mapping binding ?x to another
         // term can still remove an LHS mapping that leaves it free. A clique has no weak form to send in
         // the first place, and the term is what the argument turns on: an anchor both sides agree on.
-        assertionFilter(c, right, weakenedTerms(assertions)),
+        assertionFilter(c, right, admissibleOnMinusRhs(assertions)),
       ));
     }
     case Algebra.Types.GROUP: {
@@ -1071,7 +1071,7 @@ function placeAccessConjunct(
  * equal subjects, so any unary predicate on that value is admissible - a shape as much as a term. An edge
  * between two variables is not one of those, and has no weak form to send in the first place.
  */
-function weakenedTerms(assertions: AssertionConjunction): AssertionConjunction {
+function admissibleOnMinusRhs(assertions: AssertionConjunction): AssertionConjunction {
   return AssertionConjunction.of(assertions.singleVariableConjuncts()
     .filter(({ assertion }) => assertion.subType === 'strong' || assertion.subType === 'termType')
     .map(conjunct => asWeakenedConjunct(conjunct))

@@ -563,7 +563,7 @@ export class AssertionConjunction {
       }
       case 'weak': {
         // A weak *edge* is not a state this can be in (weak ⇔ pinned group), and neither the recognisers
-        // nor {@link weakenedConjunct} ever produce one, so the target of a weak assertion is a term.
+        // nor {@link asWeakenedConjunct} ever produce one, so the target of a weak assertion is a term.
         return isAccessTarget(assertion.term) || this.assertPin(read, assertion.term, false);
       }
     }

@@ -265,21 +265,17 @@ export function isAssertableTerm(term: RDF.Term): boolean {
  *
  * `OBJECT(SUBJECT(?o))` is `{ name: 'o', positions: [ 'subject', 'object' ]}` - the chain is unwrapped
  * from the outside in, so the positions come out in the order they are applied.
- * @param expression - The expression to read
- * @param acc - The accessors met so far, outermost first; a caller starts with none
- * @returns the access, or `undefined` when the expression does more than read one
  */
-export function asAccess(expression: Algebra.Expression, acc: readonly TriplePosition[] = []):
-Access | undefined {
+export function asAccess(expression: Algebra.Expression, acc: TriplePosition[] = []): Access | undefined {
   if (expression.subType === Algebra.ExpressionTypes.TERM) {
-    // The accessors were met from the outside in, so the innermost one read is the first one applied.
     return expression.term.termType === 'Variable' ?
-        { name: expression.term.value, positions: [ ...acc ].reverse() } :
+        { name: expression.term.value, positions: acc.reverse() } :
       undefined;
   }
   if (expression.subType === Algebra.ExpressionTypes.OPERATOR && expression.args.length === 1 &&
       triplePositions.includes(<TriplePosition> expression.operator)) {
-    return asAccess(expression.args[0], [ ...acc, <TriplePosition> expression.operator ]);
+    acc.push(<TriplePosition> expression.operator);
+    return asAccess(expression.args[0], acc);
   }
   return undefined;
 }
@@ -541,7 +537,7 @@ export interface AssertionConjunct {
 }
 
 /**
- * The *root* variables a conjunct reads - two iff it is an edge between two of them, and one where both
+ * The variables a conjunct reads - two iff it is an edge between two of them, and one where both
  * of its sides read the same variable through different accessors.
  *
  * Everything that places a conjunct reads only this: (FJPush)'s side condition is quantified over
@@ -550,9 +546,11 @@ export interface AssertionConjunct {
  * @returns the variables it mentions, without repetition, the one it is about first
  */
 export function variablesReadByConjunct(conjunct: AssertionConjunct): string[] {
-  const { access: read, assertion } = conjunct;
-  const target = hasTarget(assertion) && isAccessTarget(assertion.term) ? [ assertion.term.name ] : [];
-  return [ ...new Set([ read.name, ...target ]) ];
+  const { access, assertion } = conjunct;
+  if (hasTarget(assertion) && isAccessTarget(assertion.term) && assertion.term.name !== access.name) {
+    return [ access.name, assertion.term.name ];
+  }
+  return [ access.name ];
 }
 
 /**

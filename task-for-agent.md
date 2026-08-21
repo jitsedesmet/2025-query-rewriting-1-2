@@ -105,7 +105,7 @@ export function accessId(a: Access): string { return [ a.name, ...a.positions ].
   on `term.termType === 'Variable'`.
 * `bound` / `unbound` stay restricted to `positions.length === 0` — `BOUND` takes a `Var` by grammar,
   and the subject of a triple term is always bound.
-* `conjunctVars(conjunct)` returns the **root names** of both sides. Everything downstream
+* `variablesReadByConjunct(conjunct)` returns the **root names** of both sides. Everything downstream
   (`asWeakenedConjunct`, `split`, the join/left-join licences) already reads only that and must keep
   doing so.
 
@@ -278,7 +278,8 @@ shape-pinned group: `isTRIPLE(anchor)` when no position is informative, otherwis
 
 **S4 — a conjunct weakens iff it mentions exactly one variable.** `!bound(?o) || sameTerm(subject(?o), :a)`
 and `!bound(?o) || isTRIPLE(?o)` are fine; `sameTerm(subject(?o), ?s)` is a clique edge and does not
-weaken. `asWeakenedConjunct` keeps its current shape, reading `conjunctVars(conjunct).length === 1`.
+weaken. `asWeakenedConjunct` keeps its current shape, reading
+`variablesReadByConjunct(conjunct).length === 1`.
 Same generalisation for `weakenedTerms` (the MINUS RHS): its argument turns on the two sides agreeing
 on the value, and equal values have equal subjects, so any *unary* predicate on the value is admissible.
 

@@ -139,9 +139,9 @@ export class AssertionConjunction {
   /** The conjunction of the assertions of `conjuncts`, which never contradict when they come from one Θ. */
   public static of(conjuncts: Iterable<AssertionConjunct>): AssertionConjunction {
     const result = new AssertionConjunction();
-    for (const { access: read, assertion } of conjuncts) {
+    for (const { access, assertion } of conjuncts) {
       // A subset of a satisfiable conjunction is satisfiable, so this cannot fail for such a subset.
-      result.assert(read, assertion);
+      result.assert(access, assertion);
     }
     return result;
   }
@@ -195,24 +195,24 @@ export class AssertionConjunction {
     if (group === undefined) {
       return undefined;
     }
-    const weak = this.strength.get(name) === 'weak';
+    const isWeak = this.strength.get(name) === 'weak';
     const pin = this.clusters.pinOf(group);
     if (pin?.kind === 'term') {
-      return weak ? assertWeak(pin.term) : assertStrong(pin.term);
+      return isWeak ? assertWeak(pin.term) : assertStrong(pin.term);
     }
     const representative = this.representativeOf(group);
-    if (representative !== undefined && representative !== name) {
-      return assertStrong(access(representative));
+    if (representative === undefined || representative === name) {
+      const termType = this.assertedTermTypeOf(group);
+      return termType === undefined ? assertBound() : assertTermType(termType, isWeak);
     }
-    const termType = this.termTypeOf(group);
-    return termType === undefined ? assertBound() : assertTermType(termType, weak);
+    return assertStrong(access(representative));
   }
 
   /**
    * The one kind of term a group may hold, when its range has been narrowed that far - which a shape
    * narrows to `{Quad}` as much as an `isTRIPLE` does.
    */
-  private termTypeOf(group: number): AssertableTermType | undefined {
+  private assertedTermTypeOf(group: number): AssertableTermType | undefined {
     const range = this.clusters.rangeOf(group);
     return range.size === 1 ?
       assertableTermTypes.find(termType => range.has(termType)) :

@@ -1342,6 +1342,7 @@ GROUP BY ?x?y`,
         'SELECT * WHERE { ?s ?p ?o FILTER(isIRI(object(?o))) }',
         'SELECT * WHERE { ?s ?p ?o FILTER(subject(object(?o)) = :subj) }',
         'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(subject(?o), subject(?o))) }',
+        'SELECT * WHERE { ?s ?p ?o FILTER(isTRIPLE(?o) && sameTerm(subject(?o), :a)) }',
       ]) {
         const once = pushDownAssertions(c, parseQuery(c, prefixes + query));
         const twice = pushDownAssertions(c, pushDownAssertions(c, parseQuery(c, prefixes + query)));
@@ -2085,6 +2086,40 @@ GROUP BY ?x?y`,
       );
     });
 
+    it('drops an `isTRIPLE` the position read beside it already entails', ({ expect }) => {
+      // `SUBJECT(?o)` cannot be read of anything but a triple term, so `isTRIPLE(?o)` beside it states a
+      // second time what the row already has to satisfy. Writing both back would grow the condition on
+      // every run of the pass, which is why the shape states it only where no position of it says
+      // anything at all.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(isTRIPLE(?o) && sameTerm(subject(?o), :a)) }',
+        `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( SAMETERM( SUBJECT( ?o ) , <ex://a> ) )
+}`,
+      );
+    });
+
+    it('drops it whichever way round the two are met', ({ expect }) => {
+      // The order they arrive in is not the order Θ decomposes into, so neither spelling can keep it -
+      // including the one where they arrive as two filters and the second is absorbed into the first.
+      const expected = `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( SAMETERM( SUBJECT( ?o ) , <ex://a> ) )
+}`;
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(subject(?o), :a) && isTRIPLE(?o)) }',
+        expected,
+      );
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(isTRIPLE(?o)) FILTER(sameTerm(subject(?o), :a)) }',
+        expected,
+      );
+    });
+
     it('reads and writes back a chain of accessors', ({ expect }) => {
       // Two levels down, which is where a chain can go at all: only the object of a triple term holds
       // another one. Written back as the chain it was read from, and it re-parses as one.
@@ -2542,6 +2577,17 @@ GROUP BY ?x?y`,
         OPTIONAL { ?s :value ?o }
         FILTER(!bound(?o) || isLITERAL(?o))
       }`, 4);
+    });
+
+    it('keeps the rows an `isTRIPLE` selected once the pass has dropped it', async({ expect }) => {
+      // The half that matters: dropping a conjunct is only sound where something else enforces it. `:d`
+      // says a term that is not a triple one, and it has to be gone from the answer even though the
+      // rewritten plan no longer mentions `isTRIPLE` - the accessor errors on it, and the FILTER drops
+      // the row.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :says ?o
+        FILTER(isTRIPLE(?o) && sameTerm(subject(?o), :a))
+      }`, 2);
     });
 
     it('keeps the rows a chain of accessors selects', async({ expect }) => {

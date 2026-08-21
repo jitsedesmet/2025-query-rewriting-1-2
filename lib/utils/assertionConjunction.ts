@@ -790,8 +790,9 @@ export class AssertionConjunction {
   }
 
   /**
-   * An access that is not a plain variable need to assert a chain o groups and
-   * thereby create the group the access refers to.
+   * An access that is not a plain variable needs to assert a chain of groups and
+   * thereby create the group the access refers to. Asserting them is the point rather than a side
+   * effect: reading a position of something is what says that something is a triple term.
    * @returns `false` when one of those shapes contradicts what the group already holds.
    *   Otherwise, the group the access represents.
    */
@@ -930,7 +931,7 @@ export class AssertionConjunction {
   private anchoredAccessesPerGroup(): Map<number, Access[]> {
     const anchors = new Map<number, Access>();
     let groupsToDo: number[] = [];
-    // Iterate all groups, also groups taht were created to represent un-asserted positions of a tripleTerm variable.
+    // Iterate all groups, also groups that were created to represent un-asserted positions of a tripleTerm variable.
     for (const [ group ] of this.clusters.groupEntries()) {
       const [ representative ] = this.namedMembers(group);
       if (representative !== undefined) {

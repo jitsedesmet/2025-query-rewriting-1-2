@@ -123,7 +123,7 @@ export function isAccessTarget(target: AssertionTarget): target is Access {
  * - `termType` is T⟨?x : τ⟩ ≔ `isIRI(?x)` / `isBLANK(?x)` / `isLITERAL(?x)` / `isTRIPLE(?x)`: which kind
  *   of term `?x` is, and nothing about which one. Like the strong form it implies `bound(?x)` - reading
  *   the kind of an unbound variable is an error - and like it it has a weak form (`!bound(?x) ||
- *   is<τ>(?x)`), which is what `weak` records.
+ *   is<τ>(?x)`), which is what `strong` being false records.
  * - `unbound` is U⟨?x⟩ ≔ `!bound(?x)`.
  * - `bound` is B⟨?x⟩ ≔ `bound(?x)`, which fixes the variable to no term at all.
  *
@@ -158,11 +158,11 @@ export interface WeakAssertion extends BaseAssertion {
   subType: 'weak';
   term: AssertionTarget;
 }
-/** T⟨?x : τ⟩, and - when `weak` - `!bound(?x) || is<τ>(?x)`. */
+/** T⟨?x : τ⟩ when `strong`, and `!bound(?x) || is<τ>(?x)` when not. */
 export interface TermTypeAssertion extends BaseAssertion {
   subType: 'termType';
   termType: AssertableTermType;
-  weak: boolean;
+  strong: boolean;
 }
 export interface UnboundAssertion extends BaseAssertion {
   subType: 'unbound';
@@ -200,12 +200,12 @@ function normalisedTarget(target: AssertionTarget): AssertionTarget {
 }
 
 /** Creates T⟨?x : τ⟩, or its weak form `!bound(?x) || is<τ>(?x)`. */
-export function assertTermType(termType: AssertableTermType, weak = false): TermTypeAssertion {
+export function assertTermType(termType: AssertableTermType, strong = true): TermTypeAssertion {
   return {
     type: 'assertion',
     subType: 'termType',
     termType,
-    weak,
+    strong,
   };
 }
 
@@ -235,7 +235,7 @@ export function hasTarget(assertion: Assertion): assertion is StrongAssertion | 
  */
 export function impliesBound(assertion: Assertion): boolean {
   return assertion.subType === 'strong' || assertion.subType === 'bound' ||
-    (assertion.subType === 'termType' && !assertion.weak);
+    (assertion.subType === 'termType' && assertion.strong);
 }
 
 /**
@@ -409,7 +409,7 @@ export function asWeakAssertion(expression: Algebra.Expression): AssertionConjun
           }
         }
       } else if (accessId(typed.access) === unbound) {
-        return [{ access: typed.access, assertion: assertTermType(typed.assertion.termType, true) }];
+        return [{ access: typed.access, assertion: assertTermType(typed.assertion.termType, false) }];
       }
     }
   }
@@ -570,7 +570,7 @@ export function asWeakenedConjunct(conjunct: AssertionConjunct): AssertionConjun
       return undefined;
     }
     case 'termType': {
-      return assertion.weak ? conjunct : { access, assertion: assertTermType(assertion.termType, true) };
+      return assertion.strong ? { access, assertion: assertTermType(assertion.termType, false) } : conjunct;
     }
     case 'strong': {
       return isAccessTarget(assertion.term) ? undefined : { access, assertion: assertWeak(assertion.term) };

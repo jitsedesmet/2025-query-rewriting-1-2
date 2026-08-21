@@ -197,15 +197,15 @@ export class AssertionConjunction {
     if (group === undefined) {
       return undefined;
     }
-    const isWeak = this.strength.get(name) === 'weak';
+    const isStrong = this.strength.get(name) !== 'weak';
     const pin = this.clusters.pinOf(group);
     if (pin?.kind === 'term') {
-      return isWeak ? assertWeak(pin.term) : assertStrong(pin.term);
+      return isStrong ? assertStrong(pin.term) : assertWeak(pin.term);
     }
     const representative = this.representativeOf(group);
     if (representative === undefined || representative === name) {
       const termType = this.assertedTermTypeOf(group);
-      return termType === undefined ? assertBound() : assertTermType(termType, isWeak);
+      return termType === undefined ? assertBound() : assertTermType(termType, isStrong);
     }
     return assertStrong(access(representative));
   }
@@ -580,7 +580,7 @@ export class AssertionConjunction {
         return this.assertBound(rootOfBare(access, 'bound'));
       }
       case 'termType': {
-        return this.assertTermType(access, assertion.termType, assertion.weak);
+        return this.assertTermType(access, assertion.termType, assertion.strong);
       }
       case 'strong': {
         return isAccessTarget(assertion.term) ?
@@ -636,15 +636,15 @@ export class AssertionConjunction {
    * shape follows from the range wherever one is needed - {@link TermClusterSet.assertTriplePin} narrows
    * to the same `{Quad}` - so the two never disagree.
    */
-  public assertTermType(read: Access, termType: AssertableTermType, weak = false): boolean {
+  public assertTermType(access: Access, termType: AssertableTermType, strong: boolean): boolean {
     function apply(target: AssertionConjunction): boolean {
-      const group = target.assertAccessAndResolve(read);
+      const group = target.assertAccessAndResolve(access);
       if (group === false) {
         return false;
       }
       return target.clusters.assertTermTypeRange(group, rangeOfTermType(termType));
     }
-    return weak ? this.assertWeakly(read.name, apply) : this.assertStrongly(read.name, apply);
+    return strong ? this.assertStrongly(access.name, apply) : this.assertWeakly(access.name, apply);
   }
 
   /**
@@ -736,7 +736,7 @@ export class AssertionConjunction {
         }
         case 'termType': {
           const typed = termTypeAssertionAsExpression(c, read, assertion.termType);
-          return assertion.weak ? weakenedExpression(c, read.name, typed) : typed;
+          return assertion.strong ? typed : weakenedExpression(c, read.name, typed);
         }
       }
     }));
@@ -844,7 +844,7 @@ export class AssertionConjunction {
       // Every alias is that term, which already says they are equal to each other.
       return reads.map(read => ({
         access: read,
-        assertion: this.isWeak(read) ? assertWeak(pin.term) : assertStrong(pin.term),
+        assertion: this.isStrong(read) ? assertStrong(pin.term) : assertWeak(pin.term),
       }));
     }
     const [ anchor, ...rest ] = reads;
@@ -853,7 +853,7 @@ export class AssertionConjunction {
     }
     const termType = this.termTypeToState(group, aliases);
     if (termType !== undefined) {
-      result.push({ access: anchor, assertion: assertTermType(termType, this.isWeak(anchor)) });
+      result.push({ access: anchor, assertion: assertTermType(termType, this.isStrong(anchor)) });
     } else if (result.length === 0 && isBareAccess(anchor) &&
       this.clusters.childrenOf(group) === undefined) {
       // A group of one, with nothing for that one to equal: all that is left of it is that it is bound.
@@ -992,9 +992,9 @@ export class AssertionConjunction {
     return group === undefined ? undefined : this.clusters.rangeOf(group);
   }
 
-  /** Whether what is said about an access is only said where its root is bound. */
-  private isWeak(read: Access): boolean {
-    return this.strength.get(read.name) === 'weak';
+  /** Whether what is said about an access holds outright, rather than only where its root is bound. */
+  private isStrong(read: Access): boolean {
+    return this.strength.get(read.name) !== 'weak';
   }
 
   /** Whether Θ decides the whole term a variable is bound to, shape and all. */

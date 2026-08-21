@@ -64,7 +64,7 @@ function conjunctsOf(assertions: AssertionConjunction | undefined): string[] {
       return `${accessId(read)}=${assertion.subType}(${target})`;
     }
     if (assertion.subType === 'termType') {
-      return `${accessId(read)}=${assertion.weak ? 'weakType' : 'type'}(${assertion.termType})`;
+      return `${accessId(read)}=${assertion.strong ? 'type' : 'weakType'}(${assertion.termType})`;
     }
     return `${accessId(read)}=${assertion.subType}`;
   });
@@ -82,7 +82,7 @@ function stateOf(assertions: AssertionConjunction | undefined, name: string): st
       assertion.term.value})`;
   }
   if (assertion.subType === 'termType') {
-    return `${assertion.weak ? 'weakType' : 'type'}(${assertion.termType})`;
+    return `${assertion.strong ? 'type' : 'weakType'}(${assertion.termType})`;
   }
   return assertion.subType;
 }
@@ -455,7 +455,7 @@ describe('assertionConjunction', () => {
       const assertions = <AssertionConjunction> conjunctionOf([ 'o', assertTermType('Quad') ]);
       expect([ ...assertions.boundImpliedBy() ]).toEqual([ 'o' ]);
       // The weak form does not, being satisfied by every solution leaving `?o` unbound.
-      expect([ ...(<AssertionConjunction> conjunctionOf([ 'o', assertTermType('Quad', true) ])).boundImpliedBy() ])
+      expect([ ...(<AssertionConjunction> conjunctionOf([ 'o', assertTermType('Quad', false) ])).boundImpliedBy() ])
         .toEqual([]);
     });
 
@@ -541,7 +541,7 @@ describe('assertionConjunction', () => {
       const assertions = <AssertionConjunction> structuralConjunctionOf([ subjectOfO, assertWeak(termC) ]);
       expect(conditionOf(assertions))
         .toBe('FILTER ( ( ! BOUND( ?o ) || SAMETERM( SUBJECT( ?o ) , <ex://c> ) ) )');
-      expect(conditionOf(<AssertionConjunction> conjunctionOf([ 'o', assertTermType('Quad', true) ])))
+      expect(conditionOf(<AssertionConjunction> conjunctionOf([ 'o', assertTermType('Quad', false) ])))
         .toBe('FILTER ( ( ! BOUND( ?o ) || ISTRIPLE( ?o ) ) )');
     });
 
@@ -582,7 +582,7 @@ describe('assertionConjunction', () => {
         .toBe('FILTER ( ISLITERAL( ?x ) )');
       expect(conditionOf(<AssertionConjunction> conjunctionOf([ 'x', assertTermType('BlankNode') ])))
         .toBe('FILTER ( ISBLANK( ?x ) )');
-      expect(conditionOf(<AssertionConjunction> conjunctionOf([ 'x', assertTermType('NamedNode', true) ])))
+      expect(conditionOf(<AssertionConjunction> conjunctionOf([ 'x', assertTermType('NamedNode', false) ])))
         .toBe('FILTER ( ( ! BOUND( ?x ) || ISIRI( ?x ) ) )');
     });
 

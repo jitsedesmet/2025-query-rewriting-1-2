@@ -682,6 +682,26 @@ describe('assertionConjunction', () => {
       ]))).toBeUndefined();
     });
 
+    it('says nothing about a kind of term it only worked out from the plan', ({ expect }) => {
+      // `?x ≡ PREDICATE(?o)` puts `?x` in a group the predicate position narrows to `{IRI}`. True, and
+      // true wherever the group is written - but Θ never asserted it, so Θ must not report it as one of
+      // its own. `get` and `conjuncts` are two views of one conjunction and cannot disagree about that.
+      const assertions = <AssertionConjunction> structuralConjunctionOf(
+        [ access('x'), assertStrong(access('o', 'predicate')) ],
+      );
+      expect(conjunctsOf(assertions)).toEqual([ 'o.predicate=strong(x)' ]);
+      expect(stateOf(assertions, 'x')).toBe('bound');
+    });
+
+    it('does report a shape it holds as the triple term it is', ({ expect }) => {
+      // The other side of the same line: a shape is Θ's own, so what it entails is Θ's to report. The
+      // conjuncts leave `isTRIPLE(?o)` unwritten because the position already entails it - minimal
+      // rather than silent, which is not the same as saying nothing.
+      const assertions = <AssertionConjunction> structuralConjunctionOf([ subjectOfO, assertStrong(termC) ]);
+      expect(stateOf(assertions, 'o')).toBe('type(Quad)');
+      expect(conjunctsOf(assertions)).toEqual([ 'o.subject=strong(ex://c)' ]);
+    });
+
     it('hands an edge reading through an accessor over one at a time', ({ expect }) => {
       const assertions = <AssertionConjunction> structuralConjunctionOf(
         [ access('s'), assertStrong(subjectOfO) ],

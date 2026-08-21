@@ -209,13 +209,26 @@ export class AssertionConjunction {
   }
 
   /**
-   * The one kind of term a group may hold, when its range has been narrowed that far - which a shape
-   * narrows to `{Quad}` as much as an `isTRIPLE` does.
+   * The kind of term **Θ itself** says the group holds, `undefined` where Θ says nothing about it.
+   *
+   * Two ways of saying it, and they are both Θ's: a condition asserted it outright (`isIRI(?x)`), or Θ
+   * holds a shape for the group, which is a triple term by being one. A term pin is a third, decided by
+   * the term before this is reached.
+   *
+   * What {@link TermClusterSet.rangeOf} additionally knows is *not* one of them, and reading it here is
+   * the mistake this exists to avoid: the range is narrowed by the position the group sits in and by what
+   * the operation leaves the variables in it, which are facts of the plan Θ is being written into rather
+   * than facts of Θ. `?x ≡ PREDICATE(?o)` leaves the group at `{IRI}` without anyone having asserted it -
+   * reporting that would have Θ claim an assertion it never carried, and would put {@link get} at odds
+   * with the conjuncts Θ decomposes into, which state only what was asserted.
    */
   private assertedTermTypeOf(group: number): AssertableTermType | undefined {
-    const range = this.clusters.rangeOf(group);
-    return range.size === 1 ?
-      assertableTermTypes.find(termType => range.has(termType)) :
+    if (this.clusters.childrenOf(group) !== undefined) {
+      return 'Quad';
+    }
+    const asserted = this.clusters.assertedRangeOf(group);
+    return asserted.size === 1 ?
+      assertableTermTypes.find(termType => asserted.has(termType)) :
       undefined;
   }
 

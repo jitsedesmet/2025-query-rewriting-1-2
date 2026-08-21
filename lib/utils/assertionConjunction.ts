@@ -255,20 +255,21 @@ export class AssertionConjunction {
    * would state the same thing twice and stop the pass being idempotent.
    */
   public conjuncts(): AssertionConjunct[] {
-    const aliases = this.anchoredAccessesPerGroup();
+    const accessesPerGroup = this.anchoredAccessesPerGroup();
     const result: AssertionConjunct[] = [];
     const emitted = new Set<number>();
+
     const emit = (group: number): void => {
       const resolved = this.clusters.resolveGroup(group);
-      if (emitted.has(resolved) || !aliases.has(resolved)) {
-        return;
-      }
-      emitted.add(resolved);
-      result.push(...this.groupConjuncts(resolved, aliases));
-      for (const child of childGroupsOf(this.clusters.childrenOf(resolved))) {
-        emit(child);
+      if (!emitted.has(resolved) && accessesPerGroup.has(resolved)) {
+        emitted.add(resolved);
+        result.push(...this.groupConjuncts(resolved, accessesPerGroup));
+        for (const child of childGroupsOf(this.clusters.childrenOf(resolved))) {
+          emit(child);
+        }
       }
     };
+
     for (const name of this.order) {
       if (this.unbound.has(name)) {
         result.push({ access: access(name), assertion: assertUnbound() });
@@ -837,30 +838,30 @@ export class AssertionConjunction {
   }
 
   /** The conjuncts one group of Θ contributes, given how the whole of it can be read. */
-  private groupConjuncts(group: number, aliases: Map<number, Access[]>): AssertionConjunct[] {
-    const reads = aliases.get(group)!;
+  private groupConjuncts(group: number, accessesPerGroup: Map<number, Access[]>): AssertionConjunct[] {
+    const accesses = accessesPerGroup.get(group)!;
     const pin = this.clusters.pinOf(group);
     const result: AssertionConjunct[] = [];
     if (pin?.kind === 'term') {
       // Every alias is that term, which already says they are equal to each other.
-      return reads.map(read => ({
-        access: read,
-        assertion: this.isStrong(read) ? assertStrong(pin.term) : assertWeak(pin.term),
+      return accesses.map(access => ({
+        access,
+        assertion: this.isStrong(access) ? assertStrong(pin.term) : assertWeak(pin.term),
       }));
     }
-    const [ anchor, ...rest ] = reads;
-    for (const read of rest) {
-      result.push({ access: read, assertion: assertStrong(anchor) });
+    const [ representative, ...rest ] = accesses;
+    for (const access of rest) {
+      result.push({ access, assertion: assertStrong(representative) });
     }
-    const termType = this.termTypeToState(group, aliases);
+    const termType = this.termTypeToState(group, accessesPerGroup);
     if (termType !== undefined) {
-      result.push({ access: anchor, assertion: assertTermType(termType, this.isStrong(anchor)) });
-    } else if (result.length === 0 && isBareAccess(anchor) &&
+      result.push({ access: representative, assertion: assertTermType(termType, this.isStrong(representative)) });
+    } else if (result.length === 0 && isBareAccess(representative) &&
       this.clusters.childrenOf(group) === undefined) {
       // A group of one, with nothing for that one to equal: all that is left of it is that it is bound.
       // A shape is never that - what it holds says everything this would - and neither is a position of
       // one nobody else names, `bnd` of which is not even expressible, `BOUND` taking a variable.
-      result.push({ access: anchor, assertion: assertBound() });
+      result.push({ access: representative, assertion: assertBound() });
     }
     return result;
   }
@@ -876,12 +877,12 @@ export class AssertionConjunction {
    * A shape *nothing* says anything about is the one case where the group has to say it itself, and it
    * is a triple term by being one at all rather than by anyone having asserted it.
    */
-  private termTypeToState(group: number, aliases: Map<number, Access[]>): AssertableTermType | undefined {
+  private termTypeToState(group: number, accessesPerGroup: Map<number, Access[]>): AssertableTermType | undefined {
     if (this.clusters.pinOf(group)?.kind === 'term') {
       return undefined;
     }
     if (this.clusters.childrenOf(group) !== undefined) {
-      return this.shapeIsWitnessed(group, aliases) ? undefined : 'Quad';
+      return this.shapeIsWitnessed(group, accessesPerGroup) ? undefined : 'Quad';
     }
     const asserted = this.clusters.assertedRangeOf(group);
     return asserted.size === 1 ? assertableTermTypes.find(termType => asserted.has(termType)) : undefined;
@@ -929,45 +930,48 @@ export class AssertionConjunction {
    * about it, since there is no way left to name it.
    */
   private anchoredAccessesPerGroup(): Map<number, Access[]> {
-    const anchors = new Map<number, Access>();
-    let groupsToDo: number[] = [];
+    // The shortest access pattern into a group
+    const representatives = new Map<number, Access>();
+    // Seed with every group that has a named member, including groups created for
+    // un-asserted positions of a tripleTerm variable.
+    let frontier = new Map<number, Access>();
     // Iterate all groups, also groups that were created to represent un-asserted positions of a tripleTerm variable.
     for (const [ group ] of this.clusters.groupEntries()) {
       const [ representative ] = this.namedMembers(group);
       if (representative !== undefined) {
-        anchors.set(group, access(representative));
-        groupsToDo.push(group);
+        frontier.set(group, access(representative));
       }
     }
-    while (groupsToDo.length > 0) {
+
+    // Level-by-level so that depth dominates and accessId only breaks ties.
+    while (frontier.size > 0) {
+      for (const [ group, via ] of frontier) {
+        // Sink frontiers into representatives - a group is accessed through some variable (shortest acces first)
+        representatives.set(group, via);
+      }
       const next = new Map<number, Access>();
-      for (const group of groupsToDo) {
-        const children = this.clusters.childrenOf(group);
-        for (const [ position, child ] of childEntriesOf(children)) {
-          if (anchors.has(child)) {
-            continue;
-          }
-          const via = readThrough(anchors.get(group)!, position);
-          const known = next.get(child);
-          if (known === undefined || accessId(via) < accessId(known)) {
-            next.set(child, via);
+      for (const [ group, via ] of frontier) {
+        for (const [ position, child ] of childEntriesOf(this.clusters.childrenOf(group))) {
+          // We donnot yet know how to access this group
+          if (!representatives.has(child)) {
+            const candidate = wrapAccess(via, position);
+            const known = next.get(child);
+            if (known === undefined || accessId(candidate) < accessId(known)) {
+              next.set(child, candidate);
+            }
           }
         }
       }
-      for (const [ group, via ] of next) {
-        anchors.set(group, via);
-      }
-      groupsToDo = [ ...next.keys() ];
+      frontier = next;
     }
 
-    const result = new Map<number, Access[]>();
-    for (const group of anchors.keys()) {
-      result.set(group, this.namedMembers(group).map(name => access(name)));
-    }
-    for (const group of anchors.keys()) {
-      const children = this.clusters.childrenOf(group);
-      for (const [ position, child ] of childEntriesOf(children)) {
-        result.get(child)?.push(readThrough(anchors.get(group)!, position));
+    // All access patterns into a group
+    const result = new Map(
+      [ ...representatives.keys() ].map(group => <const> [ group, this.namedMembers(group).map(name => access(name)) ]),
+    );
+    for (const [ group, via ] of representatives) {
+      for (const [ position, child ] of childEntriesOf(this.clusters.childrenOf(group))) {
+        result.get(child)?.push(wrapAccess(via, position));
       }
     }
     for (const reads of result.values()) {
@@ -1069,9 +1073,9 @@ function childEntriesOf(children: PinChildren | undefined): [ TriplePosition, nu
   return children === undefined ? [] : triplePositions.map(position => [ position, children[position] ]);
 }
 
-/** The access reading one position of what `read` reads. */
-function readThrough(read: Access, position: TriplePosition): Access {
-  return { name: read.name, positions: [ ...read.positions, position ]};
+/** The access reading one position of what `access` reads. */
+function wrapAccess(access: Access, position: TriplePosition): Access {
+  return { name: access.name, positions: [ ...access.positions, position ]};
 }
 
 /** Whether the conjunct is one edge of a clique - both of its sides a variable read directly. */

@@ -1,13 +1,8 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
-import type {
-  Pin,
-  PinChildren,
-  PinMeet,
-  TriplePin,
-  TriplePosition,
-} from '../datastructures/TermClusterSet.js';
-import { childGroupsOf, TermClusterSet, triplePositions } from '../datastructures/TermClusterSet.js';
+import { AssertionClusterSet } from '../datastructures/AssertionClusterSet.js';
+import type { PinChildren, TriplePosition } from '../datastructures/TermClusterSet.js';
+import { childGroupsOf, triplePositions } from '../datastructures/TermClusterSet.js';
 import type { RangeSet } from '../RangeSet.js';
 import type { TransformContext } from '../transformContext.js';
 import type {
@@ -107,7 +102,7 @@ import { DF } from './rdfDatatypes.js';
  */
 export class AssertionConjunction {
   /** Variable to its group; a group may be pinned to the term or the shape all of its members equal. */
-  private clusters: TermClusterSet<string, RDF.Term>;
+  private clusters: AssertionClusterSet;
   /**
    * Strength only applies to variables in groups. If you are not in a group, you are a stale leftover.
    * It is recorded per *root* variable: the accessor conjuncts about `?o` are exactly as strong as what
@@ -124,7 +119,7 @@ export class AssertionConjunction {
   private order: Set<string>;
 
   public constructor() {
-    this.clusters = new TermClusterSet<string, RDF.Term>(name => name, meetTermPins);
+    this.clusters = new AssertionClusterSet();
     this.strength = new Map();
     this.unbound = new Set();
     this.bound = new Set();
@@ -1001,54 +996,8 @@ export class AssertionConjunction {
   }
 }
 
-/**
- * The meet of two pins on one group of an assertion conjunction.
- *
- * Two terms are the equality they always were. Two shapes decompose: `?o ≡ <<( a b c )>>` and
- * `?o ≡ <<( d e f )>>` say `a ≡ d`, `b ≡ e`, `c ≡ f`, which is syntactic unification and is what makes
- * everything known about `SUBJECT(?o)` known about `SUBJECT(?x)` as soon as the two are unified.
- *
- * A ground triple term meeting a shape decomposes the same way ({@link decomposedAgainst}). Anything else
- * - a term that is not a triple term, or one carrying a graph no triple term can have - is a
- * contradiction.
- */
-function meetTermPins(left: Pin<RDF.Term>, right: Pin<RDF.Term>): PinMeet<RDF.Term> | false {
-  if (left.kind === 'triple') {
-    return right.kind === 'triple' ?
-        {
-          pin: left,
-          entailed: triplePositions.map(position =>
-            ({ kind: 'unify', left: left[position], right: right[position] })),
-        } :
-      decomposedAgainst(left, right.term);
-  }
-  if (right.kind === 'triple') {
-    return decomposedAgainst(right, left.term);
-  }
-  return left.term.equals(right.term) ? { pin: left, entailed: []} : false;
-}
-
-/**
- * A ground triple term meeting a shape: the same decomposition two shapes are, with the components
- * already known.
- *
- * The *shape* is what the group keeps. Its positions are groups other things may be equal to, where the
- * term is a single value, and nothing is lost by it - {@link AssertionConjunction.resolveTerm} reads the
- * term back off a shape all of whose positions are decided.
- */
-function decomposedAgainst(shape: TriplePin, ground: RDF.Term): PinMeet<RDF.Term> | false {
-  if (ground.termType !== 'Quad' || ground.graph.termType !== 'DefaultGraph') {
-    return false;
-  }
-  return {
-    pin: shape,
-    entailed: triplePositions.map(position =>
-      ({ kind: 'pin', group: shape[position], pin: { kind: 'term', term: ground[position] }})),
-  };
-}
-
 /** Whether a group can still hold a value of one of these types, its pin included. */
-function admitsRange(clusters: TermClusterSet<string, RDF.Term>, group: number, range: RangeSet): boolean {
+function admitsRange(clusters: AssertionClusterSet, group: number, range: RangeSet): boolean {
   const pin = clusters.pinOf(group);
   const type = pin === undefined ? undefined : (pin.kind === 'term' ? pin.term.termType : 'Quad');
   return clusters.rangeOf(group).disjunct(range).size > 0 && (type === undefined || range.has(type));

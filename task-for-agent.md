@@ -127,8 +127,15 @@ rather than after the kind of term, so there is no range for it to narrow.
 The one thing the generalisation needs that a single `isTRIPLE` did not: a group has to remember which
 part of its range was **asserted** as against **derived**. That a subject holds no literal, or that a
 group pinned to an IRI is one, holds wherever the group is written, so restating it would say nothing and
-would grow the condition on every pass; only what a caller asserted has to survive the round trip. Hence
-`assertedRangeOf` / `assertTermTypeRange` beside `rangeOf` / `narrowRange` in `TermClusterSet`.
+would grow the condition on every pass; only what a condition asserted has to survive the round trip.
+
+That is not a fact about groups, though - it is about writing them back out, which only Θ ever does. So
+it lives in `AssertionClusterSet`, the subclass of `TermClusterSet` that Θ is built on, the way
+`ClusterSolver` holds `groupToExpressions`: `assertedRangeOf` / `assertTermTypeRange` beside the
+inherited `rangeOf` / `narrowRange`, migrated on a merge like any other per-group state. The subclass
+also owns `meetTermPins`, being the set whose meet it is. **Override `clone`** in any such subclass -
+`TermClusterSet.clone` builds a set of its own class, so an inherited clone silently drops whatever the
+subclass added, and Θ clones on every `split`, `weakened` and `normalisedFor`.
 
 ### D3 — groups are pinned to a shape, not a term
 

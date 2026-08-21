@@ -29,9 +29,10 @@ all keep their meaning. `U`/`B` stay restricted to accesses of length 0 (`BOUND`
 **One new form: `T⟨?x : τ⟩`** — originally `isTRIPLE(?x)`, the degenerate shape, "a triple term, nothing
 known about its parts". Implies bound, has a weak form, absorbed by anything stronger. Generalised in
 review to all four term-type predicates (`isIRI`/`isURI`, `isBLANK`, `isLITERAL`, `isTRIPLE`), which are
-one fact — a narrowing of the group's range — and so one form. It costs the lattice one distinction: the
-*asserted* part of a range, which has to be written back, against the *derived* part, which holds wherever
-the group is written and must not be.
+one fact — a narrowing of the group's range — and so one form. It costs one distinction: the *asserted*
+part of a range, which has to be written back, against the *derived* part, which holds wherever the group
+is written and must not be. That belongs to Θ rather than to the lattice, so it lives in
+`AssertionClusterSet`, the subclass Θ is built on.
 
 **Groups get a pin lattice.** `TermClusterSet`'s `groupToTerm` becomes
 `{kind:'term', term} | {kind:'triple', children:[groupId × 3]}`. `compareTerm` (equal / contradiction)
@@ -95,6 +96,7 @@ error when every component is bound and `range(c₁) ⊆ {IRI, bnode}`, `range(c
 | file | change |
 |---|---|
 | `datastructures/TermClusterSet.ts` | pin lattice, `meetPins`, work-list merge, occurs check, `carriesInformation` must count child references (else a pin dangles) |
+| `datastructures/AssertionClusterSet.ts` | the subclass Θ is built on: its meet, and the asserted half of a group's range |
 | `utils/assertions.ts` | `Access`; recognisers for `subject/predicate/object` equalities and `istriple`; accessor builders; ~~`isAssertableTerm` admits ground quads~~ **done** |
 | `utils/assertionConjunction.ts` | conjuncts over accesses, path walking in `assert`, `toExpression`, the two substitutions, `boundImpliedBy` covers named children |
 | `utils/partialExpressionEvaluation.ts` | substitution argument becomes a view (`resolve`, `isTriple`); fold accessors and `istriple` — without this the filter's own residual never folds and the pass is not idempotent |

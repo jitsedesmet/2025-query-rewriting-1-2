@@ -1,7 +1,7 @@
 import { toAst } from '@traqula/algebra-sparql-1-2';
 import { describe, it } from 'vitest';
 import type { RangeSet } from '../lib/RangeSet.js';
-import { emptyRange, graphRange } from '../lib/RangeSet.js';
+import { emptyRange, graphRange, predicateRange } from '../lib/RangeSet.js';
 import type { TransformContext } from '../lib/transformContext.js';
 import { createPartialContext } from '../lib/transformContext.js';
 import { AssertionConjunction, collectAssertions } from '../lib/utils/assertionConjunction.js';
@@ -619,6 +619,27 @@ describe('assertionConjunction', () => {
       // No `isTRIPLE(?o)` beside it: reading a position already entails what it is read through.
       expect(conjunctsOf(assertions)).toEqual([ 'o.object=type(Literal)' ]);
       expect(conditionOf(assertions)).toBe('FILTER ( ISLITERAL( OBJECT( ?o ) ) )');
+    });
+
+    it('keeps what a condition asserted across a clone', ({ expect }) => {
+      // The cluster set a conjunction is built on carries state of its own, and cloning is how every
+      // `split`, `weakened` and `normalisedFor` gets a Θ to work on - so a clone that quietly built the
+      // base class would lose it on the first one of those.
+      const assertions = <AssertionConjunction> conjunctionOf([ 'x', assertTermType('Literal') ]);
+      expect(conjunctsOf(assertions.clone())).toEqual([ 'x=type(Literal)' ]);
+      expect(conjunctsOf(assertions.split(() => true).inside)).toEqual([ 'x=type(Literal)' ]);
+    });
+
+    it('never writes back a kind of term it worked out for itself', ({ expect }) => {
+      // `?x ≡ ?p` puts the two in one group, and a predicate is an IRI - so the group holds one. That is
+      // a fact of where `?p` sits, true wherever the group is written, and restating it would grow the
+      // condition on every pass without saying anything.
+      const vRanges = new VRanges();
+      vRanges.addAtTop([ 'x' ]);
+      vRanges.narrow('p', predicateRange);
+      const assertions = <AssertionConjunction> conjunctionOf([ 'x', assertStrong(DF.variable('p')) ]);
+      const normalised = assertions.normalisedFor({ cVars: new Set([ 'x', 'p' ]), vRanges });
+      expect(conjunctsOf(normalised)).toEqual([ 'x=strong(p)' ]);
     });
 
     it('hands an edge reading through an accessor over one at a time', ({ expect }) => {

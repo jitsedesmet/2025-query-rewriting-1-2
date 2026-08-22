@@ -23,7 +23,7 @@ import {
   assertTermType,
   assertUnbound,
   assertWeak,
-  boundAssertionExpression,
+  boundAssertionAsExpression,
   variablesReadByConjunct,
   hasTarget,
   impliesBound,
@@ -32,8 +32,8 @@ import {
   rangeOfTermType,
   sameAccessAs,
   termTypeAssertionAsExpression,
-  unboundAssertionExpression,
-  weakAssertionExpression,
+  unboundAssertionAsExpression,
+  weakAssertionAsExpression,
   asWeakenedConjunct,
   weakenedExpression,
 } from './assertions.js';
@@ -483,37 +483,36 @@ export class AssertionConjunction {
         if (cVars.has(name)) {
           result.bound.delete(name);
         }
-      } else {
-        if (vRanges.neverBinds(name)) {
-          if (this.strength.get(name) === 'strong') {
-            return undefined;
-          }
-          // Never bound and weak -> the `!bound(?x)` disjunct carries it, so nothing to assert.
-          result.removeMember(name);
-          continue;
+      } else if (vRanges.neverBinds(name)) {
+        if (this.strength.get(name) === 'strong') {
+          return undefined;
         }
+        // Never bound and weak -> the `!bound(?x)` disjunct carries it, so nothing to assert.
+        result.removeMember(name);
+      } else {
         if (cVars.has(name)) {
           // B⟨?x⟩ holds of every solution here, and completes a weak member into a strong one.
           result.strength.set(name, 'strong');
         }
         const group = result.clusters.groupOf(name);
-        if (group === undefined) {
-          continue;
-        }
-        // A member of a group the variable can never be, which both forms have something to say about -
-        // the same rule as (FBndII) one level down the lattice, the variable being in scope here and no
-        // solution binding it to *this* value. Read off `result`, so a promotion just above counts.
-        if (result.strength.get(name) === 'strong') {
-          // A⟨?x ≡ v⟩ implies `bnd(?x)`, so what the plan leaves for `?x` is what it leaves for the group.
-          if (!result.clusters.narrowRange(group, vRanges.rangeOf(name))) {
-            return undefined;
+        if (group !== undefined) {
+          // A member of a group the variable can never be, which both forms have something to say about -
+          // the same rule as (FBndII) one level down the lattice, the variable being in scope here and no
+          // solution binding it to *this* value. Read off `result`, so a promotion just above counts.
+          if (result.strength.get(name) === 'strong') {
+            // A⟨?x ≡ v⟩ implies `bnd(?x)`, so what the plan leaves for `?x` is what it leaves for the group.
+            // We need to do this e.g. in case the var just became strong,
+            //   and we do it here since we need a 'isValid' check regardless.
+            if (!result.clusters.narrowRange(group, vRanges.rangeOf(name))) {
+              return undefined;
+            }
+          } else if (!admitsRange(result.clusters, group, vRanges.rangeOf(name))) {
+            // W⟨?x ≡ v⟩ is `¬bnd(?x) ∨ ?x ≡ v`, and the right disjunct is false wherever `?x` is bound. So
+            // the weak form *is* U⟨?x⟩ here - which is worth doing rather than leaving it: a weak member
+            // says almost nothing, where `!bound(?x)` is a constraint the rest of the pass acts on.
+            // Cannot fail: `?x` is neither `bound` nor a strong member, the two states it rejects.
+            result.assertUnbound(name);
           }
-        } else if (!admitsRange(result.clusters, group, vRanges.rangeOf(name))) {
-          // W⟨?x ≡ v⟩ is `¬bnd(?x) ∨ ?x ≡ v`, and the right disjunct is false wherever `?x` is bound. So
-          // the weak form *is* U⟨?x⟩ here - which is worth doing rather than leaving it: a weak member
-          // says almost nothing, where `!bound(?x)` is a constraint the rest of the pass acts on.
-          // Cannot fail: `?x` is neither `bound` nor a strong member, the two states it rejects.
-          result.assertUnbound(name);
         }
       }
     }
@@ -561,7 +560,7 @@ export class AssertionConjunction {
 
   /** Conjoins everything `other` says with what this conjunction already says. */
   public absorb(other: AssertionConjunction): boolean {
-    return other.conjuncts().every(({ access: read, assertion }) => this.assert(read, assertion));
+    return other.conjuncts().every(({ access, assertion }) => this.assert(access, assertion));
   }
 
   /**
@@ -720,23 +719,23 @@ export class AssertionConjunction {
   /** The single condition the (non-empty) conjunction stands for, each conjunct in the form it carries. */
   public toExpression(c: TransformContext): Algebra.Expression {
     // eslint-disable-next-line array-callback-return
-    return conjunctionOf(c, this.conjuncts().map(({ access: read, assertion }) => {
+    return conjunctionOf(c, this.conjuncts().map(({ access, assertion }) => {
       switch (assertion.subType) {
         case 'unbound': {
-          return unboundAssertionExpression(c, read.name);
+          return unboundAssertionAsExpression(c, access.name);
         }
         case 'bound': {
-          return boundAssertionExpression(c, read.name);
+          return boundAssertionAsExpression(c, access.name);
         }
         case 'strong': {
-          return strongAssertionAsExpression(c, read, assertion.term);
+          return strongAssertionAsExpression(c, access, assertion.term);
         }
         case 'weak': {
-          return weakAssertionExpression(c, read, assertion.term);
+          return weakAssertionAsExpression(c, access, assertion.term);
         }
         case 'termType': {
-          const typed = termTypeAssertionAsExpression(c, read, assertion.termType);
-          return assertion.strong ? typed : weakenedExpression(c, read.name, typed);
+          const typed = termTypeAssertionAsExpression(c, access, assertion.termType);
+          return assertion.strong ? typed : weakenedExpression(c, access.name, typed);
         }
       }
     }));
@@ -1075,8 +1074,11 @@ export class AssertionConjunction {
 /** Whether a group can still hold a value of one of these types, its pin included. */
 function admitsRange(clusters: AssertionClusterSet, group: number, range: RangeSet): boolean {
   const pin = clusters.pinOf(group);
-  const type = pin === undefined ? undefined : (pin.kind === 'term' ? pin.term.termType : 'Quad');
-  return clusters.rangeOf(group).disjunct(range).size > 0 && (type === undefined || range.has(type));
+  if (pin === undefined) {
+    return clusters.rangeOf(group).disjunct(range).size > 0;
+  }
+  const type = pin.kind === 'term' ? pin.term.termType : 'Quad';
+  return clusters.rangeOf(group).disjunct(range).size > 0 && range.has(type);
 }
 
 /** The positions of a shape paired with the groups holding them, for the rules that walk all three. */
@@ -1266,5 +1268,6 @@ function sameSubstitution(left: Assertions, right: Assertions): boolean {
     [ ...left ].every(([ name, term ]) => right.get(name)?.equals(term) === true);
 }
 
+// TODO: these exports can go? Where we import these from here, just let them import from the correct source instead.
 export type { AssertionConjunct } from './assertions.js';
 export { variablesReadByConjunct, asWeakenedConjunct } from './assertions.js';

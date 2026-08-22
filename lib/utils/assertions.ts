@@ -506,26 +506,26 @@ export function termTypeAssertionAsExpression(
  */
 export function weakenedExpression(c: TransformContext, name: string, strong: Algebra.Expression):
 Algebra.Expression {
-  return c.AF.createOperatorExpression('||', [ unboundAssertionExpression(c, name), strong ]);
+  return c.AF.createOperatorExpression('||', [ unboundAssertionAsExpression(c, name), strong ]);
 }
 
 /**
  * Creates the weak assertion W⟨a ≡ c⟩: `!bound(?x) || sameTerm(a, c)`.
  * Only works for simpleAccess. And single variable targets.
  */
-export function weakAssertionExpression(c: TransformContext, access: Access, target: AssertionTarget):
+export function weakAssertionAsExpression(c: TransformContext, access: Access, target: AssertionTarget):
 Algebra.Expression {
   return weakenedExpression(c, access.name, strongAssertionAsExpression(c, access, target));
 }
 
 /** Creates the bound assertion B⟨?x⟩: `bound(?x)`. */
-export function boundAssertionExpression(c: TransformContext, name: string): Algebra.Expression {
+export function boundAssertionAsExpression(c: TransformContext, name: string): Algebra.Expression {
   return c.AF.createOperatorExpression('bound', [ c.AF.createTermExpression(DF.variable(name)) ]);
 }
 
 /** Creates the unbound assertion U⟨?x⟩: `!bound(?x)`. */
-export function unboundAssertionExpression(c: TransformContext, name: string): Algebra.Expression {
-  return c.AF.createOperatorExpression('!', [ boundAssertionExpression(c, name) ]);
+export function unboundAssertionAsExpression(c: TransformContext, name: string): Algebra.Expression {
+  return c.AF.createOperatorExpression('!', [ boundAssertionAsExpression(c, name) ]);
 }
 
 /**

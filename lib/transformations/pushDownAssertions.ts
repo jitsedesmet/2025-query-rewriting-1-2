@@ -220,6 +220,12 @@ function swapWith(
     // What a *shape* says is not a term, so it cannot be substituted into a pattern yet - it stays a
     // condition over the operation the terms were substituted into, which is where materialising it into
     // triple term patterns will take over.
+    //
+    // Every leaf is handed the *same* conjunction; what differs is what each can pay off with the rewrite
+    // it makes, and so what has to be restated over it. A BGP pays by substituting terms into its
+    // patterns, so it settles exactly the conjuncts that come to a term and no others - `isIRI(?x)` has
+    // none to substitute and stays. A VALUES pays by pruning rows, and a row holds the *value* of its
+    // column, so it settles which kind of term that value is as readily as which term it is.
     case Algebra.Types.BGP: {
       return keep(assertionFilter(
         c,
@@ -239,6 +245,11 @@ function swapWith(
       // A row decides a column against a term, against another column, against which kind of term it is,
       // and against being there at all. What a shape says about a *position* of a column is none of
       // those, so it stays above the VALUES rather than being silently discharged by the pruning.
+      //
+      // More conservatively than a row can manage, at that: one *holding* a ground triple term decides
+      // the positions of it too. The general rule is to assert the row into a clone of Θ and keep it
+      // where that holds, which would replace the per-variable reading below - a pruning missed rather
+      // than an answer got wrong, since what this cannot decide it keeps.
       const decidable: AssertionConjunct[] = [];
       const kept: AssertionConjunct[] = [];
       for (const conjunct of assertions.conjuncts()) {

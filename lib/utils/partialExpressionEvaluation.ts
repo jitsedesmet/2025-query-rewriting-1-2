@@ -82,7 +82,7 @@ function substitute(
       // An accessor chain is read *before* its argument is substituted into: `SUBJECT(?o)` may be decided
       // where `?o` is not, the shape of `?o` having a term in that position and none in the others. What
       // the chain reads is a term here, never an open shape (S3).
-      const decided = decideAccess(c, expression, assertions);
+      const decided = decidedByAccess(c, expression, assertions);
       if (decided !== undefined) {
         return decided;
       }
@@ -115,29 +115,32 @@ function substitute(
  * is written back over the operation it was pushed into, and unless it collapses to `true` there, running
  * the pass again reads it as a second assertion and stacks a second copy of the rewrite it caused.
  */
-function decideAccess(
+function decidedByAccess(
   c: TransformContext,
   expression: Algebra.OperatorExpression,
   assertions: AssertionView,
 ): Algebra.Expression | undefined {
-  const stated = asAssertableTermType(expression.operator);
-  if (stated !== undefined && expression.args.length === 1) {
-    const read = asAccess(expression.args[0]);
-    const range = read === undefined ? undefined : assertions.typeRange(read);
-    if (range === undefined) {
+  const termTypeAssertion = asAssertableTermType(expression.operator);
+  if (termTypeAssertion !== undefined && expression.args.length === 1) {
+    const access = asAccess(expression.args[0]);
+    const rangeOfAccess = access === undefined ? undefined : assertions.typeRange(access);
+    if (rangeOfAccess === undefined) {
       return undefined;
     }
     // `⊆` answers it `true`, an empty meet answers it `false`, and anything between leaves it standing.
-    if (range.size === range.disjunct(rangeOfTermType(stated)).size) {
+    if (rangeOfAccess.size === rangeOfAccess.disjunct(rangeOfTermType(termTypeAssertion)).size) {
       return createBooleanExpression(c, true);
     }
-    return range.has(stated) ? undefined : createBooleanExpression(c, false);
+    return rangeOfAccess.has(termTypeAssertion) ? undefined : createBooleanExpression(c, false);
   }
-  const read = asAccess(expression);
-  if (read === undefined || read.positions.length === 0) {
+  // If it is not an termTypeAssertion, maybe it is an access
+  const access = asAccess(expression);
+  // TODO: the second check can go since we know an operatorExpression
+  //  does not cerate an access with no positions (a var)
+  if (access === undefined || access.positions.length === 0) {
     return undefined;
   }
-  const decided = assertions.resolve(read);
+  const decided = assertions.resolve(access);
   return decided === undefined ? undefined : c.AF.createTermExpression(decided);
 }
 
@@ -160,7 +163,7 @@ function componentOf(term: RDF.Term, position: string): RDF.Term | undefined {
 }
 
 /** The term an argument spells out, when it is a ground one. */
-function groundArgument(expression: Algebra.Expression): RDF.Term | undefined {
+function exprAsGroundedTerm(expression: Algebra.Expression): RDF.Term | undefined {
   return expression.subType === Algebra.ExpressionTypes.TERM && isAssertableTerm(expression.term) ?
     expression.term :
     undefined;
@@ -196,8 +199,8 @@ export function constantFoldOperator(
     case 'object': {
       // A position of a triple term written out: `SUBJECT(<<( :a :b :c )>>)` is `:a`. Of anything else it
       // is an error, which is `false` in a FILTER and has no term to fold to, so it is left standing.
-      const ground = args.length === 1 ? groundArgument(args[0]) : undefined;
-      const component = ground === undefined ? undefined : componentOf(ground, operator);
+      const groundedTerm = args.length === 1 ? exprAsGroundedTerm(args[0]) : undefined;
+      const component = groundedTerm === undefined ? undefined : componentOf(groundedTerm, operator);
       if (component !== undefined) {
         return c.AF.createTermExpression(component);
       }
@@ -210,9 +213,9 @@ export function constantFoldOperator(
     case 'istriple': {
       // Decidable of any ground term, and of a ground term only: these answer `false` rather than
       // erroring, so both directions fold.
-      const ground = args.length === 1 ? groundArgument(args[0]) : undefined;
-      if (ground !== undefined) {
-        return createBooleanExpression(c, ground.termType === asAssertableTermType(operator));
+      const groundedTerm = args.length === 1 ? exprAsGroundedTerm(args[0]) : undefined;
+      if (groundedTerm !== undefined) {
+        return createBooleanExpression(c, groundedTerm.termType === asAssertableTermType(operator));
       }
       break;
     }
@@ -220,14 +223,14 @@ export function constantFoldOperator(
       // A construction of three ground terms *is* the triple term, unless no triple term can hold them -
       // and then it raises, which leaves the target of a BIND unbound and a FILTER false, neither of
       // which a term folds to.
-      const ground = args.length === 3 ? args.map(arg => groundArgument(arg)) : [];
+      const groundedTerms = args.length === 3 ? args.map(arg => exprAsGroundedTerm(arg)) : [];
       const ranges = [ subjectRange, predicateRange, objectRange ];
-      if (ground.length === 3 && ground.every((term, index) => term !== undefined &&
+      if (groundedTerms.length === 3 && groundedTerms.every((term, index) => term !== undefined &&
         ranges[index].has(term.termType))) {
         return c.AF.createTermExpression(DF.quad(
-          <RDF.Quad_Subject> ground[0]!,
-          <RDF.Quad_Predicate> ground[1]!,
-          <RDF.Quad_Object> ground[2]!,
+          <RDF.Quad_Subject> groundedTerms[0]!,
+          <RDF.Quad_Predicate> groundedTerms[1]!,
+          <RDF.Quad_Object> groundedTerms[2]!,
         ));
       }
       break;

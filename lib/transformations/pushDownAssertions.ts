@@ -789,6 +789,9 @@ function pushIntoJoin(
   }
   // Every operand pushing a sub-clique of its own also *connects* the sub-clique: the equality between two variables
   // it binds certainly is what join compatibility already enforces on the output.
+  // Two passes over what is one thing: a clique of variables splits over the targets, where an edge
+  // reading through an accessor is placed whole. See {@link AssertionConjunction.cliques} for what the
+  // one pass would need.
   for (const clique of assertions.cliques()) {
     const placed = splitClique(
       clique,

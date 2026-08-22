@@ -310,6 +310,18 @@ export class AssertionConjunction {
    * decides per variable would split a clique into pieces that no longer say it, so it decides per clique
    * and splits the *edges* instead. A group carrying a shape is one of them: its members equal each other
    * whatever the shape says about them, and it is that equality these edges are.
+   *
+   * **Variables rather than accesses, which is a simplification and not the shape of the thing.** A
+   * group's aliases are accesses, and one reached both as `?s` and as `SUBJECT(?o)` states that equality
+   * exactly as two variables in one group do - so reading the aliases here would fold
+   * {@link accessConjuncts} into this, and let a clique of both kinds be *split* over the targets rather
+   * than placed an edge at a time.
+   *
+   * Two things have to be settled before it can, which is why it is scheduled work rather than a rename.
+   * The licence a target gives an alias is over the variables it reads *through* rather than over a name.
+   * And where a target is licensed for a single member, {@link splitClique} falls back to B⟨?x⟩, which no
+   * accessor has - `BOUND` takes a variable, and {@link assert} raises on one that is not. T⟨?x : Quad⟩
+   * of the root is what it would have to send instead (S6), which is a rule rather than a refactor.
    */
   public cliques(): string[][] {
     const result: string[][] = [];

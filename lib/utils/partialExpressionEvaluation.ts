@@ -133,14 +133,8 @@ function decidedByAccess(
     }
     return rangeOfAccess.has(termTypeAssertion) ? undefined : createBooleanExpression(c, false);
   }
-  // If it is not an termTypeAssertion, maybe it is an access
   const access = asAccess(expression);
-  // TODO: the second check can go since we know an operatorExpression
-  //  does not cerate an access with no positions (a var)
-  if (access === undefined || access.positions.length === 0) {
-    return undefined;
-  }
-  const decided = assertions.resolve(access);
+  const decided = access === undefined ? undefined : assertions.resolve(access);
   return decided === undefined ? undefined : c.AF.createTermExpression(decided);
 }
 

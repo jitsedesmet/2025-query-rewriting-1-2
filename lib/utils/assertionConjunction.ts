@@ -421,7 +421,7 @@ export class AssertionConjunction {
   public expressionSubstitution(): AssertionView {
     return {
       bound: this.boundImpliedBy(),
-      resolve: access => this.resolveAccessValue(access),
+      resolve: access => this.substitutionFor(access),
       typeRange: access => this.strength.get(access.name) === 'strong' ? this.rangeKnownFor(access) : undefined,
     };
   }
@@ -1016,7 +1016,14 @@ export class AssertionConjunction {
       this.resolveTerm(group) !== undefined;
   }
 
-  /** The term a group is fixed to, which for a shape is the triple term its decided positions make. */
+  /**
+   * The term a group is fixed to, which for a shape is the triple term its decided positions make.
+   *
+   * The three need no type checking of their own. A position of a shape carries the range that position
+   * admits from the moment it is created ({@link AssertionClusterSet.assertTriplePin}), and a pin the
+   * range does not admit is refused where it is placed rather than here - so a predicate that got this
+   * far is a NamedNode, and a subject is neither a Literal nor a triple term.
+   */
   private resolveTerm(group: number): RDF.Term | undefined {
     const pin = this.clusters.pinOf(group);
     if (pin?.kind === 'term') {
@@ -1029,18 +1036,22 @@ export class AssertionConjunction {
     const subject = this.resolveTerm(children.subject);
     const predicate = this.resolveTerm(children.predicate);
     const object = this.resolveTerm(children.object);
-    if (subject === undefined || predicate === undefined || object === undefined ||
-    // TODO: why? These next checks seem so arbitrary?
-    //  Also: are they not enforced already by our clustering algeorthm/ ranges?
-      predicate.termType !== 'NamedNode' || subject.termType === 'Literal') {
+    if (subject === undefined || predicate === undefined || object === undefined) {
       return undefined;
     }
-    return DF.quad(<RDF.Quad_Subject> subject, predicate, <RDF.Quad_Object> object);
+    return DF.quad(<RDF.Quad_Subject> subject, <RDF.Quad_Predicate> predicate, <RDF.Quad_Object> object);
   }
 
-  // TODO this function does not sound like what it does. I would frm the name, expect it to behave like resolveTerm
-  /** The term an access reads, or the variable that reads its group most directly. */
-  private resolveAccessValue(read: Access): RDF.Term | undefined {
+  /**
+   * What an *expression* may be given in place of an access: the term it reads where Θ decides one, and
+   * otherwise the variable that reads its group most directly.
+   *
+   * The second half is what sets this apart from {@link resolveTerm}, which hands back a value or
+   * nothing. A representative is not a value - it still has to be evaluated - but Θ proves it equal to
+   * what the access reads, so writing it there is sound and is what turns `sameTerm(SUBJECT(?o), ?s)`
+   * into `sameTerm(?s, ?s)` when the pass meets its own output again.
+   */
+  private substitutionFor(read: Access): RDF.Term | undefined {
     // A weak member says what the variable is *if* bound, which is not something an expression may assume.
     if (this.strength.get(read.name) !== 'strong') {
       return undefined;
@@ -1267,7 +1278,3 @@ function sameSubstitution(left: Assertions, right: Assertions): boolean {
   return left.size === right.size &&
     [ ...left ].every(([ name, term ]) => right.get(name)?.equals(term) === true);
 }
-
-// TODO: these exports can go? Where we import these from here, just let them import from the correct source instead.
-export type { AssertionConjunct } from './assertions.js';
-export { variablesReadByConjunct, asWeakenedConjunct } from './assertions.js';

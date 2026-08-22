@@ -558,6 +558,14 @@ describe('assertionConjunction', () => {
       // outside `graphRange` - and it is what confines the nesting of shapes to the `object` chain.
       expect(structuralConjunctionOf([ subjectOfO, assertStrong(DF.literal('1')) ])).toBeUndefined();
       expect(structuralConjunctionOf([ subjectOfO, assertTermType('Quad') ])).toBeUndefined();
+      // The predicate of one is an IRI and nothing else, blank nodes included. Every position carries
+      // the range it admits from the moment the shape creates it, which is why nothing downstream - the
+      // term a shape resolves to, above all - has to type-check the three all over again.
+      expect(structuralConjunctionOf([ access('o', 'predicate'), assertStrong(DF.literal('1')) ]))
+        .toBeUndefined();
+      expect(structuralConjunctionOf([ access('o', 'predicate'), assertStrong(DF.blankNode('b')) ]))
+        .toBeUndefined();
+      expect(structuralConjunctionOf([ subjectOfO, assertStrong(DF.blankNode('b')) ])).toBeDefined();
     });
 
     it('empties the plan where the operation leaves the shape no term to take', ({ expect }) => {

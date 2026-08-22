@@ -96,9 +96,10 @@ import { unionSets } from '../utils/setUtils.js';
  * Three consequences run through the rules below.
  *
  * **A shape is not a term, so it does not substitute into a pattern.** What a rewrite discharging Θ by
- * substitution leaves behind is {@link AssertionConjunction.structuralPartOfConjunction}, which stays a condition over the
- * operation the terms went into. A shape every position of which is decided *is* a ground triple term,
- * and travels as one. Materialising an open shape into a triple term pattern is what comes next.
+ * substitution leaves behind is {@link AssertionConjunction.structuralPartOfConjunction}, which stays a
+ * condition over the operation the terms went into. A shape every position of which is decided *is* a
+ * ground triple term, and travels as one. Materialising an open shape into a triple term pattern is what
+ * comes next.
  *
  * **A shape is a range statement.** A group carrying one holds a `Quad`, and no subject, predicate or
  * graph position does - so `isTRIPLE(?s)` over `?s ?p ?o` empties the plan off the ranges, the same rule

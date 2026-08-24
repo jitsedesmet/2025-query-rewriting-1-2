@@ -391,7 +391,14 @@ export class AssertionConjunction {
    * never into an expression (S3).
    */
   public strongSubstitution(): Assertions {
-    return this.substitutionOf(group => this.resolveTerm(group) ?? this.representativeVariable(group));
+    return this.strongMembersReplacedBy((group) => {
+      const term = this.resolveTerm(group);
+      if (term !== undefined) {
+        return term;
+      }
+      const representative = this.representativeOf(group);
+      return representative === undefined ? undefined : DF.variable(representative);
+    });
   }
 
   /**
@@ -439,7 +446,7 @@ export class AssertionConjunction {
   public intoPattern(namer: DerivedVarNamer): { substitution: Assertions; residual: AssertionConjunction } {
     const values = this.patternValues(namer);
     return {
-      substitution: this.substitutionOf(group => values.get(group)),
+      substitution: this.strongMembersReplacedBy(group => values.get(group)),
       residual: AssertionConjunction.of(this.conjuncts()
         .filter(conjunct => !this.enforcedByPattern(conjunct, values))),
     };
@@ -454,24 +461,18 @@ export class AssertionConjunction {
    * representative of its own group is already written where it is, and re-binding it below would be the
    * `BIND(?x AS ?x)` the algebra raises on.
    */
-  private substitutionOf(valueOf: (group: number) => RDF.Term | undefined): Assertions {
+  private strongMembersReplacedBy(valueOf: (group: number) => RDF.Term | undefined): Assertions {
     const result = new Map<string, RDF.Term>();
     for (const name of this.names()) {
       const group = this.clusters.groupOf(name);
       if (group !== undefined && this.strength.get(name) === 'strong') {
         const value = valueOf(group);
-        if (value !== undefined && !(value.termType === 'Variable' && value.value === name)) {
+        if (value !== undefined && (value.termType !== 'Variable' || value.value !== name)) {
           result.set(name, value);
         }
       }
     }
     return result;
-  }
-
-  /** The variable that reads a group most directly, `undefined` for a group no variable names. */
-  private representativeVariable(group: number): RDF.Variable | undefined {
-    const representative = this.representativeOf(group);
-    return representative === undefined ? undefined : DF.variable(representative);
   }
 
   /**

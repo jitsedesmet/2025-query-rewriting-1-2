@@ -1989,8 +1989,35 @@ GROUP BY ?x?y`,
       );
     });
 
+    it('sends nothing into the right hand side of a MINUS that Θ holds only weakly', ({ expect }) => {
+      // The argument for the RHS needs the surviving `μ₁` to *bind* `?o`: a compatible `μ₂` then either
+      // misses `?o` or agrees with it on the value. Under the weak form `μ₁` may leave `?o` unbound, and
+      // an RHS `μ₂` binding it to anything is still compatible - so filtering that `μ₂` out would keep a
+      // `μ₁` the MINUS removes. The RHS is left alone.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          ?s :p ?y
+          OPTIONAL { ?s :nosuch ?o }
+          MINUS { ?s :value ?o }
+          FILTER(!bound(?o) || isIRI(?o))
+        }`,
+        `SELECT ?o ?s ?y WHERE {
+  {
+    ?s <ex://p> ?y .
+    OPTIONAL {
+      ?s <ex://nosuch> ?o .
+    }
+    FILTER ( ( ! BOUND( ?o ) || ISIRI( ?o ) ) )
+  }
+  MINUS {
+    ?s <ex://value> ?o .
+  }
+}`,
+      );
+    });
+
     it('sends the weak form of a shape into the right hand side of a MINUS', ({ expect }) => {
-      // TODO: please think carefully. Are we allowed to do a weakened pushdown for operations
       // A unary predicate on the value is admissible there: the argument turns on the two sides agreeing
       // on that value. Here the RHS binds `?o` to a subject, which no triple term is, so it empties.
       expectTransform(
@@ -2578,6 +2605,26 @@ GROUP BY ?x?y`,
         OPTIONAL { ?s :value ?o }
         FILTER(!bound(?o) || isLITERAL(?o))
       }`, 4);
+    });
+
+    it('keeps the rows a MINUS removes through a variable Θ holds only weakly', async({ expect }) => {
+      // `:a :value "1"` is an RHS solution binding `?o` to a literal, and the LHS leaves `?o` unbound -
+      // compatible, sharing `?s`, so it removes the row. An RHS pruned by the weak `isIRI(?o)` would not
+      // have, and the row would come back.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :p ?y
+        OPTIONAL { ?s :nosuch ?o }
+        MINUS { ?s :value ?o }
+        FILTER(!bound(?o) || isIRI(?o))
+      }`, 0);
+      // The same over a subject that has more to say, so the answer is not empty for want of anything to
+      // remove: `:a` goes, the other three stay.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :says ?y
+        OPTIONAL { ?s :nosuch ?o }
+        MINUS { ?s :value ?o }
+        FILTER(!bound(?o) || isIRI(?o))
+      }`, 3);
     });
 
     it('keeps the rows an `isTRIPLE` selected once the pass has dropped it', async({ expect }) => {

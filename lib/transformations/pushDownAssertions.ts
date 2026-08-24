@@ -1079,16 +1079,25 @@ function placeAccessConjunct(
 }
 
 /**
- * The assertions of Θ that fix *one variable* to a term or to a shape, weakened - the only ones that may
- * enter the right hand side of a MINUS.
+ * The assertions of Θ that may enter the right hand side of a MINUS: the ones about a single variable
+ * that Θ holds *strongly*, weakened.
  *
- * The argument turns on the two sides agreeing on the *value* of the variable, and equal values have
- * equal subjects, so any unary predicate on that value is admissible - a shape as much as a term. An edge
- * between two variables is not one of those, and has no weak form to send in the first place.
+ * A surviving `μ₁` is one the whole conjunction holds of, so it binds `?x` to a value. An RHS `μ₂` can
+ * only remove it by being compatible with it, which is either not binding `?x` at all or binding it to
+ * that same value - and a unary predicate on a value holds of it however it is reached, equal values
+ * having equal types and equal subjects. That is the whole argument, and it is why a shape and a term
+ * type travel here as readily as a term does.
+ *
+ * **It needs `μ₁` to bind `?x`, which is exactly what the weak form does not give.** Under W⟨?x ≡ c⟩ a
+ * surviving `μ₁` may leave `?x` unbound, and an RHS `μ₂` binding it to anything at all is then still
+ * compatible with it - so filtering that `μ₂` out of the RHS keeps a `μ₁` the MINUS removes, which is a
+ * wrong answer rather than a missed rewrite. Hence {@link impliesBound} rather than "says something about
+ * a value": it is the one property the argument rests on. B⟨?x⟩ has it too and drops out for want of a
+ * weak form, and an edge between two variables is not about one value in the first place.
  */
 function admissibleOnMinusRhs(assertions: AssertionConjunction): AssertionConjunction {
   return AssertionConjunction.of(assertions.singleVariableConjuncts()
-    .filter(({ assertion }) => assertion.subType === 'strong' || assertion.subType === 'termType')
+    .filter(({ assertion }) => impliesBound(assertion))
     .map(conjunct => asWeakenedConjunct(conjunct))
     .filter(conjunct => conjunct !== undefined));
 }

@@ -611,17 +611,7 @@ export function componentOf(term: RDF.Term, position: TriplePosition): RDF.Term 
   if (term.termType !== 'Quad' || term.graph.termType !== 'DefaultGraph') {
     return undefined;
   }
-  switch (position) {
-    case 'subject': {
-      return term.subject;
-    }
-    case 'predicate': {
-      return term.predicate;
-    }
-    default: {
-      return term.object;
-    }
-  }
+  return term[position];
 }
 
 /**

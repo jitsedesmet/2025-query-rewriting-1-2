@@ -105,6 +105,7 @@ export function derivedVarNamer(existing: Iterable<string>): DerivedVarNamer {
     if (known !== undefined) {
       return known;
     }
+    // TODO: I do not understand how this does not always return a postfixed var?
     let name = key;
     for (let index = 0; taken.has(name); index += 1) {
       name = `${key}${index}`;

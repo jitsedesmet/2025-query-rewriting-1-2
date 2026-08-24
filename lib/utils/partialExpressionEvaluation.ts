@@ -1,10 +1,11 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
+import type { TriplePosition } from '../datastructures/TermClusterSet.js';
 import { objectRange, predicateRange, subjectRange } from '../RangeSet.js';
 import type { RangeSet } from '../RangeSet.js';
 import type { TransformContext } from '../transformContext.js';
 import type { Access } from './assertions.js';
-import { asAccess, isAssertableTerm, rangeOfTermType, asAssertableTermType } from './assertions.js';
+import { asAccess, componentOf, isAssertableTerm, rangeOfTermType, asAssertableTermType } from './assertions.js';
 import { booleanConstantOf, createBooleanExpression, isIriExpression } from './expressionHelpers.js';
 import { DF } from './rdfDatatypes.js';
 import { unionSets } from './setUtils.js';
@@ -138,24 +139,6 @@ function decidedByAccess(
   return decided === undefined ? undefined : c.AF.createTermExpression(decided);
 }
 
-/** The component a triple term holds in a position, `undefined` for anything that is not one. */
-function componentOf(term: RDF.Term, position: string): RDF.Term | undefined {
-  if (term.termType !== 'Quad' || term.graph.termType !== 'DefaultGraph') {
-    return undefined;
-  }
-  switch (position) {
-    case 'subject': {
-      return term.subject;
-    }
-    case 'predicate': {
-      return term.predicate;
-    }
-    default: {
-      return term.object;
-    }
-  }
-}
-
 /** The term an argument spells out, when it is a ground one. */
 function exprAsGroundedTerm(expression: Algebra.Expression): RDF.Term | undefined {
   return expression.subType === Algebra.ExpressionTypes.TERM && isAssertableTerm(expression.term) ?
@@ -194,7 +177,9 @@ export function constantFoldOperator(
       // A position of a triple term written out: `SUBJECT(<<( :a :b :c )>>)` is `:a`. Of anything else it
       // is an error, which is `false` in a FILTER and has no term to fold to, so it is left standing.
       const groundedTerm = args.length === 1 ? exprAsGroundedTerm(args[0]) : undefined;
-      const component = groundedTerm === undefined ? undefined : componentOf(groundedTerm, operator);
+      const component = groundedTerm === undefined ?
+        undefined :
+        componentOf(groundedTerm, <TriplePosition> operator);
       if (component !== undefined) {
         return c.AF.createTermExpression(component);
       }

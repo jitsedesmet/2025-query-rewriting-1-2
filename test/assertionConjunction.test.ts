@@ -1,3 +1,4 @@
+import type * as RDF from '@rdfjs/types';
 import { toAst } from '@traqula/algebra-sparql-1-2';
 import type { Algebra as AlgebraTypes } from '@traqula/algebra-transformations-1-2';
 import { describe, it } from 'vitest';
@@ -6,7 +7,7 @@ import { emptyRange, graphRange, predicateRange } from '../lib/RangeSet.js';
 import type { TransformContext } from '../lib/transformContext.js';
 import { createPartialContext } from '../lib/transformContext.js';
 import { AssertionConjunction, collectAssertions } from '../lib/utils/assertionConjunction.js';
-import type { Access, Assertion } from '../lib/utils/assertions.js';
+import type { Access, Assertion, Assertions } from '../lib/utils/assertions.js';
 import {
   access,
   accessId,
@@ -19,6 +20,7 @@ import {
 import type { CPMeta } from '../lib/utils/certainlyBoundVars.js';
 import { VRanges } from '../lib/utils/certainlyBoundVars.js';
 import { DF } from '../lib/utils/rdfDatatypes.js';
+import { derivedVarNamer } from '../lib/utils.js';
 
 const c = <TransformContext> createPartialContext();
 const termC = DF.namedNode('ex://c');
@@ -102,6 +104,22 @@ function conditionOf(assertions: AssertionConjunction): string {
     [],
   ))).trim();
   return query.split('\n').map(line => line.trim()).filter(line => line.startsWith('FILTER')).join(' ');
+}
+
+/** A term as a query writes it, which for a materialised shape is the triple term it wrote. */
+function termOf(term: RDF.Term): string {
+  if (term.termType === 'Variable') {
+    return `?${term.value}`;
+  }
+  if (term.termType === 'Quad') {
+    return `<<( ${termOf(term.subject)} ${termOf(term.predicate)} ${termOf(term.object)} )>>`;
+  }
+  return term.value;
+}
+
+/** A substitution as `name=term`, in the order it hands the replacements over. */
+function substitutionOf(substitution: Assertions): string[] {
+  return [ ...substitution ].map(([ name, term ]) => `${name}=${termOf(term)}`);
 }
 
 describe('assertionConjunction', () => {
@@ -722,6 +740,83 @@ describe('assertionConjunction', () => {
       expect(assertions.cliques()).toEqual([[ 'y', 'z' ]]);
       expect(conjunctsOf(AssertionConjunction.of(assertions.accessConjuncts())))
         .toEqual([ 'o.subject=strong(s)' ]);
+    });
+  });
+
+  describe('materialisation', () => {
+    const subjectOfO = access('o', 'subject');
+    const objectOfO = access('o', 'object');
+
+    it('writes a shape out as the triple term it is, coining what nothing names', ({ expect }) => {
+      // The target of the whole feature, at the level Θ decides it: `?s` goes into the position it is
+      // asserted equal to, and the two positions nothing says anything about get a variable named after
+      // the value they are read from.
+      const assertions = <AssertionConjunction> structuralConjunctionOf([ access('s'), assertStrong(subjectOfO) ]);
+      expect(substitutionOf(assertions.intoPattern(derivedVarNamer([])).substitution))
+        .toEqual([ 'o=<<( ?s ?o_p ?o_o )>>' ]);
+      // Nothing is left over: writing the pattern *is* stating the equality.
+      expect(conjunctsOf(assertions.intoPattern(derivedVarNamer([])).residual)).toEqual([]);
+    });
+
+    it('writes a named position as its name rather than as a coined one', ({ expect }) => {
+      // A group reachable both as `?x` and as `OBJECT(?o)` has to render the same way wherever it is
+      // written, or the two readings stop being the one value (D4).
+      const assertions = <AssertionConjunction> structuralConjunctionOf(
+        [ access('x'), assertStrong(objectOfO) ],
+        [ subjectOfO, assertStrong(termC) ],
+      );
+      expect(substitutionOf(assertions.intoPattern(derivedVarNamer([])).substitution))
+        .toEqual([ 'o=<<( ex://c ?o_p ?x )>>' ]);
+    });
+
+    it('leaves a shape no position of which says anything alone', ({ expect }) => {
+      // Three coined variables that state only that the value is a triple term, which is what the
+      // condition states without coining any - so the condition is what it stays.
+      const assertions = <AssertionConjunction> structuralConjunctionOf(
+        [ access('o'), assertTermType('Quad') ],
+        [ subjectOfO, assertStrong(subjectOfO) ],
+      );
+      expect(substitutionOf(assertions.intoPattern(derivedVarNamer([])).substitution)).toEqual([]);
+      expect(conjunctsOf(assertions.intoPattern(derivedVarNamer([])).residual)).toEqual([ 'o=type(Quad)' ]);
+    });
+
+    it('keeps what a pattern cannot state about a position it wrote', ({ expect }) => {
+      // Which kind of term a position holds is not something a triple pattern says, so it survives the
+      // materialisation - and is written about `?o`, never about the variable coined for the position.
+      const assertions = <AssertionConjunction> structuralConjunctionOf(
+        [ access('s'), assertStrong(subjectOfO) ],
+        [ objectOfO, assertTermType('NamedNode') ],
+      );
+      expect(substitutionOf(assertions.intoPattern(derivedVarNamer([])).substitution))
+        .toEqual([ 'o=<<( ?s ?o_p ?o_o )>>' ]);
+      expect(conjunctsOf(assertions.intoPattern(derivedVarNamer([])).residual))
+        .toEqual([ 'o.object=type(NamedNode)' ]);
+    });
+
+    it('writes a nested shape out with the one holding it', ({ expect }) => {
+      const assertions = <AssertionConjunction> structuralConjunctionOf(
+        [ access('o', 'object', 'subject'), assertStrong(termC) ],
+      );
+      expect(substitutionOf(assertions.intoPattern(derivedVarNamer([])).substitution))
+        .toEqual([ 'o=<<( ?o_s ?o_p <<( ex://c ?o_o_p ?o_o_o )>> )>>' ]);
+    });
+
+    it('never writes a weak member, which the pattern would claim is bound', ({ expect }) => {
+      const assertions = <AssertionConjunction> structuralConjunctionOf(
+        [ subjectOfO, assertWeak(termC) ],
+      );
+      expect(substitutionOf(assertions.intoPattern(derivedVarNamer([])).substitution)).toEqual([]);
+      expect(conjunctsOf(assertions.intoPattern(derivedVarNamer([])).residual)).toEqual([ 'o.subject=weak(ex://c)' ]);
+    });
+
+    it('names a position once, and around the names the query already uses', ({ expect }) => {
+      // The memo is what makes two materialisation sites agree, and the suffix is what keeps a coined
+      // name off a variable of the query - including on the second reading, which has to hand back the
+      // name the first one settled on rather than coin the next free one.
+      const namer = derivedVarNamer([ 'o_p' ]);
+      expect(namer('o', 'predicate').value).toBe('o_p0');
+      expect(namer('o', 'predicate').value).toBe('o_p0');
+      expect(namer('o', 'object').value).toBe('o_o');
     });
   });
 

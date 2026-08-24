@@ -602,6 +602,29 @@ function canOccupy(term: RDF.Term, position: TermPosition): boolean {
 }
 
 /**
+ * The component a triple term holds in a position, `undefined` for anything that is not a triple term.
+ *
+ * The graph is what tells the two apart: a triple term has none, so a quad carrying one is a generalised
+ * statement rather than a term, and reading a position of it would answer for something no value is.
+ */
+export function componentOf(term: RDF.Term, position: TriplePosition): RDF.Term | undefined {
+  if (term.termType !== 'Quad' || term.graph.termType !== 'DefaultGraph') {
+    return undefined;
+  }
+  switch (position) {
+    case 'subject': {
+      return term.subject;
+    }
+    case 'predicate': {
+      return term.predicate;
+    }
+    default: {
+      return term.object;
+    }
+  }
+}
+
+/**
  * Substitutes assertions (θ) into a term, recursing into triple terms. `undefined` when the result lands
  * a term in a position no RDF triple can have it in.
  */

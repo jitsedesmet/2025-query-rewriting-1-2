@@ -44,14 +44,20 @@ Two of its phases are already on main:
   binds `?t` certainly.
 
 Phases **2** (the pin lattice on `TermClusterSet`, with the per-group ranges) and **3** (accesses and
-term types) are on `feat/assert-variable-access`: Θ now holds shapes, round-trips them through a
-condition, and the pass carries them across the algebra. What it does *not* do yet is write one into a
-pattern.
+term types) landed as **#34 `c15adc9`**: Θ holds shapes, round-trips them through a condition, and the
+pass carries them across the algebra.
+
+Phase **4** (materialisation) is in the working tree, and with it the example above is what the pass
+produces: a shape reaching a BGP or a path is written into it as a triple term, its positions filled in
+with what Θ has for them and a variable coined for the rest (`derivedVarNamer`), with the mandatory
+`BIND` handing the variable back the value the pattern took. What no pattern can state — which *kind* of
+term a position holds, a position no pattern reached — comes back from the same call as a condition to
+put over it (`intoPattern`).
 
 Review pushed step 3 past its brief in one respect: T⟨?x⟩ became T⟨?x : τ⟩ over all four term-type
 predicates (`isIRI`/`isURI`, `isBLANK`, `isLITERAL`, `isTRIPLE`), since they are one fact — a narrowing
 of a group's range — and everything written for `isTRIPLE` held of them word for word.
 
-Left to do: materialising derived variables into triple term patterns (phase 4) and what is left of the
-per-operation rules (phase 5) — MINUS and GRAPH are done, VALUES and JOIN/LEFT JOIN are partly done, and
-EXTEND is open. See the status table and the per-operation table in `task-for-agent.md`.
+Left to do: what is left of the per-operation rules (phase 5) — MINUS, GRAPH and now BGP/PATH are done,
+VALUES and JOIN/LEFT JOIN are partly done, and EXTEND is open. See the status table and the
+per-operation table in `task-for-agent.md`.

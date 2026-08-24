@@ -9,11 +9,11 @@ SELECT * { ?s ?p <<( ?s ?o_p ?o_o )>> . BIND(<<( ?s ?o_p ?o_o )>> AS ?o) }
 Verified against the installed traqula: both the pattern and the `BIND` generate and re-parse exactly,
 so no parser/generator work is needed.
 
-> **State of play (2026-08-24).** Phases **0** (`ac6d447`, #31) and **1** (`e18a8dd`, #32) are on
-> `main`; phases **2** (the pin lattice) and **3** (accesses and term types) are on
-> `feat/assert-variable-access`. The sections below say so where they describe something that now
-> exists. Phases 4 (materialisation) and 5 (what is left of the operation rules) are open — see the
-> per-operation table in `task-for-agent.md` for which rows of 5 are already done.
+> **State of play (2026-08-24).** Phases **0** (`ac6d447`, #31), **1** (`e18a8dd`, #32), **2** (the pin
+> lattice) and **3** (accesses and term types) are on `main`; phase **4** (materialisation) is in the
+> working tree, and the example at the top of this file is what the pass now produces. The sections
+> below say so where they describe something that now exists. Phase 5 (what is left of the operation
+> rules) is open — see the per-operation table in `task-for-agent.md` for which of its rows are done.
 
 The algebraic ground under all of this is Schmidt, Meier, Lausen, ["Foundations of SPARQL Query
 Optimization"](https://dl.acm.org/doi/pdf/10.1145/1804669.1804675) (ICDT 2010): the pass is (FElimI)/(FElimII) — discharge an equality by substituting
@@ -56,7 +56,9 @@ everything.
 whole query's pre-transformation variable list, suffixed only on collision. The anchor is the
 *group's* canonical name (term pin → first named member → shortest access path), memoised per group in
 one pass-scoped map — so two materialisation sites of the same group agree and both operands of a join
-still join on the position.
+still join on the position. **Done** (`derivedVarNamer`), with one thing this study did not settle: a
+shape *no* position of which says anything is left as the condition `isTRIPLE(?o)` rather than written
+out, since writing it would coin three variables to state what that condition states with none.
 
 **The weak/strong line is unchanged**, restated: *a conjunct mentioning one variable has a weak form,
 one mentioning two does not*. `!bound(?o) || sameTerm(subject(?o), :a)` is fine;
@@ -64,7 +66,8 @@ one mentioning two does not*. `!bound(?o) || sameTerm(subject(?o), :a)` is fine;
 
 **Shapes substitute into patterns, never into expressions** — an open shape in an expression would
 mention unbound derived variables. `strongSubstitution()` splits into `patternSubstitution(namer)` and
-`expressionSubstitution()` (ground pins and clique representatives only).
+`expressionSubstitution()` (ground pins and clique representatives only). **Done**, the first of the two
+as `intoPattern(namer)`, which hands back what the pattern cannot take along with what it can.
 
 **Occurs check.** `?o ≡ <<( ?o … )>>` is unsatisfiable → empty operation. Also the termination
 argument for resolving a group to a term.
@@ -119,7 +122,10 @@ error when every component is bound and `range(c₁) ⊆ {IRI, bnode}`, `range(c
 3. ~~Accesses + `T⟨?x⟩` — Θ round-trips through a condition; nothing written into patterns yet.~~
    **done (working tree)**. A shape reaching a BGP stays a condition over it (`structural()`), which is
    what phase 4 takes over.
-4. Materialisation — namer, `patternSubstitution`, `bindAssertedTerms`. Target example works here.
+4. ~~Materialisation — namer, `patternSubstitution`, `bindAssertedTerms`. Target example works here.~~
+   **done (working tree)**, as `intoPattern`. `bindAssertedTerms` needed no change; what did grow a rule
+   of its own is the *residual*, which asks what the materialised pattern enforces rather than which form
+   a conjunct has, and which comes back from the same call for that reason.
 5. Operation rules — `pruneValues`, EXTEND transfer (`BIND(<<( ?a ?b ?c )>> AS ?o)` and
    `BIND(subject(?o) AS ?x)`, the `TODO(next time)` at `pushDownAssertions.ts:455`), shape-weakening in
    `splitClique`, the GRAPH and MINUS cases.

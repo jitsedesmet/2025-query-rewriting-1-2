@@ -29,6 +29,8 @@ import { sameTermExpression } from '../utils/expressionHelpers.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
 import { substituteInExpression } from '../utils/partialExpressionEvaluation.js';
 import { unionSets } from '../utils/setUtils.js';
+import type { DerivedVarNamer } from '../utils.js';
+import { collectVariableNames, derivedVarNamer } from '../utils.js';
 
 /**
  * @fileoverview Assertion filter pushdown.
@@ -95,11 +97,13 @@ import { unionSets } from '../utils/setUtils.js';
  *
  * Three consequences run through the rules below.
  *
- * **A shape is not a term, so it does not substitute into a pattern.** What a rewrite discharging Θ by
- * substitution leaves behind is {@link AssertionConjunction.structuralPartOfConjunction}, which stays a
- * condition over the operation the terms went into. A shape every position of which is decided *is* a
- * ground triple term, and travels as one. Materialising an open shape into a triple term pattern is what
- * comes next.
+ * **A shape is not a term, but it is a pattern.** Where a term substitutes, a shape is *materialised*:
+ * written out as a triple term whose positions hold what Θ has for them and a variable coined for what it
+ * has nothing for ({@link AssertionConjunction.intoPattern}), with a `BIND` putting the value
+ * back into the variable the pattern took it out of. Only a pattern may take one - the coined variables
+ * are bound by the very pattern that writes them, where a condition reading them would error away every
+ * row (S3) - so what no pattern states stays a condition over it
+ * ({@link AssertionConjunction.intoPattern}).
  *
  * **A shape is a range statement.** A group carrying one holds a `Quad`, and no subject, predicate or
  * graph position does - so `isTRIPLE(?s)` over `?s ?p ?o` empties the plan off the ranges, the same rule
@@ -150,7 +154,11 @@ export function pushDownAssertions<T extends Algebra.Operation>(c: TransformCont
   const callbacks: Parameters<typeof algebraUtils.mapOperationPreOrder<'unsafe', T>>[1] = Object.fromEntries(
     Object.values(Algebra.Types).map(type => [ type, (copy: Algebra.Operation) => keep(copy) ]),
   );
-  callbacks[Algebra.Types.FILTER] = (filter: Algebra.Filter) => pushFilter(c, filter);
+  // One namer for the whole pass, over the variables of the whole query as it stands *before* anything
+  // is rewritten (D4): a materialised position has to get the same name wherever it is written, and a
+  // name coined against a subtree would collide with a variable further along that has not been met yet.
+  const namer = derivedVarNamer(collectVariableNames(c.astTransformer, op));
+  callbacks[Algebra.Types.FILTER] = (filter: Algebra.Filter) => pushFilter(c, namer, filter);
   // Starting from a copy without metadata gives us both a tree of our own to rewrite and the guarantee
   // that what `withCpVars` hands us describes the plan as it is now.
   //
@@ -166,7 +174,7 @@ export function pushDownAssertions<T extends Algebra.Operation>(c: TransformCont
  * assertions travel on their own, and what is left of the condition stays on top with the strong ones
  * substituted into it (FReord).
  */
-function pushFilter(c: TransformContext, filter: Algebra.Filter): PreOrderMappingReturn {
+function pushFilter(c: TransformContext, namer: DerivedVarNamer, filter: Algebra.Filter): PreOrderMappingReturn {
   if (!isAssertionFilter(c, filter)) {
     return keep(filter);
   }
@@ -179,12 +187,13 @@ function pushFilter(c: TransformContext, filter: Algebra.Filter): PreOrderMappin
     // Leave behind the residual, we continue with remaining
     return keep(c.AF.createFilter(assertionFilter(c, filter.input, assertions), residual));
   }
-  return pushAssertions(c, assertions, filter.input);
+  return pushAssertions(c, namer, assertions, filter.input);
 }
 
 /** Swaps an assertion filter carrying Θ with the operation `op` right below it, per Figure 2. */
 function pushAssertions(
   c: TransformContext,
+  namer: DerivedVarNamer,
   assertions: AssertionConjunction,
   op: Algebra.Operation,
 ): PreOrderMappingReturn {
@@ -195,7 +204,7 @@ function pushAssertions(
   if (normalised.size === 0) {
     return keep(op);
   }
-  return swapWith(c, normalised, op);
+  return swapWith(c, namer, normalised, op);
 }
 
 /**
@@ -209,6 +218,7 @@ function pushAssertions(
  */
 function swapWith(
   c: TransformContext,
+  namer: DerivedVarNamer,
   assertions: AssertionConjunction,
   op: Algebra.Operation,
 ): PreOrderMappingReturn {
@@ -217,28 +227,24 @@ function swapWith(
     // A BGP and a path bind all of their variables, so normalisation has made every assertion that reaches
     // them strong - and a clique reaching one is substituted to its representative, which turns two free
     // variables of a pattern into the same one.
-    // What a *shape* says is not a term, so it cannot be substituted into a pattern yet - it stays a
-    // condition over the operation the terms were substituted into, which is where materialising it into
-    // triple term patterns will take over.
+    // A *shape* is written out as the triple term it is, its positions filled in with what Θ has for
+    // them and with a variable coined for the rest, so that the pattern states what the condition did:
+    // `?s ?p ?o FILTER(sameTerm(SUBJECT(?o), ?s))` becomes `?s ?p <<( ?s ?o_p ?o_o )>>`, and the
+    // re-binding below it hands `?o` back the value the pattern took away.
     //
     // Every leaf is handed the *same* conjunction; what differs is what each can pay off with the rewrite
-    // it makes, and so what has to be restated over it. A BGP pays by substituting terms into its
-    // patterns, so it settles exactly the conjuncts that come to a term and no others - `isIRI(?x)` has
-    // none to substitute and stays. A VALUES pays by pruning rows, and a row holds the *value* of its
-    // column, so it settles which kind of term that value is as readily as which term it is.
+    // it makes, and so what has to be restated over it ({@link AssertionConjunction.intoPattern}). A
+    // BGP pays by substituting into its patterns, so it settles what a pattern can state - a term, an
+    // equality, a shape - and no more: `isIRI(?x)` is not something a triple pattern says, and stays. A
+    // VALUES pays by pruning rows, and a row holds the *value* of its column, so it settles which kind of
+    // term that value is as readily as which term it is.
     case Algebra.Types.BGP: {
-      return keep(assertionFilter(
-        c,
-        substituteIntoPatterns(c, op, assertions.strongSubstitution()),
-        assertions.structuralPartOfConjunction(),
-      ));
+      const { substitution, residual } = assertions.intoPattern(namer);
+      return keep(assertionFilter(c, substituteIntoPatterns(c, op, substitution), residual));
     }
     case Algebra.Types.PATH: {
-      return keep(assertionFilter(
-        c,
-        substituteIntoPath(c, op, assertions.strongSubstitution()),
-        assertions.structuralPartOfConjunction(),
-      ));
+      const { substitution, residual } = assertions.intoPattern(namer);
+      return keep(assertionFilter(c, substituteIntoPath(c, op, substitution), residual));
     }
     // The one leaf where all of the forms do real work, since a VALUES column may be UNDEF.
     case Algebra.Types.VALUES: {
@@ -1107,8 +1113,8 @@ function admissibleOnMinusRhs(assertions: AssertionConjunction): AssertionConjun
  *
  * Which is what a VALUES row cannot decide: it holds the value of a column, so it decides which term that
  * is and which kind of term it is, but it has no say over the positions of a triple term inside it. Not
- * the same question {@link AssertionConjunction.structuralPartOfConjunction} asks - a row decides `isIRI(?x)` where a
- * substitution of terms has no way to carry it.
+ * the same question {@link AssertionConjunction.intoPattern} asks - a row decides `isIRI(?x)` where a
+ * pattern has no way to state it, and a pattern states a *position* where a row cannot.
  */
 function readsThroughAccessor(conjunct: AssertionConjunct): boolean {
   return !isBareAccess(conjunct.access) ||
@@ -1152,6 +1158,13 @@ function emptyOperation(c: TransformContext, replaced: Algebra.Operation): Algeb
  *
  * For a clique that is `BIND(?rep AS ?x)`, which `withCpVars` reads back as `?x ∈ cVars` from
  * `?rep ∈ cVars`, so the rewrite does not shrink `cVars` either.
+ *
+ * For a materialised shape it is `BIND(<<( ?s ?o_p ?o_o )>> AS ?o)`, and `cVars` survives that too, by
+ * the one thing that makes a triple-term construction certain: it cannot raise an evaluation error
+ * (`constructionCannotFail`). Each component is bound - the pattern this wraps is what binds them - and
+ * each is a term its position admits, because the pattern *is* the narrowing: a variable written into
+ * the subject slot of a triple term has the range of that slot in the operation below, whatever range it
+ * had before the shape was written there.
  */
 function bindAssertedTerms(
   c: TransformContext,

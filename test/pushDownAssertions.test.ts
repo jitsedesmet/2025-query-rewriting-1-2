@@ -1343,6 +1343,16 @@ GROUP BY ?x?y`,
         'SELECT * WHERE { ?s ?p ?o FILTER(subject(object(?o)) = :subj) }',
         'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(subject(?o), subject(?o))) }',
         'SELECT * WHERE { ?s ?p ?o FILTER(isTRIPLE(?o) && sameTerm(subject(?o), :a)) }',
+        // And the materialisation on top of them: the plan a shape leaves behind holds no condition for
+        // the pass to read a second time, and what it does leave - a kind of term, a position no
+        // pattern reached - has to survive the second run unchanged rather than coin a second name.
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(subject(?o), :a) && isIRI(object(?o))) }',
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(subject(object(?o)), ?s)) }',
+        `SELECT * WHERE {
+          { { ?t :p ?o } UNION { ?t :q ?o } }
+          ?s :r ?o
+          FILTER(sameTerm(subject(?o), :a))
+        }`,
       ]) {
         const once = pushDownAssertions(c, parseQuery(c, prefixes + query));
         const twice = pushDownAssertions(c, pushDownAssertions(c, parseQuery(c, prefixes + query)));
@@ -1886,17 +1896,98 @@ GROUP BY ?x?y`,
   });
 
   describe('structural assertions', () => {
-    it('keeps a shape as a condition over the pattern the terms were substituted into', ({ expect }) => {
-      // What a shape says is not a term, so the BGP cannot take it - materialising it into a triple term
-      // pattern is what will take over from here.
+    it('materialises a shape into a triple term pattern, re-binding the variable', ({ expect }) => {
+      // The pattern is what states the shape: `?s` written into the subject position is the equality the
+      // condition carried, and the two coined variables are what the pattern binds the other positions
+      // to. The `BIND` hands `?o` back the value the substitution took out of the pattern.
       expectTransform(
         expect,
         'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(subject(?o), ?s)) }',
-        `SELECT ?o ?p ?s WHERE {
-  ?s ?p ?o .
-  FILTER ( SAMETERM( SUBJECT( ?o ) , ?s ) )
+        `SELECT ( <<( ?s ?o_p ?o_o )>> AS ?o ) ?p ?s WHERE {
+  ?s ?p <<( ?s ?o_p ?o_o )>> .
 }`,
       );
+    });
+
+    it('materialises the same shape into every operand a join gives it to', ({ expect }) => {
+      // Both operands write the *same* names for the positions, which is what keeps them joining on the
+      // triple term after both have been rewritten: the positions are functionally determined by the
+      // value the two already joined on, so agreeing on `?o` is agreeing on `?o_p` and `?o_o`.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          { { ?t :holds ?o } UNION { ?t :mirrors ?o } }
+          ?s :holds ?o
+          FILTER(sameTerm(subject(?o), :a))
+        }`,
+        `SELECT ?o ?s ?t WHERE {
+  {
+    ?t <ex://holds> <<( <ex://a> ?o_p ?o_o )>> .
+    BIND( <<( <ex://a> ?o_p ?o_o )>> AS ?o )
+  }
+  UNION {
+    ?t <ex://mirrors> <<( <ex://a> ?o_p ?o_o )>> .
+    BIND( <<( <ex://a> ?o_p ?o_o )>> AS ?o )
+  }
+  {
+    ?s <ex://holds> <<( <ex://a> ?o_p ?o_o )>> .
+    BIND( <<( <ex://a> ?o_p ?o_o )>> AS ?o )
+  }
+}`,
+      );
+    });
+
+    it('coins a name the query does not already use', ({ expect }) => {
+      // The candidate `?o_p` is taken by a variable of the query, so the position takes the first free
+      // suffix instead - and the one nothing collides with keeps its plain name.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o . ?a :q ?o_p FILTER(sameTerm(subject(?o), ?s)) }',
+        `SELECT ?a ( <<( ?s ?o_p0 ?o_o )>> AS ?o ) ?o_p ?p ?s WHERE {
+  ?s ?p <<( ?s ?o_p0 ?o_o )>> .
+  ?a <ex://q> ?o_p .
+}`,
+      );
+    });
+
+    it('materialises a shape into a property path', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?x :step* ?y FILTER(sameTerm(subject(?x), :a)) }',
+        `SELECT ( <<( <ex://a> ?x_p ?x_o )>> AS ?x ) ?y WHERE {
+  <<( <ex://a> ?x_p ?x_o )>> (<ex://step>*) ?y .
+}`,
+      );
+    });
+
+    it('keeps the kind of a position over the pattern that materialised it', ({ expect }) => {
+      // A pattern states which term a position holds and which positions the value has; which *kind* of
+      // term a variable takes is not something it states, so that conjunct stays a condition - written
+      // about `?o`, which the re-binding above the pattern has bound, rather than about the variable
+      // coined for the position.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(subject(?o), :a) && isIRI(object(?o))) }',
+        `SELECT ?o ?p ?s WHERE {
+  {
+    ?s ?p <<( <ex://a> ?o_p ?o_o )>> .
+    BIND( <<( <ex://a> ?o_p ?o_o )>> AS ?o )
+  }
+  FILTER ( ISIRI( OBJECT( ?o ) ) )
+}`,
+      );
+    });
+
+    it('leaves a shape no position of which says anything as the condition it is', ({ expect }) => {
+      // Writing it would coin three variables to state that the value is a triple term, which is what
+      // `isTRIPLE(?o)` states without coining any - and the two have to be the one plan, being the one
+      // fact reached two ways.
+      const expected = `SELECT ?o ?p ?s WHERE {
+  ?s ?p ?o .
+  FILTER ( ISTRIPLE( ?o ) )
+}`;
+      expectTransform(expect, 'SELECT * WHERE { ?s ?p ?o FILTER(isTRIPLE(?o)) }', expected);
+      expectTransform(expect, 'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(subject(?o), subject(?o))) }', expected);
     });
 
     it('substitutes a shape every position of which is decided, being a term after all', ({ expect }) => {
@@ -1915,9 +2006,8 @@ GROUP BY ?x?y`,
       expectTransform(
         expect,
         'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(?o, TRIPLE(?s, ?p, :c))) }',
-        `SELECT ?o ?p ?s WHERE {
-  ?s ?p ?o .
-  FILTER ( ( ( SAMETERM( SUBJECT( ?o ) , ?s ) && SAMETERM( PREDICATE( ?o ) , ?p ) ) && SAMETERM( OBJECT( ?o ) , <ex://c> ) ) )
+        `SELECT ( <<( ?s ?p <ex://c> )>> AS ?o ) ?p ?s WHERE {
+  ?s ?p <<( ?s ?p <ex://c> )>> .
 }`,
       );
     });
@@ -1955,8 +2045,8 @@ GROUP BY ?x?y`,
         'SELECT * WHERE { { ?s ?p ?o } UNION { ?s ?p ?q } FILTER(sameTerm(subject(?o), :a)) }',
         `SELECT ?o ?p ?q ?s WHERE {
   {
-    ?s ?p ?o .
-    FILTER ( SAMETERM( SUBJECT( ?o ) , <ex://a> ) )
+    ?s ?p <<( <ex://a> ?o_p ?o_o )>> .
+    BIND( <<( <ex://a> ?o_p ?o_o )>> AS ?o )
   }
   UNION {
     ?s ?p ?q .
@@ -2122,9 +2212,8 @@ GROUP BY ?x?y`,
       expectTransform(
         expect,
         'SELECT * WHERE { ?s ?p ?o FILTER(isTRIPLE(?o) && sameTerm(subject(?o), :a)) }',
-        `SELECT ?o ?p ?s WHERE {
-  ?s ?p ?o .
-  FILTER ( SAMETERM( SUBJECT( ?o ) , <ex://a> ) )
+        `SELECT ( <<( <ex://a> ?o_p ?o_o )>> AS ?o ) ?p ?s WHERE {
+  ?s ?p <<( <ex://a> ?o_p ?o_o )>> .
 }`,
       );
     });
@@ -2132,9 +2221,8 @@ GROUP BY ?x?y`,
     it('drops it whichever way round the two are met', ({ expect }) => {
       // The order they arrive in is not the order Θ decomposes into, so neither spelling can keep it -
       // including the one where they arrive as two filters and the second is absorbed into the first.
-      const expected = `SELECT ?o ?p ?s WHERE {
-  ?s ?p ?o .
-  FILTER ( SAMETERM( SUBJECT( ?o ) , <ex://a> ) )
+      const expected = `SELECT ( <<( <ex://a> ?o_p ?o_o )>> AS ?o ) ?p ?s WHERE {
+  ?s ?p <<( <ex://a> ?o_p ?o_o )>> .
 }`;
       expectTransform(
         expect,
@@ -2156,8 +2244,8 @@ GROUP BY ?x?y`,
         'SELECT * WHERE { { ?s ?p ?o } UNION { ?x ?y ?z } FILTER(sameTerm(subject(object(?o)), :subj)) }',
         `SELECT ?o ?p ?s ?x ?y ?z WHERE {
   {
-    ?s ?p ?o .
-    FILTER ( SAMETERM( SUBJECT( OBJECT( ?o ) ) , <ex://subj> ) )
+    ?s ?p <<( ?o_s ?o_p <<( <ex://subj> ?o_o_p ?o_o_o )>> )>> .
+    BIND( <<( ?o_s ?o_p <<( <ex://subj> ?o_o_p ?o_o_o )>> )>> AS ?o )
   }
   UNION {
     ?x ?y ?z .
@@ -2175,8 +2263,8 @@ GROUP BY ?x?y`,
         'SELECT * WHERE { { ?s ?p ?o } UNION { ?x ?y ?z } FILTER(subject(object(?o)) = :subj) }',
         `SELECT ?o ?p ?s ?x ?y ?z WHERE {
   {
-    ?s ?p ?o .
-    FILTER ( SAMETERM( SUBJECT( OBJECT( ?o ) ) , <ex://subj> ) )
+    ?s ?p <<( ?o_s ?o_p <<( <ex://subj> ?o_o_p ?o_o_o )>> )>> .
+    BIND( <<( ?o_s ?o_p <<( <ex://subj> ?o_o_p ?o_o_o )>> )>> AS ?o )
   }
   UNION {
     ?x ?y ?z .
@@ -2660,6 +2748,27 @@ GROUP BY ?x?y`,
       await assertEquivalent(expect, `SELECT * WHERE {
         ?s :nests ?o
         FILTER(sameTerm(subject(?o), subject(?o)))
+      }`, 2);
+    });
+
+    it('keeps the rows two operands materialising the same shape join on', async({ expect }) => {
+      // Both operands of the join are licensed for the shape, so both write it out - and after that they
+      // join on the variables coined for its positions as well as on `?o`. That is only sound because
+      // both sites coined the same names for the same positions, which is what the shared namer is for;
+      // two independently named sites would join on nothing and multiply the rows out.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        { { ?t :holds ?o } UNION { ?t :mirrors ?o } }
+        ?s :holds ?o
+        FILTER(sameTerm(subject(?o), :a))
+      }`, 2);
+    });
+
+    it('keeps the rows a kind of term selects over a materialised position', async({ expect }) => {
+      // The shape reaches the pattern and the kind of term stays a condition over it, read through the
+      // variable the re-binding gave back rather than through the one coined for the position.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :says ?o
+        FILTER(sameTerm(subject(?o), :a) && isIRI(object(?o)))
       }`, 2);
     });
 

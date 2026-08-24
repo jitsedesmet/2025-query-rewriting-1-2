@@ -1141,24 +1141,29 @@ export class AssertionConjunction {
       return anchor.positions.reduce<string>((name, position) => namer(name, position).value, anchor.name);
     };
 
-    // Every position of a written shape holds something - the term it is pinned to, the shape it holds in
-    // turn, or the variable reading it - so the fold never comes back empty. It terminates for the reason
-    // the lattice refuses a cycle: a triple term is strictly larger than each of its positions.
-    // The three need no type check of their own either: each carries the range its position admits from
-    // the moment it is created, so a predicate that got this far is an IRI and a subject is neither a
-    // Literal nor a triple term ({@link shapeTerm}).
+    /**
+     * The whole of a written shape: every position holds something - the term it is pinned to, the shape
+     * it holds in turn, or the variable reading it - so the fold never comes back empty. It terminates
+     * for the reason the lattice refuses a cycle: a triple term is strictly larger than each of its
+     * positions.
+     *
+     * The three positions need no type check of their own either: each carries the range its position
+     * admits from the moment it is created, so a predicate that got this far is an IRI, and a subject is
+     * neither a Literal nor a triple term ({@link shapeTerm}).
+     */
     const written = (group: number): RDF.Term =>
       this.shapeTerm(group, reached => DF.variable(nameOf(reached)))!;
 
     const result = new Map<number, RDF.Term>();
-    for (const [ group, accesses ] of accessesPerGroup) {
-      // A group no variable names is only ever read through the shape holding it.
-      if (isBareAccess(accesses[0])) {
+    for (const [ group, [ representative ]] of accessesPerGroup) {
+      // A group no variable names is only ever read through the shape holding it, and the anchor of one
+      // that has them is the variable it is read by: its representative.
+      if (isBareAccess(representative)) {
         // Without its shape, a group is what {@link strongSubstitution} makes of it: the term it is
         // pinned to, or the representative every member of a clique substitutes to.
         result.set(group, this.shapeIsWorthWriting(group) ?
           written(group) :
-          this.clusters.termOf(group) ?? DF.variable(this.representativeOf(group)!));
+          this.clusters.termOf(group) ?? DF.variable(representative.name));
       }
     }
     return result;

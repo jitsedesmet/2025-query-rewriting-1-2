@@ -107,19 +107,19 @@ function conditionOf(assertions: AssertionConjunction): string {
 }
 
 /** A term as a query writes it, which for a materialised shape is the triple term it wrote. */
-function termOf(term: RDF.Term): string {
+function termString(term: RDF.Term): string {
   if (term.termType === 'Variable') {
     return `?${term.value}`;
   }
   if (term.termType === 'Quad') {
-    return `<<( ${termOf(term.subject)} ${termOf(term.predicate)} ${termOf(term.object)} )>>`;
+    return `<<( ${termString(term.subject)} ${termString(term.predicate)} ${termString(term.object)} )>>`;
   }
   return term.value;
 }
 
 /** A substitution as `name=term`, in the order it hands the replacements over. */
 function substitutionOf(substitution: Assertions): string[] {
-  return [ ...substitution ].map(([ name, term ]) => `${name}=${termOf(term)}`);
+  return [ ...substitution ].map(([ name, term ]) => `${name}=${termString(term)}`);
 }
 
 describe('assertionConjunction', () => {

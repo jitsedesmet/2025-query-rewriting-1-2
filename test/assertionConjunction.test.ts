@@ -48,8 +48,8 @@ function conjunctionOf(...conjuncts: [ string, Assertion ][]): AssertionConjunct
 /** {@link conjunctionOf} over accesses, which is what a conjunct about a shape is written against. */
 function structuralConjunctionOf(...conjuncts: [ Access, Assertion ][]): AssertionConjunction | undefined {
   const result = new AssertionConjunction();
-  for (const [ read, assertion ] of conjuncts) {
-    if (!result.assert(read, assertion)) {
+  for (const [ access, assertion ] of conjuncts) {
+    if (!result.assert(access, assertion)) {
       return undefined;
     }
   }

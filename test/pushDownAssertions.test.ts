@@ -1990,6 +1990,7 @@ GROUP BY ?x?y`,
     });
 
     it('sends the weak form of a shape into the right hand side of a MINUS', ({ expect }) => {
+      // TODO: please think carefully. Are we allowed to do a weakened pushdown for operations
       // A unary predicate on the value is admissible there: the argument turns on the two sides agreeing
       // on that value. Here the RHS binds `?o` to a subject, which no triple term is, so it empties.
       expectTransform(

@@ -934,10 +934,10 @@ function pushIntoLeftJoin(
     kept.push(...placed.kept);
   }
   for (const conjunct of assertions.accessConjuncts()) {
-    const roots = variablesReadByConjunct(conjunct);
+    const varsOfConjunct = variablesReadByConjunct(conjunct);
     const placed = placeAccessConjunct(
       conjunct,
-      [ roots.every(licensedLeft), roots.every(licensedRight) ],
+      [ varsOfConjunct.every(licensedLeft), varsOfConjunct.every(licensedRight) ],
       [ true, false ],
     );
     if (placed.intoTarget[0]) {
@@ -1007,7 +1007,7 @@ function splitClique(members: string[], licensedPer: string[][], connects: boole
   const intoTarget: AssertionConjunct[][] = licensedPer.map((licensed, index) => edgesPerBranch[index].length > 0 ?
     edgesPerBranch[index].map(([ member, hub ]) => unification(member, hub)) :
     // Means licensed.size is 0 or 1
-    licensed.map(name => <AssertionConjunct> ({ access: access(name), assertion: assertBound() })));
+    licensed.map(name => ({ access: access(name), assertion: assertBound() })));
 
   // Union-find over the members, joined by every sub-clique that both went somewhere and holds above.
   const spanningTree = new Map(members.map(name => [ name, name ]));

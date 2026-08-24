@@ -1077,27 +1077,22 @@ export class AssertionConjunction {
   }
 
   /**
-   * The term a group is fixed to, which for a shape is the triple term its decided positions make.
+   * The term a group is fixed to, which for a shape is the triple term its decided positions make, and
+   * `undefined` where a position is decided by nothing at all.
    *
-   * The three need no type checking of their own. A position of a shape carries the range that position
-   * admits from the moment it is created ({@link AssertionClusterSet.assertTriplePin}), and a pin the
-   * range does not admit is refused where it is placed rather than here - so a predicate that got this
-   * far is a NamedNode, and a subject is neither a Literal nor a triple term.
-   */
-  private resolveTerm(group: number): RDF.Term | undefined {
-    return this.shapeTerm(group);
-  }
-
-  /**
-   * The term a group is, reading a shape as the triple term of what its positions are and asking `leaf`
-   * for the groups that carry neither a term nor a shape.
+   * Unless the caller has something to put there: `leaf` is asked for the groups that carry neither a
+   * term nor a shape, which is the one thing the two callers differ in. A substitution into an
+   * expression has nothing (S3) and takes the `undefined`; a substitution into a *pattern* has the
+   * variable reading the group, and gets the whole shape written out rather than nothing. Everything
+   * else - that a pin is a term or three groups, and that three terms make one - is this walk, here once
+   * so that the two cannot come to disagree about what a shape is.
    *
-   * What the two callers differ in is only that: {@link resolveTerm} has nothing to put there and hands
-   * back `undefined`, where the pattern rendering puts the variable reading the group. Everything else -
-   * that a pin is a term or three groups, and that three terms make one - is the same walk, and is here
-   * once so that the two cannot come to disagree about what a shape is.
+   * The three positions need no type checking of their own. A position of a shape carries the range that
+   * position admits from the moment it is created ({@link AssertionClusterSet.assertTriplePin}), and a
+   * pin the range does not admit is refused where it is placed rather than here - so a predicate that
+   * got this far is a NamedNode, and a subject is neither a Literal nor a triple term.
    */
-  private shapeTerm(group: number, leaf?: (group: number) => RDF.Term): RDF.Term | undefined {
+  private resolveTerm(group: number, leaf?: (group: number) => RDF.Term): RDF.Term | undefined {
     const term = this.clusters.termOf(group);
     if (term !== undefined) {
       return term;
@@ -1106,7 +1101,7 @@ export class AssertionConjunction {
     if (children === undefined) {
       return leaf?.(group);
     }
-    const parts = triplePositions.map(position => this.shapeTerm(children[position], leaf));
+    const parts = triplePositions.map(position => this.resolveTerm(children[position], leaf));
     if (parts.includes(undefined)) {
       return undefined;
     }
@@ -1150,10 +1145,10 @@ export class AssertionConjunction {
      *
      * The three positions need no type check of their own either: each carries the range its position
      * admits from the moment it is created, so a predicate that got this far is an IRI, and a subject is
-     * neither a Literal nor a triple term ({@link shapeTerm}).
+     * neither a Literal nor a triple term ({@link resolveTerm}).
      */
     const written = (group: number): RDF.Term =>
-      this.shapeTerm(group, reached => DF.variable(nameOf(reached)))!;
+      this.resolveTerm(group, reached => DF.variable(nameOf(reached)))!;
 
     const result = new Map<number, RDF.Term>();
     for (const [ group, [ representative ]] of accessesPerGroup) {

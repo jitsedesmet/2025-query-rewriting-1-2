@@ -44,8 +44,14 @@ Two of its phases are already on main:
   binds `?t` certainly.
 
 Phases **2** (the pin lattice on `TermClusterSet`, with the per-group ranges) and **3** (accesses and
-`T⟨?x⟩`) are in the working tree: Θ now holds shapes, round-trips them through a condition, and the pass
-carries them across the algebra. What they do *not* do yet is write one into a pattern.
+term types) are on `feat/assert-variable-access`: Θ now holds shapes, round-trips them through a
+condition, and the pass carries them across the algebra. What it does *not* do yet is write one into a
+pattern.
 
-Left to do: materialising derived variables into triple term patterns (phase 4) and the remaining
-per-operation rules (phase 5). See the status table at the top of `task-for-agent.md`.
+Review pushed step 3 past its brief in one respect: T⟨?x⟩ became T⟨?x : τ⟩ over all four term-type
+predicates (`isIRI`/`isURI`, `isBLANK`, `isLITERAL`, `isTRIPLE`), since they are one fact — a narrowing
+of a group's range — and everything written for `isTRIPLE` held of them word for word.
+
+Left to do: materialising derived variables into triple term patterns (phase 4) and what is left of the
+per-operation rules (phase 5) — MINUS and GRAPH are done, VALUES and JOIN/LEFT JOIN are partly done, and
+EXTEND is open. See the status table and the per-operation table in `task-for-agent.md`.

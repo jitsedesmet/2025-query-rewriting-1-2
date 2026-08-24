@@ -23,22 +23,39 @@ member of a clique must assert it on all of them.
 implementation contract: everything below is decided, not up for re-litigation, except where it says
 "your call".
 
-## Where this stands (main, 2026-08-19)
+## Where this stands (branch `feat/assert-variable-access`, 2026-08-24)
 
-**Steps 0 and 1 are in the codebase.** D5 and D6 below describe what is *there*, not what to build;
-read them as the foundation the rest stands on, and the code as the authority.
+**Steps 0 to 3 are in the codebase.** D1 to D6 below describe what is *there*, not what to build; read
+them as the foundation the rest stands on, and **the code as the authority** — review renamed a good deal
+of it, and where this file and a symbol disagree, the symbol wins.
 
-| step | commit | in the tree |
+| step | where | in the tree |
 |---|---|---|
-| 0 | `ac6d447` (#31) | `vRanges` on `CPMeta`, holding scope and term types in one structure; the emptiness rules it decides in `normalisedFor`; `nullifyUnbindableVars`; the metadata clearing of D6. |
-| 1 | `e18a8dd` (#32) | ground triple terms: `isAssertableTerm` admits them, and `withCpVars` calls `BIND(<<( :a :b :c )>> AS ?t)` certainly bound (`constructionCannotFail`). |
-| 2 | working tree | the pin lattice of D3, plus the per-group ranges of D5.3 - `Pin`, `meetPins`, the work-list merge, the occurs check, anonymous groups, `groupToRange` lifted down from `ClusterSolver`. |
-| 3 | working tree | accesses and `T⟨?x⟩` (D1, D2), the recognisers, `toExpression`, the folds of S7. Θ round-trips through a condition; nothing is written into patterns yet. |
+| 0 | `ac6d447` (#31), main | `vRanges` on `CPMeta`, holding scope and term types in one structure; the emptiness rules it decides in `normalisedFor`; `nullifyUnbindableVars`; the metadata clearing of D6. |
+| 1 | `e18a8dd` (#32), main | ground triple terms: `isAssertableTerm` admits them, and `withCpVars` calls `BIND(<<( :a :b :c )>> AS ?t)` certainly bound (`constructionCannotFail`). |
+| 2 | branch | the pin lattice of D3, plus the per-group ranges of D5.3 — `Pin`, `TriplePin`, `meetPins`, `GroupConstraint`, the work-list merge, the occurs check, anonymous groups, `groupToRange` lifted down from `ClusterSolver`. |
+| 3 | branch | accesses and T⟨?x : τ⟩ (D1, D2), the recognisers, `toExpression`, the folds of S7. Θ round-trips through a condition; nothing is written into patterns yet. |
+| 3+ | branch | **beyond the plan**: all four term-type predicates rather than `isTRIPLE` alone (D2), and `AssertionClusterSet`, which is where the asserted half of a group's range lives. |
 
-**To build: 4 (materialisation), 5 (operation rules)**, and the optional 6.
+**To build: 4 (materialisation), 5 (what is left of the operation rules)**, and the optional 6. The
+per-operation table below says which rows are already done.
 
 Step 2 is not separable from step 3 in the build: `AssertionConjunction` is the only caller of
 `TermClusterSet`'s comparator, so the lattice and the conjunction that meets pins on it land together.
+
+### Two mistakes this phase made, so that the next does not
+
+Both were caught late and neither was a missing rule — the rule was right and the code around it drifted.
+
+* **A recogniser that fails is invisible.** What the pass writes back for an assertion it cannot move
+  *is* the condition it read, so a broken recogniser produces the same plan as a correct one with nowhere
+  to push. `asAccess` inverted a length test and stopped recognising accessors entirely; only two tests
+  noticed, the ones where the assertion travelled. Test recognition directly — `collectAssertions` with
+  `residual === undefined` — not only through the plan.
+* **A weak assertion may not enter the RHS of a MINUS**, and the subType test that used to enforce that
+  stopped doing so when the forms grew a strength *field* beside the strength *subType*. Read
+  `impliesBound`, which is the property the argument rests on, never a list of subTypes. Wrong answers,
+  found by an evaluation test rather than a structural one.
 
 ## Grounding
 
@@ -74,9 +91,10 @@ where `vRanges` decides the finer *type*-level fact — in scope, and no term le
 
 | file | why |
 |---|---|
-| `lib/utils/assertionConjunction.ts` | Θ, the conjunction that travels. Its file comment states the invariants you must preserve. |
-| `lib/utils/assertions.ts` | the four assertion forms, their recognisers and builders, substitution into terms/patterns |
-| `lib/datastructures/ClusterSet.ts`, `TermClusterSet.ts` | the union-find Θ is built on |
+| `lib/utils/assertionConjunction.ts` | Θ, the conjunction that travels. Its file comment states the invariants you must preserve, and its table the states an assertion can be in. |
+| `lib/utils/assertions.ts` | the `Access`, the five assertion forms, their recognisers and builders, substitution into terms/patterns |
+| `lib/datastructures/ClusterSet.ts`, `TermClusterSet.ts` | the union-find Θ is built on, and the pin lattice over it |
+| `lib/datastructures/AssertionClusterSet.ts` | the subclass Θ uses: its `meetPins`, and the *asserted* half of a group's range as against the derived half. Read this before writing anything that reports what Θ says. |
 | `lib/transformations/pushDownAssertions.ts` | the pass; its file comment explains the rules per operation |
 | `lib/utils/certainlyBoundVars.ts` | `cVars`/`vRanges` metadata, computed by dynamic programming — `vRanges` is scope *and* term types in one (D5) |
 | `lib/transformations/nullifyUnbindableVars.ts` | the type-level emptiness proof step 0 added; a range consumer to keep working |
@@ -148,11 +166,13 @@ type Pin = { kind: 'term'; term: RDF.Term } | { kind: 'triple'; children: [ numb
 Children are **group ids**, so a position nobody named is an *anonymous group*: it exists, unifies, and
 contributes nothing to `size` / `names` / `conjuncts` until a named variable joins it.
 
-* `compareTerm: (a, b) => boolean` becomes `meetPins: (a, b) => { pin, pending: [number, number][] } | false`
-  — equal / contradiction / **decompose**. `ClusterSolver` passes
-  `(a, b) => a.equals(b) ? { pin: a, pending: [] } : false` and is otherwise unaffected.
-* Drain `pending` through a **work list**, never recursion: merging children can merge further
-  children, and re-entering `mergeGroups` from inside `migrateGroupData` corrupts the caller's state.
+* `compareTerm: (a, b) => boolean` becomes `meetPins: (a, b) => PinMeet | false` — equal / contradiction
+  / **decompose**. What a meet reports is one list of `GroupConstraint`, `{ kind: 'unify' }` or
+  `{ kind: 'pin' }`, which is the same pair of things the work list handles; two lists of pairs only had
+  the drain transliterate them back. `ClusterSolver` meets terms and calls anything else broken.
+* Drain them through a **work list** (`resolveAllConstraints`), never recursion: merging children can
+  merge further children, and re-entering `mergeGroups` from inside `migrateGroupData` corrupts the
+  caller's state.
 * `carriesInformation(group)` must also be true when the group **is a child of a live pin**. Otherwise
   `remove()` drops a group a pin still points at and the child id dangles. This is the sharpest trap in
   the change.
@@ -177,6 +197,12 @@ A materialised position is named `${anchor}_${s|p|o}`, with a numeric suffix **o
 (`collectVariableNames` in `lib/utils.ts`, as `removeProjections` does). Keep the memo in one
 pass-scoped map keyed by `${anchor(g)}_${p}`, threaded as a per-pass context so
 `assertionConjunction.ts` stays context-free — `patternSubstitution(namer)` takes it as an argument.
+
+**Half of this already exists.** `AssertionConjunction.anchoredAccessesPerGroup` computes exactly the
+anchor above — every group reachable from a named variable, with the accesses reading it, anchor first,
+settled shortest-path-then-lexicographic. `conjuncts()` is built on it, which is why a condition and a
+materialised name cannot disagree about which access a group is read by. Phase 4 needs the *namer* and
+the substitution, not the anchor.
 
 Two materialisation sites of the same group **must** produce the same name: that is how the LHS and RHS
 of a join keep joining on a position after both were substituted. It is sound because the position is
@@ -300,18 +326,19 @@ pass stacks a second copy. The substitution argument becomes a view (`resolve(ac
 
 ## Per-operation work in `pushDownAssertions.ts`
 
-| operation | change |
-|---|---|
-| BGP / PATH | `patternSubstitution`; `bindAssertedTerms` gains the quad case. `canOccupy` already refuses a quad outside object position. |
-| VALUES | prune *rows* by asserting the row into a clone of Θ (a ground triple-term value decomposes against a shape by itself); drop a *column* iff Θ can rebuild its value from the columns that survive. Worked examples in `report.md` §4. Whether you rewrite the per-variable `switch` or extend it is **your call** — keep the existing evaluation tests green. |
-| UNION, PROJECT, DISTINCT, REDUCED, ORDER BY, FROM, FILTER, GROUP | nothing beyond D1 |
-| GRAPH | a shape pin on `?g` is a contradiction — state it as a *range* fact (`graphRange` is `{NamedNode, BlankNode}`, no `Quad`) and let `normalisedFor` empty the plan, the way the term case now does; `pushIntoGraph` no longer type-checks terms itself |
-| JOIN / LEFT JOIN | licences already read `variablesReadByConjunct`; generalise `splitClique` to groups and add S6 |
-| MINUS | `weakenedTerms` per S4 |
-| EXTEND | `transferred` gains: `BIND(<<( ?a ?b ?c )>> AS ?o)` under a shape on `?o` transfers onto `?a ?b ?c`; `BIND(subject(?o) AS ?x)` transfers onto the access. This is the `TODO(next time)` at `pushDownAssertions.ts:459`. |
+| operation | change | state |
+|---|---|---|
+| BGP / PATH | `patternSubstitution`; `bindAssertedTerms` gains the quad case. `canOccupy` already refuses a quad outside object position. | **phase 4.** Today the terms substitute and `structuralPartOfConjunction()` stays on top as a condition; materialising replaces most of that remainder. |
+| VALUES | prune *rows* by asserting the row into a clone of Θ (a ground triple-term value decomposes against a shape by itself); drop a *column* iff Θ can rebuild its value from the columns that survive. Worked examples in `report.md` §4. Whether you rewrite the per-variable `switch` or extend it is **your call** — keep the existing evaluation tests green. | **partly.** A row decides a term, another column, a term *type*, and being absent. It does not decide a *position*, so `readsThroughAccessor` hands those upward — conservative, not wrong. The row-into-Θ rule replaces the per-variable reading and is what closes it. |
+| UNION, PROJECT, DISTINCT, REDUCED, ORDER BY, FROM, FILTER, GROUP | nothing beyond D1 | **done.** |
+| GRAPH | a shape pin on `?g` is a contradiction — state it as a *range* fact (`graphRange` is `{NamedNode, BlankNode}`, no `Quad`) and let `normalisedFor` empty the plan, the way the term case now does; `pushIntoGraph` no longer type-checks terms itself | **done.** The one `termType` test left in `pushIntoGraph` asks whether a term can be *written* as a graph name (`createGraph` takes a Variable or a NamedNode), not whether it is one. |
+| JOIN / LEFT JOIN | licences already read `variablesReadByConjunct`; generalise `splitClique` to groups and add S6 | **partly.** An accessor edge is placed whole by `placeAccessConjunct`, on the same licence read over both roots. Generalising `splitClique` to *aliases* would fold that in and split a mixed clique — see the trap on `cliques()` before starting: its ≤1-licensed fallback sends B⟨?x⟩, which no accessor has, and `assert` **raises** on one that is not bare. S6 is what it must send instead. |
+| MINUS | `weakenedTerms` per S4 | **done**, as `admissibleOnMinusRhs`. It filters on `impliesBound`: a weak assertion may **not** go right, and doing so was a wrong answer. |
+| EXTEND | `transferred` gains: `BIND(<<( ?a ?b ?c )>> AS ?o)` under a shape on `?o` transfers onto `?a ?b ?c`; `BIND(subject(?o) AS ?x)` transfers onto the access. | **open** — the `TODO(next time)` in `pushIntoExtend`. Note that `BIND(subject(?o) AS ?x) FILTER(sameTerm(?x, :a))` already reaches the pattern by the *other* route in that function, the `sameTerm(e, c)` one, so measure before building. |
 
-Also recognise `FILTER(sameTerm(?o, <<( ?a ?b ?c )>>))` and `FILTER(isTRIPLE(?o))` as assertions. The
-first is written back in accessor form, so it does not round-trip verbatim — that is accepted (S1).
+Also recognise `FILTER(sameTerm(?o, <<( ?a ?b ?c )>>))` and `FILTER(isTRIPLE(?o))` as assertions —
+**done**, and generalised: all four term-type predicates, `isURI` reading as `isIRI`. The construction is
+written back in accessor form, so it does not round-trip verbatim — that is accepted (S1).
 
 ## Work plan (one commit each, one PR)
 
@@ -323,20 +350,23 @@ first is written back in accessor form, so it does not round-trip verbatim — t
    `withCpVars` calls a ground triple-term BIND certain.~~ **Done — `e18a8dd` (#32).** The `sameTerm`
    fold needed no code: RDF/JS `Quad.equals` already decides two ground triple terms in
    `constantFoldOperator`.
-2. ~~The pin lattice (D3). Unit-testable at the data-structure level.~~ **Done (working tree).** It grew
+2. ~~The pin lattice (D3). Unit-testable at the data-structure level.~~ **Done.** It grew
    the per-group ranges of D5.3 with it, since a shape *is* a range statement and the positional range of
    a child is what confines nesting to the `object` chain. `meetPins` takes two `Pin`s rather than two
-   terms (a `Pin` is not a `Term`), and returns `pendingPins` beside `pending`: a ground triple term
-   meeting a shape decides each position, which is an assignment rather than a unification. `remove` now
+   terms (a `Pin` is not a `Term`), and reports what it decided as a list of `GroupConstraint`: a ground
+   triple term meeting a shape decides each position, which is an assignment rather than a unification,
+   and the work list handles both. `remove` now
    asks `isLive` rather than `carriesInformation` alone, so that a group a live pin points at survives.
 3. ~~Accesses and `T⟨?x⟩` (D1, D2), recognisers, `toExpression`, the folds of S7. At the end of this
-   commit Θ round-trips through a condition; nothing is written into patterns yet.~~ **Done (working
-   tree).** Beyond the plan: `asAssertionConjuncts` returns a *list* of conjuncts, since
+   commit Θ round-trips through a condition; nothing is written into patterns yet.~~ **Done.**
+   Beyond the plan: `asAssertionConjuncts` returns a *list* of conjuncts, since
    `sameTerm(?o, <<( ?a ?b ?c )>>)` is three of them; `conjuncts()` enumerates the *aliases* of every
    group reachable from a named variable, which is what makes a shape decompose into conditions and
    reconstruct from them; and the BGP/PATH/VALUES rules keep `structural()` on top, since a rewrite that
-   discharges Θ by substituting terms cannot carry what a shape says.
-4. Materialisation: D4, `patternSubstitution`, `bindAssertedTerms`. The target example works here.
+   discharges Θ by substituting terms cannot carry what a shape says. Then, in commits of their own:
+   the four term-type predicates as one form; `AssertionClusterSet`; and the fixes the review turned up.
+4. Materialisation: D4, `patternSubstitution`, `bindAssertedTerms`. The target example works here. The
+   anchors it needs are already computed (D4); what is missing is the namer and the substitution.
 5. The operation rules in the table above.
 6. Follow-up, optional: `ClusterSolver` drops the `Quad` exclusion from `RawBasicTerm` and resolves its
    TODO at line 191 — the mapping head `?t rdf:reifies <<( ?s ?p ?o )>>` against a pattern binding a
@@ -344,25 +374,34 @@ first is written back in accessor form, so it does not round-trip verbatim — t
 
 ## Tests
 
-Extend the three layers that already exist; keep every current test green (**261 passing, 1 skipped**
-after steps 0 and 1 — the 204 of the original brief plus what those two commits added, including the
-new `test/nullifyUnbindableVars.test.ts` and the range rules in `test/certainlyBoundVars.test.ts`).
+Extend the four layers that now exist; keep every current test green (**344 passing, 1 skipped** after
+steps 0 to 3, from the 261 those first two steps left).
 
-* `test/assertionConjunction.test.ts` — decomposition (`?o ≡ <<( ?a ?b ?c )>>` asserted twice),
-  congruence (unify `?o` with `?x`, then read a child of `?x`), ground-meets-shape, the occurs check,
-  `T⟨?x⟩` absorption, and `conditionOf` round-trips for every new form. The existing `conditionOf`
-  helper serialises Θ through the generator, which is exactly the check that S2 holds.
-* `test/pushDownAssertions.test.ts` — the target example; the chained case
-  (`sameTerm(?x, object(?o)) && sameTerm(?s, predicate(?x))`, see `report.md` §4); and the two
-  meta-tests that already exist and must keep passing: *"applying the transformation twice yields the
-  same result as once"* and *"leaves the input tree untouched"*.
-* the `semantic equivalence (evaluation)` block — the real safety net. The triple-term data is
-  **already in `test/statics/assertionPushdown.ttl`** (step 1 added `:a`/`:b`/`:c` `:says` a triple
-  term, and `:d` says a non-triple term); extend it as needed and cover: a shape pushed weakly into a join operand that never
-  binds the variable; a shape over a VALUES with an UNDEF column; a shape on the RHS of a MINUS; a
-  shape under an OPTIONAL that the implied `bound` collapses into a join; and a query where the
-  asserted variable is bound to something that is *not* a triple term, which must return nothing rather
-  than erroring.
+* `test/termClusterSet.test.ts` (new in step 2) — the pin lattice on its own: pins, shapes, the
+  decomposition of a ground triple term against one, the positional ranges, the occurs check both ways,
+  and the liveness of a group a live pin points at. Its `meetPins` is a *double* of the real one, typed
+  `RDF.Term` rather than `any` deliberately: an `any` there once hid a rename the compiler would
+  otherwise have caught.
+* `test/assertionConjunction.test.ts` — decomposition, congruence, ground-meets-shape, the occurs check,
+  T⟨?x : τ⟩ absorption and contradiction, and `conditionOf` round-trips for every form. The `conditionOf`
+  helper serialises Θ through the generator, which is exactly the check that S2 holds. Also the two that
+  guard the asserted/derived line: a clone keeps what was asserted, and a range worked out from the plan
+  is never written back.
+* `test/pushDownAssertions.test.ts` — the structural rules as generated SPARQL, which is where a
+  suppression or a serialisation shows; and the two meta-tests that must keep passing: *"applying the
+  transformation twice yields the same result as once"* — add every new form to its list, a chain above
+  all — and *"leaves the input tree untouched"*.
+* the `semantic equivalence (evaluation)` block — the real safety net, and the only layer that caught
+  the MINUS bug. The data is in `test/statics/assertionPushdown.ttl`: `:a`/`:b`/`:c` `:says` a triple
+  term, `:d` says a non-triple term, and `:e`/`:f` `:nests` one triple term inside another. Extend it
+  under a **fresh predicate** — several tests assert exact row counts over `:says`.
+
+What is already covered there, so you can tell a regression from a gap: a shape pushed weakly into a
+join operand that never binds the variable; a shape over a VALUES with an UNDEF column; a shape on the
+RHS of a MINUS, and a *weak* one that must not go there; a shape under an OPTIONAL that the implied
+`bound` collapses into a join; an asserted variable bound to something that is not a triple term, which
+returns nothing rather than erroring; a chain two levels deep, through `sameTerm` and through `=`; and
+an `isTRIPLE` that the accessor beside it entails, which must not be written back.
 
 ### Environment facts (verified, do not re-derive)
 

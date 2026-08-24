@@ -9,9 +9,11 @@ SELECT * { ?s ?p <<( ?s ?o_p ?o_o )>> . BIND(<<( ?s ?o_p ?o_o )>> AS ?o) }
 Verified against the installed traqula: both the pattern and the `BIND` generate and re-parse exactly,
 so no parser/generator work is needed.
 
-> **State of play (2026-08-19).** Phases **0** (`ac6d447`, #31) and **1** (`e18a8dd`, #32) are on
-> `main`, and phases **2** (the pin lattice) and **3** (accesses and `T⟨?x⟩`) are in the working tree;
-> the sections below say so where they describe something that now exists. Phases 4–5 are open.
+> **State of play (2026-08-24).** Phases **0** (`ac6d447`, #31) and **1** (`e18a8dd`, #32) are on
+> `main`; phases **2** (the pin lattice) and **3** (accesses and term types) are on
+> `feat/assert-variable-access`. The sections below say so where they describe something that now
+> exists. Phases 4 (materialisation) and 5 (what is left of the operation rules) are open — see the
+> per-operation table in `task-for-agent.md` for which rows of 5 are already done.
 
 The algebraic ground under all of this is Schmidt, Meier, Lausen, ["Foundations of SPARQL Query
 Optimization"](https://dl.acm.org/doi/pdf/10.1145/1804669.1804675) (ICDT 2010): the pass is (FElimI)/(FElimII) — discharge an equality by substituting
@@ -35,8 +37,9 @@ is written and must not be. That belongs to Θ rather than to the lattice, so it
 `AssertionClusterSet`, the subclass Θ is built on.
 
 **Groups get a pin lattice.** `TermClusterSet`'s `groupToTerm` becomes
-`{kind:'term', term} | {kind:'triple', children:[groupId × 3]}`. `compareTerm` (equal / contradiction)
-becomes `meetPins` (equal / contradiction / **decompose into child unifications**). That is syntactic
+`{kind:'term', term} | {kind:'triple', subject, predicate, object}`, the three being *group ids*.
+`compareTerm` (equal / contradiction) becomes `meetPins` (equal / contradiction / **decompose into child
+unifications**), reporting what it decided as a list of `GroupConstraint`. That is syntactic
 unification, and it gives the #30 interop for free: the shape sits on the *group*, so unifying `?o`
 with `?x` makes everything known about `subject(?o)` known about `subject(?x)`.
 

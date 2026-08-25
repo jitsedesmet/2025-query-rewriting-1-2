@@ -16,6 +16,7 @@ import type {
 import {
   access,
   accessId,
+  compareAccesses,
   componentOf,
   assertableTermTypes,
   assertBound,
@@ -287,50 +288,40 @@ export class AssertionConjunction {
     return result;
   }
 
-  /** The conjuncts of Θ that mention a single variable, which is everything but an edge between two. */
-  public singleVariableConjuncts(): AssertionConjunct[] {
-    return this.conjuncts().filter(conjunct => variablesReadByConjunct(conjunct).length === 1);
+  /**
+   * The conjuncts of Θ about one access alone: what it is fixed to, which kind of term it is, whether it
+   * is bound. Everything but an *edge*, which is what a rule cannot decide by looking at one access.
+   *
+   * Exactly the conjuncts reading a single variable, and for the one reason: two of them only ever come
+   * of one access being fixed to another, an access having a single root.
+   */
+  public unaryConjuncts(): AssertionConjunct[] {
+    return this.conjuncts().filter(conjunct => !isEdgeConjunct(conjunct));
   }
 
   /**
-   * The conjuncts of Θ that mention two variables and are *not* an edge of one of its {@link cliques} -
-   * an edge that reads at least one of its two sides through an accessor.
+   * The groups Θ can read more than one way, each as its {@link Access | aliases}, anchor first - the
+   * conjuncts of {@link conjuncts} a rule cannot take one at a time.
    *
-   * A rule places these one at a time, on the same licence it reads for a clique but with nothing to
-   * split: an edge is either licensed whole or kept where it is.
+   * An *alias* is a way of reading a group: a variable in it, or a position of a shape, read from the
+   * anchor of the group holding that shape. Several of them is the statement that they are equal, which
+   * for a group of variables is a clique and for `sameTerm(SUBJECT(?o), ?s)` is that one edge - and the
+   * two are one thing here, since a group reached both as `?s` and as `SUBJECT(?o)` says that equality
+   * exactly as two variables in one group do.
+   *
+   * A rule that decided per alias would split such a group into pieces that no longer say it, so it
+   * decides per group and splits the *edges* instead ({@link splitClique}): a group is transitively
+   * closed, so any spanning tree of it is equivalent to the whole, and what a rule pushes plus what it
+   * keeps has to span it again.
+   *
+   * A group pinned to a *term* is not one of them: every alias of it is that term, which already states
+   * that they are equal, so each writes a conjunct of its own and no edge is left to split.
    */
-  public accessConjuncts(): AssertionConjunct[] {
-    return this.conjuncts().filter(conjunct =>
-      variablesReadByConjunct(conjunct).length > 1 && !isCliqueEdge(conjunct));
-  }
-
-  /**
-   * The cliques of Θ - the groups no term pins, with more than one variable in them - each as its members
-   * in lexicographic order, so that the first of them is the representative.
-   *
-   * These are the conjuncts of {@link conjuncts} that a rule cannot take one at a time: a rule that
-   * decides per variable would split a clique into pieces that no longer say it, so it decides per clique
-   * and splits the *edges* instead. A group carrying a shape is one of them: its members equal each other
-   * whatever the shape says about them, and it is that equality these edges are.
-   *
-   * **Variables rather than accesses, which is a simplification and not the shape of the thing.** A
-   * group's aliases are accesses, and one reached both as `?s` and as `SUBJECT(?o)` states that equality
-   * exactly as two variables in one group do - so reading the aliases here would fold
-   * {@link accessConjuncts} into this, and let a clique of both kinds be *split* over the targets rather
-   * than placed an edge at a time.
-   *
-   * Two things have to be settled before it can, which is why it is scheduled work rather than a rename.
-   * The licence a target gives an alias is over the variables it reads *through* rather than over a name.
-   * And where a target is licensed for a single member, {@link splitClique} falls back to B⟨?x⟩, which no
-   * accessor has - `BOUND` takes a variable, and {@link assert} raises on one that is not. T⟨?x : Quad⟩
-   * of the root is what it would have to send instead (S6), which is a rule rather than a refactor.
-   */
-  public cliques(): string[][] {
-    const result: string[][] = [];
-    for (const [ group ] of this.clusters.groupEntries()) {
-      const members = this.namedMembers(group);
-      if (this.clusters.pinOf(group)?.kind !== 'term' && members.length > 1) {
-        result.push(members);
+  public aliasGroups(): Access[][] {
+    const result: Access[][] = [];
+    for (const [ group, aliases ] of this.anchoredAccessesPerGroup()) {
+      if (this.clusters.pinOf(group)?.kind !== 'term' && aliases.length > 1) {
+        result.push(aliases);
       }
     }
     return result;
@@ -1072,8 +1063,7 @@ export class AssertionConjunction {
       }
     }
     for (const reads of result.values()) {
-      reads.sort((left, right) =>
-        left.positions.length - right.positions.length || accessId(left).localeCompare(accessId(right)));
+      reads.sort(compareAccesses);
     }
     return result;
   }
@@ -1321,10 +1311,14 @@ function wrapAccess(access: Access, position: TriplePosition): Access {
   return { name: access.name, positions: [ ...access.positions, position ]};
 }
 
-/** Whether the conjunct is one edge of a clique - both of its sides a variable read directly. */
-function isCliqueEdge(conjunct: AssertionConjunct): boolean {
-  return isBareAccess(conjunct.access) && hasTarget(conjunct.assertion) &&
-    isAccessTarget(conjunct.assertion.term) && isBareAccess(conjunct.assertion.term);
+/**
+ * Whether the conjunct is an *edge*: one access fixed to another, rather than to a term or to nothing.
+ *
+ * Which is the one thing that makes a conjunct mention two accesses, and so the one thing a rule cannot
+ * place by reading a single one - see {@link AssertionConjunction.aliasGroups}.
+ */
+function isEdgeConjunct(conjunct: AssertionConjunct): boolean {
+  return hasTarget(conjunct.assertion) && isAccessTarget(conjunct.assertion.term);
 }
 
 /**

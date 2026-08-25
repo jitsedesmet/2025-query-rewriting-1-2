@@ -8,15 +8,18 @@ import {
   collectAssertions,
   isAssertionFilter,
 } from '../utils/assertionConjunction.js';
-import type { AssertionConjunct, Assertions } from '../utils/assertions.js';
+import type { Access, AssertionConjunct, Assertions } from '../utils/assertions.js';
 import {
-  access,
+  accessId,
   assertBound,
   assertStrong,
+  assertTermType,
+  compareAccesses,
   variablesReadByConjunct,
   impliesBound,
   isAccessTarget,
   isAssertableTerm,
+  isBareAccess,
   substituteInPattern,
   substituteInTerm,
   asWeakenedConjunct,
@@ -108,9 +111,11 @@ import { collectVariableNames, derivedVarNamer } from '../utils.js';
  * that empties `sameTerm(?g, "1")` under a `GRAPH ?g`, and the reason nesting runs down the `object`
  * chain and no further.
  *
- * **An edge may read through an accessor**, and then it is a clique of two with nothing to split: it goes
- * into every target licensed for both of its roots and stays on top unless one of those connects it
- * ({@link placeAccessConjunct}).
+ * **An edge may read through an accessor**, and then a clique is a clique of *aliases*: a group read both
+ * as `?s` and as `SUBJECT(?o)` states that equality exactly as two variables in one group do, so it
+ * splits over the targets the same way ({@link splitClique}) on the licence of the one variable each
+ * alias reads through. What a target licensed for a single alias gets is what *reading* it entails - and
+ * where that is B⟨?x⟩ for a variable, it is `isTRIPLE(?o)` for a position of one (S6).
  *
  * ## The traversal
  *
@@ -679,27 +684,22 @@ function pushIntoGraph(
   // bound forms cannot be what is asserted here: normalisation has already promoted or dropped them.
   const inside: AssertionConjunct[] = [];
   const kept: AssertionConjunct[] = [];
-  for (const conjunct of assertions.singleVariableConjuncts()) {
+  for (const conjunct of assertions.unaryConjuncts()) {
     if (conjunct.access.name === graphVar) {
       kept.push(conjunct);
     } else {
       inside.push(conjunct);
     }
   }
-  // A clique is split by its *edges*: the sub-clique over the members that are not `?g` goes into `P`
-  // whole, even when the clique's representative is `?g` and no edge of its star could travel as it
-  // stands. `?g ≡ ?s ≡ ?t` pushes `?s ≡ ?t` down and keeps a single edge back to `?g` here, which is
-  // what spans the clique again. The pattern *connects* what it takes: a condition not mentioning `?g`
+  // A group is split by its *edges*: the sub-group over the aliases that do not read `?g` goes into `P`
+  // whole, even when its anchor is `?g` and no edge of that star could travel as it stands.
+  // `?g ≡ ?s ≡ ?t` pushes `?s ≡ ?t` down and keeps a single edge back to `?g` here, which is
+  // what spans the group again. The pattern *connects* what it takes: a condition not mentioning `?g`
   // moves through `⋃ᵢ (⟦P⟧_uᵢ ⋈ {?g ↦ uᵢ})` untouched, so it still holds of every solution up here.
-  for (const clique of assertions.cliques()) {
-    const placed = splitClique(clique, [ clique.filter(name => name !== graphVar) ], [ true ]);
+  for (const aliases of assertions.aliasGroups()) {
+    const placed = splitClique(aliases, [ aliases.filter(alias => alias.name !== graphVar) ], [ true ]);
     inside.push(...placed.intoTarget[0]);
     kept.push(...placed.kept);
-  }
-  // The pattern is licensed for every variable but `?g`, and it connects what it takes, so an edge over
-  // two of them travels whole and an edge touching `?g` stays where it is.
-  for (const conjunct of assertions.accessConjuncts()) {
-    (variablesReadByConjunct(conjunct).includes(graphVar) ? kept : inside).push(conjunct);
   }
   return keep(assertionFilter(
     c,
@@ -732,9 +732,9 @@ function pushIntoGraph(
  * binds `?x` when *either* half does, so an operand leaving it unbound may still be part of a solution
  * that binds it. Unlicensed, it stays on top.
  *
- * A clique is placed by {@link splitClique} instead, on the same licence read over both endpoints of an
- * edge at once. Since an edge needs a single operand binding *both* of its endpoints, what the operands
- * are is part of the licence: the BGPs among them are merged into one first ({@link mergeBGPsOfJoin}).
+ * An *edge* is placed by {@link splitClique} instead, on the same licence read over both of the accesses
+ * it equates. Since an edge needs a single operand binding both of them, what the operands are is part of
+ * the licence: the BGPs among them are merged into one first ({@link mergeBGPsOfJoin}).
  */
 function pushIntoJoin(
   c: TransformContext,
@@ -758,8 +758,8 @@ function pushIntoJoin(
 
   const operandAssertions: AssertionConjunct[][] = join.input.map(() => []);
   const kept: AssertionConjunct[] = [];
-  // For every assertion about a single variable, find out where it can go.
-  for (const conjunct of assertions.singleVariableConjuncts()) {
+  // For every assertion about a single access, find out where it can go.
+  for (const conjunct of assertions.unaryConjuncts()) {
     const [ name ] = variablesReadByConjunct(conjunct);
     const { assertion } = conjunct;
     let placedStrongly = false;
@@ -782,37 +782,18 @@ function pushIntoJoin(
       kept.push(conjunct);
     }
   }
-  // Every operand pushing a sub-clique of its own also *connects* the sub-clique: the equality between two variables
-  // it binds certainly is what join compatibility already enforces on the output.
-  // Two passes over what is one thing: a clique of variables splits over the targets, where an edge
-  // reading through an accessor is placed whole. See {@link AssertionConjunction.cliques} for what the
-  // one pass would need.
-  for (const clique of assertions.cliques()) {
+  // Every operand pushing a sub-group of its own also *connects* it: the equality between two accesses it
+  // binds certainly is what join compatibility already enforces on the output.
+  for (const aliases of assertions.aliasGroups()) {
     const placed = splitClique(
-      clique,
-      join.input.map((_, index) => clique.filter(name => licensed(index, name))),
+      aliases,
+      join.input.map((_, index) => aliases.filter(alias => licensed(index, alias.name))),
       join.input.map(() => true),
     );
     for (const [ index, pushed ] of placed.intoTarget.entries()) {
       operandAssertions[index].push(...pushed);
     }
     kept.push(...placed.kept);
-  }
-  // An edge reading one of its sides through an accessor is a clique of two with nothing to split.
-  for (const conjunct of assertions.accessConjuncts()) {
-    const placed = placeAccessConjunct(
-      conjunct,
-      join.input.map((_, index) => variablesReadByConjunct(conjunct).every(name => licensed(index, name))),
-      join.input.map(() => true),
-    );
-    for (const [ index, licence ] of placed.intoTarget.entries()) {
-      if (licence) {
-        operandAssertions[index].push(conjunct);
-      }
-    }
-    if (placed.kept) {
-      kept.push(conjunct);
-    }
   }
 
   return keep(assertionFilter(
@@ -898,7 +879,7 @@ function pushIntoLeftJoin(
   const intoLeft: AssertionConjunct[] = [];
   const intoRight: AssertionConjunct[] = [];
   const kept: AssertionConjunct[] = [];
-  for (const conjunct of assertions.singleVariableConjuncts()) {
+  for (const conjunct of assertions.unaryConjuncts()) {
     const [ name ] = variablesReadByConjunct(conjunct);
     const { assertion } = conjunct;
     if (impliesBound(assertion) && licensedLeft(name)) {
@@ -916,34 +897,20 @@ function pushIntoLeftJoin(
       kept.push(conjunct);
     }
   }
-  // Only what goes into the LHS *connects* the clique back up: the RHS push is a replication of what the
+  // Only what goes into the LHS *connects* the group back up: the RHS push is a replication of what the
   // LHS already enforces, and the anti-join half of a left join enforces nothing between the two sides.
-  for (const clique of assertions.cliques()) {
+  for (const aliases of assertions.aliasGroups()) {
     const placed = splitClique(
-      clique,
-      [ clique.filter(licensedLeft), clique.filter(licensedRight) ],
+      aliases,
+      [
+        aliases.filter(alias => licensedLeft(alias.name)),
+        aliases.filter(alias => licensedRight(alias.name)),
+      ],
       [ true, false ],
     );
     intoLeft.push(...placed.intoTarget[0]);
     intoRight.push(...placed.intoTarget[1]);
     kept.push(...placed.kept);
-  }
-  for (const conjunct of assertions.accessConjuncts()) {
-    const varsOfConjunct = variablesReadByConjunct(conjunct);
-    const placed = placeAccessConjunct(
-      conjunct,
-      [ varsOfConjunct.every(licensedLeft), varsOfConjunct.every(licensedRight) ],
-      [ true, false ],
-    );
-    if (placed.intoTarget[0]) {
-      intoLeft.push(conjunct);
-    }
-    if (placed.intoTarget[1]) {
-      intoRight.push(conjunct);
-    }
-    if (placed.kept) {
-      kept.push(conjunct);
-    }
   }
 
   const leftAssertions = AssertionConjunction.of(intoLeft);
@@ -972,43 +939,46 @@ function pushIntoLeftJoin(
 }
 
 /**
- * Places one clique over the targets of a join-like operation: each target takes the sub-clique of the
- * members it licenses, and the edges connecting what no single target covered stay on top.
+ * Places one {@link AssertionConjunction.aliasGroups | group} over the targets of a join-like operation:
+ * each target takes the sub-group of the aliases it licenses, and the edges connecting what no single
+ * target covered stay on top.
  *
- * Splitting *edges* rather than variables is the whole point (see the file overview). For `w ≡ x ≡ y ≡ z`
+ * Splitting *edges* rather than aliases is the whole point (see the file overview). For `w ≡ x ≡ y ≡ z`
  * over a join with `cVars(LHS) ⊇ {w,x}` and `cVars(RHS) ⊇ {y,z}` no single operand is licensed for the whole
- * clique, yet each takes half of it, and one edge between the halves is enough to put it back together:
- * `σ_{x≡y}( σ_{w≡x}(L) ⋈ σ_{y≡z}(R) )`.
+ * group, yet each takes half of it, and one edge between the halves is enough to put it back together:
+ * `σ_{x≡y}( σ_{w≡x}(L) ⋈ σ_{y≡z}(R) )`. An alias reading through an accessor splits with the rest of them,
+ * on the licence of the one variable it reads through: `SUBJECT(?o) ≡ ?s ≡ ?t` gives the operand binding
+ * `?s` and `?t` their edge and keeps one back to `SUBJECT(?o)`.
  *
- * Two targets whose sub-cliques *share* a member need no such edge, and that is what `connects` records:
- * a member both operands are licensed for is certainly bound in both (the alternative licence -
- * `?x ∉ pVars` of every other operand - excludes it from all but one), so join compatibility already
- * enforces the equality that would connect them. It does not for a left join's right hand side, where the
- * anti-join half enforces nothing between the sides, so that target does not connect.
+ * Two targets whose sub-groups *share* an alias need no such edge, and that is what `connects` records:
+ * an alias both operands are licensed for reads a variable certainly bound in both (the alternative
+ * licence - `?x ∉ pVars` of every other operand - excludes it from all but one), so join compatibility
+ * already enforces the equality that would connect them. It does not for a left join's right hand side,
+ * where the anti-join half enforces nothing between the sides, so that target does not connect.
  *
- * A target licensed for a single member gets no edge, but still B⟨?x⟩ - strictly weaker than any edge, and
- * so always sound.
+ * A target licensed for a single alias gets no edge, but still what *reading* that alias entails (S6) -
+ * strictly weaker than any edge, and so always sound.
  *
- * @param members - The members of the clique, as variable names.
- * @param licensedPer - Per target, the members it is licensed for.
- * @param connects - Per target, whether it enforces the equalities its sub-clique states on the output
+ * @param aliases - The ways of reading the group, its anchor first.
+ * @param licensedPer - Per target, the aliases it is licensed for.
+ * @param connects - Per target, whether it enforces the equalities its sub-group states on the output
  *   of the operation, so that they need not be restated above it.
  */
-function splitClique(members: string[], licensedPer: string[][], connects: boolean[]): {
+function splitClique(aliases: Access[], licensedPer: Access[][], connects: boolean[]): {
   intoTarget: AssertionConjunct[][];
   kept: AssertionConjunct[];
 } {
   const edgesPerBranch = licensedPer.map(licensed => cliqueStar(licensed));
   const intoTarget: AssertionConjunct[][] = licensedPer.map((licensed, index) => edgesPerBranch[index].length > 0 ?
-    edgesPerBranch[index].map(([ member, hub ]) => unification(member, hub)) :
+    edgesPerBranch[index].map(([ alias, hub ]) => unification(alias, hub)) :
     // Means licensed.size is 0 or 1
-    licensed.map(name => ({ access: access(name), assertion: assertBound() })));
+    licensed.map(alias => entailedByReading(alias)));
 
-  // Union-find over the members, joined by every sub-clique that both went somewhere and holds above.
-  const spanningTree = new Map(members.map(name => [ name, name ]));
+  // Union-find over the aliases, joined by every sub-group that both went somewhere and holds above.
+  const spanningTree = new Map(aliases.map(alias => [ accessId(alias), accessId(alias) ]));
 
-  function rootOf(name: string): string {
-    let root = name;
+  function rootOf(alias: Access): string {
+    let root = accessId(alias);
     while (spanningTree.get(root) !== root) {
       root = spanningTree.get(root)!;
     }
@@ -1017,60 +987,64 @@ function splitClique(members: string[], licensedPer: string[][], connects: boole
 
   for (const [ branchIdx, edges ] of edgesPerBranch.entries()) {
     if (connects[branchIdx]) {
-      for (const [ member, representative ] of edges) {
-        spanningTree.set(rootOf(member), rootOf(representative));
+      for (const [ alias, representative ] of edges) {
+        spanningTree.set(rootOf(alias), rootOf(representative));
       }
     }
   }
 
-  // One edge from every component that is not the representative's back to the representative: together
-  // with the sub-cliques that were placed, that spans the clique again.
-  const cliqueRep = members[0];
+  // One edge from every component that is not the anchor's back to the anchor: together with the
+  // sub-groups that were placed, that spans the group again.
+  const anchor = aliases[0];
   const kept: AssertionConjunct[] = [];
-  const spanned = new Set([ rootOf(cliqueRep) ]);
-  for (const member of members) {
-    const root = rootOf(member);
+  const spanned = new Set([ rootOf(anchor) ]);
+  for (const alias of aliases) {
+    const root = rootOf(alias);
     if (!spanned.has(root)) {
       spanned.add(root);
-      kept.push(unification(member, cliqueRep));
+      kept.push(unification(alias, anchor));
     }
   }
   return { intoTarget, kept };
 }
 
 /**
- * The spanning star of a clique: every member but the first, paired against that first one. Empty for a
- * clique of fewer than two members, which is exactly when there is nothing left to equate.
+ * The spanning star of a group: every alias but the first, paired against that first one. Empty for a
+ * group of fewer than two aliases, which is exactly when there is nothing left to equate.
+ *
+ * The first is the *most direct* reading of the group rather than the lexicographically first, which is
+ * the order {@link AssertionConjunction.aliasGroups} hands them over in and the one the conjuncts of Θ
+ * are written against - so what a rule pushes down is what the pass would derive from it again.
  */
-function cliqueStar(members: string[]): [ string, string ][] {
-  const sorted = [ ...members ].sort((left, right) => left.localeCompare(right));
-  return sorted.slice(1).map(member => [ member, sorted[0] ]);
+function cliqueStar(aliases: Access[]): [ Access, Access ][] {
+  const sorted = [ ...aliases ].sort(compareAccesses);
+  return sorted.slice(1).map(alias => [ alias, sorted[0] ]);
 }
 
-/** The conjunct A⟨?x ≡ ?representative⟩: one edge of a clique. */
-function unification(name: string, representative: string): AssertionConjunct {
-  return { access: access(name), assertion: assertStrong(access(representative)) };
+/** The conjunct A⟨a ≡ anchor⟩: one edge of a group. */
+function unification(alias: Access, anchor: Access): AssertionConjunct {
+  return { access: alias, assertion: assertStrong(anchor) };
 }
 
 /**
- * Places one conjunct that mentions two variables and has nothing to split - an edge reading at least one
- * of its sides through an accessor.
+ * What a target licensed for a single alias of a group still learns from it: everything *reading* that
+ * alias entails, which is all that is left when the equality it was part of cannot travel (S6).
  *
- * The licence is (FJPush)'s side condition read over both roots at once, exactly as {@link splitClique}
- * reads it per edge of a clique: a target binding both of them evaluates the edge the way the operation
- * above it does. It goes into every target licensed for it - the operation already enforces that they
- * agree - and stays on top unless one of those targets also *connects* it, which is what makes restating
- * it above unnecessary.
+ * For a variable that is B⟨?x⟩ - a group says of each of its members that it is bound, and nothing else
+ * about one of them alone. For a position it is that what the position is read *through* is a triple
+ * term, which is the same fact one level up: `BOUND` takes a variable by the grammar, and a position of
+ * a triple term is bound exactly when the triple term holding it is. So a target that binds `?o` and
+ * cannot take `SUBJECT(?o) ≡ ?s` still gets `isTRIPLE(?o)` out of it, where before it got nothing.
  */
-function placeAccessConjunct(
-  conjunct: AssertionConjunct,
-  licensedPer: boolean[],
-  connects: boolean[],
-): { intoTarget: boolean[]; kept: boolean } {
-  return {
-    intoTarget: licensedPer,
-    kept: !licensedPer.some((licensed, index) => licensed && connects[index]),
-  };
+function entailedByReading(alias: Access): AssertionConjunct {
+  return isBareAccess(alias) ?
+      { access: alias, assertion: assertBound() } :
+      { access: readThrough(alias), assertion: assertTermType('Quad') };
+}
+
+/** The access one position short of this one - what it is read through, which it proves a triple term. */
+function readThrough(alias: Access): Access {
+  return { name: alias.name, positions: alias.positions.slice(0, -1) };
 }
 
 /**
@@ -1091,7 +1065,7 @@ function placeAccessConjunct(
  * weak form, and an edge between two variables is not about one value in the first place.
  */
 function admissibleOnMinusRhs(assertions: AssertionConjunction): AssertionConjunction {
-  return AssertionConjunction.of(assertions.singleVariableConjuncts()
+  return AssertionConjunction.of(assertions.unaryConjuncts()
     .filter(({ assertion }) => impliesBound(assertion))
     .map(conjunct => asWeakenedConjunct(conjunct))
     .filter(conjunct => conjunct !== undefined));

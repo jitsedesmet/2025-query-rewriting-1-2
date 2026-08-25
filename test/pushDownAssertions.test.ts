@@ -2076,6 +2076,11 @@ GROUP BY ?x?y`,
     it('keeps an edge reading through an accessor above a join no operand licenses it for', ({ expect }) => {
       // `?s` is bound by the union and `?o` by the pattern, so no single operand is licensed for the edge
       // - and dropping it rather than keeping it would be a wrong answer, not a missed optimisation.
+      //
+      // What each operand does get is what *reading* the alias it is licensed for entails (S6): the
+      // pattern binding `?o` is told that it holds a triple term, which is strictly weaker than the edge
+      // and so travels where the edge cannot. The union learns nothing it did not already state, `?s`
+      // being bound in it by construction.
       expectTransform(
         expect,
         `SELECT * WHERE {
@@ -2090,7 +2095,39 @@ GROUP BY ?x?y`,
   UNION {
     ?s <ex://q2> ?x .
   }
-  ?y <ex://r> ?o .
+  {
+    ?y <ex://r> ?o .
+    FILTER ( ISTRIPLE( ?o ) )
+  }
+  FILTER ( SAMETERM( SUBJECT( ?o ) , ?s ) )
+}`,
+      );
+    });
+
+    it('splits a group of both kinds of alias over the operands of a join', ({ expect }) => {
+      // The mixed case: `?s ≡ ?t ≡ SUBJECT(?o)` is one group read three ways, and it splits over the
+      // operands exactly as a clique of variables does - the left takes the edge between the two aliases
+      // it binds, the right takes what reading the third entails, and one edge back to the anchor spans
+      // what neither could connect.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          { SELECT ?s ?t WHERE { ?s :q ?t } }
+          { SELECT ?o WHERE { ?y :r ?o } }
+          FILTER(sameTerm(subject(?o), ?s) && sameTerm(?s, ?t))
+        }`,
+        `SELECT ?o ?s ?t WHERE {
+  {
+    SELECT ?s ( ?s AS ?t ) WHERE {
+      ?s <ex://q> ?s .
+    }
+  }
+  {
+    SELECT ?o WHERE {
+      ?y <ex://r> ?o .
+      FILTER ( ISTRIPLE( ?o ) )
+    }
+  }
   FILTER ( SAMETERM( SUBJECT( ?o ) , ?s ) )
 }`,
       );
@@ -2843,6 +2880,17 @@ GROUP BY ?x?y`,
         VALUES (?o ?s ?q ?v) { (<<( :a :p :shared )>> :a :p :shared) (<<( :a :p :shared )>> :a :p :other) }
         FILTER(sameTerm(?o, TRIPLE(?s, ?q, ?v)))
       }`, 1);
+    });
+
+    it('keeps the rows a join operand selects off what reading one alias entails', async({ expect }) => {
+      // One operand binds `?s`, the other `?o`, so neither may take the edge - and the one binding `?o`
+      // still takes `isTRIPLE(?o)` out of it (S6), which drops `:d` before the join rather than after.
+      // The answer is what the edge selects either way, which is the half that has to hold.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        { SELECT ?s ?y WHERE { ?s :p ?y } }
+        { SELECT ?o WHERE { ?t :says ?o } }
+        FILTER(sameTerm(subject(?o), ?s))
+      }`, 2);
     });
 
     it('keeps the rows an OPTIONAL collapsed by a shape selects', async({ expect }) => {

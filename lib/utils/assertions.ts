@@ -54,6 +54,18 @@ export function accessId(access: Access): string {
   return [ access.name, ...access.positions ].join('.');
 }
 
+/**
+ * Orders the ways of reading one value: the most direct first - a variable before a position of one, and
+ * lexicographic within that.
+ *
+ * The one order Θ reads a group's {@link Access | aliases} in, which is what makes a re-run of the pass
+ * derive the same anchor, write the same conjuncts against it, and absorb what it finds rather than
+ * stacking a second copy.
+ */
+export function compareAccesses(left: Access, right: Access): number {
+  return left.positions.length - right.positions.length || accessId(left).localeCompare(accessId(right));
+}
+
 /** Whether the two accesses read the same variable through the same chain. */
 export function sameAccessAs(left: Access, right: Access): boolean {
   return accessId(left) === accessId(right);

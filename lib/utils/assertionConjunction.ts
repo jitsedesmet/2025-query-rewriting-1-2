@@ -1080,12 +1080,17 @@ export class AssertionConjunction {
    * The term a group is fixed to, which for a shape is the triple term its decided positions make, and
    * `undefined` where a position is decided by nothing at all.
    *
-   * Unless the caller has something to put there: `leaf` is asked for the groups that carry neither a
-   * term nor a shape, which is the one thing the two callers differ in. A substitution into an
-   * expression has nothing (S3) and takes the `undefined`; a substitution into a *pattern* has the
-   * variable reading the group, and gets the whole shape written out rather than nothing. Everything
-   * else - that a pin is a term or three groups, and that three terms make one - is this walk, here once
-   * so that the two cannot come to disagree about what a shape is.
+   * Unless the caller has something to put there, which is the one thing its two callers differ in:
+   * `valueForUndecidedGroup` is asked for every group the pins leave undecided. A substitution into an
+   * expression has nothing to offer (S3) and takes the `undefined`; a substitution into a *pattern* has
+   * the variable that reads the group, and so gets the shape written out whole rather than not at all.
+   * Everything else - that a pin is a term or three groups, and that three terms make one - is this
+   * walk, here once so that the two cannot come to disagree about what a shape is.
+   *
+   * **A caller that always has one always gets a term back**: every way out of the walk below is a pin's
+   * term, a quad built from three of those, or the reading of an undecided group. The types cannot say
+   * so - the reading is optional here and the answer is not - which is why the pattern side reads the
+   * group itself where it comes back empty rather than asserting that it cannot ({@link patternValues}).
    *
    * The three positions need no type checking of their own. A position of a shape carries the range that
    * position admits from the moment it is created ({@link AssertionClusterSet.assertTriplePin}), and a
@@ -1099,13 +1104,15 @@ export class AssertionConjunction {
     }
     const children = this.clusters.childrenOf(group);
     if (children === undefined) {
-      return valueForUndecidedGroup ? valueForUndecidedGroup(group) : undefined;
+      return valueForUndecidedGroup?.(group);
     }
     const subject = this.termDecidedByPin(children.subject, valueForUndecidedGroup);
     const predicate = this.termDecidedByPin(children.predicate, valueForUndecidedGroup);
     const object = this.termDecidedByPin(children.object, valueForUndecidedGroup);
     if (subject === undefined || predicate === undefined || object === undefined) {
-      return undefined;
+      // A position nothing decides leaves the whole shape undecided, so the group is read the way any
+      // other undecided one is - which for the caller that has no reading is the `undefined` above.
+      return valueForUndecidedGroup?.(group);
     }
     return DF.quad(<RDF.Quad_Subject> subject, <RDF.Quad_Predicate> predicate, <RDF.Quad_Object> object);
   }
@@ -1132,8 +1139,15 @@ export class AssertionConjunction {
      * Off the *anchor*, which is what makes a group reachable two ways render the same everywhere (D4):
      * the anchor of a named group is that name, so a path through the shapes never runs past a variable
      * that could have named the rest of it.
+     *
+     * Never off the group's *id*, which is the obvious thing to reach for and names nothing. An id is a
+     * counter private to one union-find: it changes under {@link TermClusterSet.unifyGroups}, where the
+     * merged group keeps one of the two ids, and two conjunctions that say exactly the same thing number
+     * their groups however they happened to be built. Both matter here, because the conjunction handed
+     * to one operand of a join is rebuilt from conjuncts ({@link split}, {@link cliques}) rather than
+     * shared - so ids would have the two operands coin different variables for the one position they
+     * have to keep joining on. A name has to come from the query's own vocabulary, and the anchor is it.
      */
-    // TODO: how does this differ from groupID?
     const nameOfGroup = (group: number): string => {
       const [ representative ] = accessesPerGroup.get(group)!;
       return representative.positions.reduce<string>(
@@ -1143,19 +1157,22 @@ export class AssertionConjunction {
     };
 
     /**
-     * The whole of a written shape: every position holds something - the term it is pinned to, the shape
-     * it holds in turn, or the variable reading it - so the fold never comes back empty. It terminates
-     * for the reason the lattice refuses a cycle: a triple term is strictly larger than each of its
-     * positions.
+     * The whole of a shape, written out: every position holds something - the term it is pinned to, the
+     * shape it holds in turn, or the variable reading it - so the fold never comes back empty. It
+     * terminates for the reason the lattice refuses a cycle: a triple term is strictly larger than each
+     * of its positions.
      *
      * The three positions need no type check of their own either: each carries the range its position
      * admits from the moment it is created, so a predicate that got this far is an IRI, and a subject is
-     * neither a Literal nor a triple term ({@link termDecidedByPin}).
+     * neither a Literal nor a triple term.
      */
-    // TODO: what could we name this function if it can be slightly longer?
-    //    Also: please do not use the `!` here since it is unsafe in this case?
-    const written = (group: number): RDF.Term =>
-      this.termDecidedByPin(group, reached => DF.variable(nameOfGroup(reached)))!;
+    const materialisedTerm = (group: number): RDF.Term =>
+      // The right hand side is what the fold would have written for a group it could not decide, and it
+      // cannot be reached while every undecided group has a reading - which is the point of giving it
+      // one. Written out rather than asserted away: a pattern holding the variable in place of the shape
+      // states less than it could, where a wrong term would be an answer nobody asked for.
+      this.termDecidedByPin(group, undecided => DF.variable(nameOfGroup(undecided))) ??
+        DF.variable(nameOfGroup(group));
 
     const result = new Map<number, RDF.Term>();
     for (const [ group, [ representative ]] of accessesPerGroup) {
@@ -1165,7 +1182,7 @@ export class AssertionConjunction {
         // Without its shape, a group is what {@link strongSubstitution} makes of it: the term it is
         // pinned to, or the representative every member of a clique substitutes to.
         result.set(group, this.shapeIsWorthWriting(group) ?
-          written(group) :
+          materialisedTerm(group) :
           this.clusters.termOf(group) ?? DF.variable(representative.name));
       }
     }

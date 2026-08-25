@@ -1353,6 +1353,9 @@ GROUP BY ?x?y`,
           ?s :r ?o
           FILTER(sameTerm(subject(?o), :a))
         }`,
+        // A VALUES discharges what it is handed, so the second run finds no condition to read at all -
+        // which it only does where the first one left the rows saying everything the condition said.
+        'SELECT * WHERE { VALUES (?o ?s) { (<<( :a :b :c )>> :a) } FILTER(sameTerm(subject(?o), ?s)) }',
       ]) {
         const once = pushDownAssertions(c, parseQuery(c, prefixes + query));
         const twice = pushDownAssertions(c, pushDownAssertions(c, parseQuery(c, prefixes + query)));
@@ -2205,7 +2208,7 @@ GROUP BY ?x?y`,
 
     it('prunes the VALUES rows holding another kind of term', ({ expect }) => {
       // A row decides which kind of term its column holds, so the assertion is discharged here rather
-      // than left on top - what it cannot decide is a *position* of one.
+      // than left on top - as is everything else it decides, a row being a solution mapping.
       expectTransform(
         expect,
         'SELECT * WHERE { VALUES (?o) { (:a) ("l") (:b) } FILTER(isIRI(?o)) }',
@@ -2213,6 +2216,43 @@ GROUP BY ?x?y`,
   VALUES ?o {
     <ex://a>
     <ex://b>
+  }
+}`,
+      );
+    });
+
+    it('prunes the VALUES rows a shape rules out, keeping the column it cannot rebuild', ({ expect }) => {
+      // The row holds the whole value, so it decides the positions of it as readily as the term: the
+      // triple term whose subject is not the row's `?s` goes, and so does the row holding no triple term
+      // at all. The column stays - the rows disagree about `?o`, so nothing left rebuilds it - and
+      // nothing of the condition stays with it, the surviving rows being exactly the ones it selected.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          VALUES (?o ?s) { (<<( :a :b :c )>> :a) (<<( :d :e :f )>> :x) (:notATripleTerm :a) }
+          FILTER(sameTerm(subject(?o), ?s))
+        }`,
+        `SELECT ?o ?s WHERE {
+  VALUES( ?o ?s ){
+    ( <<( <ex://a> <ex://b> <ex://c> )>> <ex://a> )
+  }
+}`,
+      );
+    });
+
+    it('drops the VALUES column a shape rebuilds out of the ones that stay', ({ expect }) => {
+      // Every position of the shape is a column of its own, so what the dropped column held is written
+      // again by the re-binding below - the case a per-column reading cannot reach, no single column
+      // holding the value and no term being known for it.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          VALUES (?o ?s ?q ?v) { (<<( :a :b :c )>> :a :b :c) (<<( :a :b :c )>> :a :b :x) }
+          FILTER(sameTerm(?o, TRIPLE(?s, ?q, ?v)))
+        }`,
+        `SELECT ( <<( ?s ?q ?v )>> AS ?o ) ?q ?s ?v WHERE {
+  VALUES( ?s ?q ?v ){
+    ( <ex://a> <ex://b> <ex://c> )
   }
 }`,
       );
@@ -2784,6 +2824,25 @@ GROUP BY ?x?y`,
         ?s :says ?o
         FILTER(sameTerm(subject(?o), :a) && isIRI(object(?o)))
       }`, 2);
+    });
+
+    it('keeps the rows a shape over a VALUES of ground triple terms selects', async({ expect }) => {
+      // A row holds the whole value, so it decides the shape by itself: the first row is the only one
+      // whose triple term has the row's own `?s` as its subject, and the third holds no triple term at
+      // all - where the accessor would have errored, and the pruning drops the row instead.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        VALUES (?o ?s) { (<<( :a :p :shared )>> :a) (<<( :a :q :other )>> :b) (:notATripleTerm :a) }
+        FILTER(sameTerm(subject(?o), ?s))
+      }`, 1);
+    });
+
+    it('rebuilds the VALUES column a shape lets it drop', async({ expect }) => {
+      // The three columns holding the positions stay, `?o` goes, and the re-binding writes it again out
+      // of them - so the answer still binds it, to the value the row it came from held.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        VALUES (?o ?s ?q ?v) { (<<( :a :p :shared )>> :a :p :shared) (<<( :a :p :shared )>> :a :p :other) }
+        FILTER(sameTerm(?o, TRIPLE(?s, ?q, ?v)))
+      }`, 1);
     });
 
     it('keeps the rows an OPTIONAL collapsed by a shape selects', async({ expect }) => {

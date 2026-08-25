@@ -809,6 +809,24 @@ describe('assertionConjunction', () => {
       expect(conjunctsOf(assertions.intoPattern(derivedVarNamer([])).residual)).toEqual([ 'o.subject=weak(ex://c)' ]);
     });
 
+    it('rebuilds a shape out of what reads its positions, and coins nothing', ({ expect }) => {
+      // What a re-binding may write, as against what a pattern may: every position is read by a variable
+      // of its own, so the value can be put together again without naming anything new.
+      const assertions = <AssertionConjunction> structuralConjunctionOf(
+        [ access('s'), assertStrong(subjectOfO) ],
+        [ access('p'), assertStrong(access('o', 'predicate')) ],
+        [ access('v'), assertStrong(objectOfO) ],
+      );
+      expect(substitutionOf(assertions.rebuildingSubstitution())).toEqual([ 'o=<<( ?s ?p ?v )>>' ]);
+    });
+
+    it('leaves a shape a position of which nothing reads alone', ({ expect }) => {
+      // The line between the two substitutions: coining `?o_p` and `?o_o` is what a *pattern* may do,
+      // since it binds them where it writes them, and a re-binding reading them would find them unbound.
+      const assertions = <AssertionConjunction> structuralConjunctionOf([ access('s'), assertStrong(subjectOfO) ]);
+      expect(substitutionOf(assertions.rebuildingSubstitution())).toEqual([]);
+    });
+
     it('names a position once, and around the names the query already uses', ({ expect }) => {
       // The memo is what makes two materialisation sites agree, and the suffix is what keeps a coined
       // name off a variable of the query - including on the second reading, which has to hand back the

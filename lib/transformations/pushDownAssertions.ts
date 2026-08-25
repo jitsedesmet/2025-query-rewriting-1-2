@@ -14,11 +14,9 @@ import {
   assertBound,
   assertStrong,
   variablesReadByConjunct,
-  hasTarget,
   impliesBound,
   isAccessTarget,
   isAssertableTerm,
-  isBareAccess,
   substituteInPattern,
   substituteInTerm,
   asWeakenedConjunct,
@@ -245,8 +243,8 @@ function swapWith(
     // it makes, and so what has to be restated over it ({@link AssertionConjunction.intoPattern}). A
     // BGP pays by substituting into its patterns, so it settles what a pattern can state - a term, an
     // equality, a shape - and no more: `isIRI(?x)` is not something a triple pattern says, and stays. A
-    // VALUES pays by pruning rows, and a row holds the *value* of its column, so it settles which kind of
-    // term that value is as readily as which term it is.
+    // VALUES pays by pruning rows, and a row *is* a solution mapping rather than a pattern to match, so
+    // it settles everything Θ says at once and leaves nothing over ({@link pruneValues}).
     case Algebra.Types.BGP: {
       const { substitution, residual } = assertions.intoPattern(namer);
       return keep(assertionFilter(c, substituteIntoPatterns(c, op, substitution), residual));
@@ -257,24 +255,14 @@ function swapWith(
     }
     // The one leaf where all of the forms do real work, since a VALUES column may be UNDEF.
     case Algebra.Types.VALUES: {
-      // A row decides a column against a term, against another column, against which kind of term it is,
-      // and against being there at all. What a shape says about a *position* of a column is none of
-      // those, so it stays above the VALUES rather than being silently discharged by the pruning.
-      //
-      // More conservatively than a row can manage, at that: one *holding* a ground triple term decides
-      // the positions of it too. The general rule is to assert the row into a clone of Θ and keep it
-      // where that holds, which would replace the per-variable reading below - a pruning missed rather
-      // than an answer got wrong, since what this cannot decide it keeps.
-      const decidable: AssertionConjunct[] = [];
-      const kept: AssertionConjunct[] = [];
-      for (const conjunct of assertions.conjuncts()) {
-        (readsThroughAccessor(conjunct) ? kept : decidable).push(conjunct);
-      }
-      return keep(assertionFilter(
-        c,
-        pruneValues(c, op, AssertionConjunction.of(decidable)),
-        AssertionConjunction.of(kept),
-      ));
+      // Every conjunct a row can decide is one about the columns of this VALUES, which after
+      // normalisation is every conjunct there is: a variable the VALUES does not declare can never be
+      // bound here, so (FBndII) has already emptied the plan or pruned the conjunct. The split is what
+      // makes that a fact of this rewrite rather than an invariant read off another one - what mentions
+      // anything else stays above, where it holds of the same solutions it held of before.
+      const columns = new Set(op.variables.map(variable => variable.value));
+      const { inside, outside } = assertions.split(name => columns.has(name));
+      return keep(assertionFilter(c, pruneValues(c, op, inside), outside));
     }
 
     // (FUPush) holds unconditionally for every form - a solution of a union comes from exactly one
@@ -414,70 +402,38 @@ function substituteIntoPath(c: TransformContext, path: Algebra.Path, assertions:
 }
 
 /**
- * Prunes the rows of a VALUES that contradict the assertions, and drops the columns they decide.
+ * Prunes the rows of a VALUES that Θ rules out, and drops the columns what stays can rebuild.
  *
- * A unification decides a column against *another column of the same row*: under A⟨?x ≡ ?y⟩ the rows where
- * the two differ are dropped, the representative's column is kept, and the other one is re-bound from it.
- * Every member of a clique that gets here is a variable of the VALUES, since normalisation would otherwise
- * have emptied the plan by (FBndII).
+ * **A row is a solution mapping**, spelled out: it names the term each of its columns holds, and says of
+ * the columns it does not carry that they are unbound. So asserting a row into a copy of Θ decides every
+ * form at once - the term a strong member is pinned to, the column another one has to agree with, which
+ * kind of term it is, the positions a ground triple term decomposes a shape against, and being there at
+ * all - and a row Θ survives is a row that satisfies it. Nothing is left for the conjunction to say above
+ * the VALUES, which is what sets this apart from the pattern rules: a pattern states what it can match,
+ * where a row *is* the answer.
+ *
+ * A column then goes exactly where what stays rebuilds its value
+ * ({@link AssertionConjunction.rebuildingSubstitution}): the term a strong member is pinned to, the
+ * representative its clique substitutes to, or the triple term its shape is written out of the columns
+ * holding the positions - the case a single column cannot decide, since the rows may hold a different
+ * value in each. The `BIND` below puts the variable back, so `pVars` is preserved. U⟨?x⟩ is the one form
+ * that takes a column out for good: a column no surviving row binds would otherwise leave `?x` in scope,
+ * which is exactly what `!bound(?x)` took it out of.
  *
  * Row-level filtering keeps duplicate rows duplicated, so multiplicities are preserved.
  */
 function pruneValues(c: TransformContext, values: Algebra.Values, assertions: AssertionConjunction): Algebra.Operation {
-  const substitution = assertions.strongSubstitution();
-  // The forms that require the row to provide a value at all - a row leaving one of them UNDEF, which it
-  // expresses by not carrying the column, is pruned.
-  const requiredBound = [ ...assertions.boundImpliedBy() ];
+  const substitution = assertions.rebuildingSubstitution();
+  // A column stays unless something else carries what it held: the re-binding rebuilds it, or U⟨?x⟩
+  // says there is nothing left to hold.
+  const isRebuilt = (name: string): boolean =>
+    substitution.has(name) || assertions.get(name)?.subType === 'unbound';
   const newBindings: Algebra.Values['bindings'] = [];
   for (const binding of values.bindings) {
-    if (requiredBound.every(name => binding[name] !== undefined)) {
-      const newRow: typeof newBindings[0] = {};
-      let isPruned = false;
-      for (const [ variable, value ] of Object.entries(binding)) {
-        const assertion = assertions.get(variable);
-        if (assertion?.subType === 'termType') {
-          // T⟨?x : τ⟩ says which kind of term the value is and nothing about which one, so the row decides
-          // the column just as B⟨?x⟩ leaves it deciding it - only the rows holding another kind are dropped.
-          if (value !== undefined && (<RDF.Term> value).termType !== assertion.termType) {
-            isPruned = true;
-            break;
-          }
-          newRow[variable] = value;
-        } else if (assertion === undefined) {
-          // We do not assert on this var
-          newRow[variable] = value;
-        } else if (assertion.subType === 'unbound') {
-          // The row binds a column that has to be unbound.
-          if (value !== undefined) {
-            isPruned = true;
-            break;
-          }
-        } else if (assertion.subType === 'bound') {
-          // Any value satisfies B⟨?x⟩, and since the row keeps deciding which one, the column stays.
-          newRow[variable] = value;
-        } else {
-          // A⟨?x ≡ c⟩ or W⟨?x ≡ c⟩ against the term, and A⟨?x ≡ ?rep⟩ against whatever this row put in `?rep`.
-          // The row does carry `?rep`: a clique implies B⟨?rep⟩, so `requiredBound` above already dropped
-          // the rows leaving it UNDEF.
-          const requiredValue = isAccessTarget(assertion.term) ?
-            binding[assertion.term.name] :
-            assertion.term;
-          if (value === undefined || requiredValue.equals(value)) {
-            if (assertion.subType === 'weak') {
-              // Weak and term val is undefined or correct
-              newRow[variable] = value;
-            }
-            // The strong form decides the column outright, so it is dropped here and re-bound below (using BIND).
-          } else {
-            // The row binds a column to a term not allowed.
-            isPruned = true;
-            break;
-          }
-        }
-      }
-      if (!isPruned) {
-        newBindings.push(newRow);
-      }
+    if (rowSatisfies(assertions, values.variables, binding)) {
+      newBindings.push(Object.fromEntries(
+        Object.entries(binding).filter(([ name ]) => !isRebuilt(name)),
+      ));
     }
   }
   // Zero rows means empty sequence which we write as the empty operation.
@@ -486,14 +442,38 @@ function pruneValues(c: TransformContext, values: Algebra.Values, assertions: As
   }
   // Zero columns is allowed: `VALUES () { () () () }` - it contributes one empty solution mapping per
   // row. With exactly one row that is the same as the empty BGP.
-  const remainingVars = values.variables.filter((variable) => {
-    const decided = assertions.get(variable.value)?.subType;
-    return decided !== 'strong' && decided !== 'unbound';
-  });
+  const remainingVars = values.variables.filter(variable => !isRebuilt(variable.value));
   const pruned = remainingVars.length === 0 && newBindings.length === 1 ?
     c.AF.createBgp([]) :
     c.AF.createValues(remainingVars, newBindings);
   return bindAssertedTerms(c, pruned, substitution);
+}
+
+/**
+ * Whether the solution mapping one row of a VALUES stands for satisfies Θ.
+ *
+ * Asserted into a copy of Θ rather than read against it per variable, which is what makes the rule
+ * uniform over the forms: what the row says about a column - this term, or no term at all - is exactly
+ * what Θ takes, so a conjunction that survives the whole row is one the row satisfies, and one that
+ * contradicts it somewhere is a row to drop. The copy is thrown away either way: a conjunction an
+ * assertion returned `false` for holds no state a caller may read.
+ *
+ * Every column is asserted, the ones Θ says nothing about included, since a column Θ reaches only
+ * through the shape of another one is decided by the row that holds it rather than by anything said
+ * about it directly.
+ */
+function rowSatisfies(
+  assertions: AssertionConjunction,
+  variables: readonly RDF.Variable[],
+  binding: Algebra.Values['bindings'][number],
+): boolean {
+  const attempt = assertions.clone();
+  return variables.every((variable) => {
+    const value = binding[variable.value];
+    return value === undefined ?
+      attempt.assertUnbound(variable.value) :
+      attempt.assertTerm(variable.value, value, true);
+  });
 }
 
 /**
@@ -1115,20 +1095,6 @@ function admissibleOnMinusRhs(assertions: AssertionConjunction): AssertionConjun
     .filter(({ assertion }) => impliesBound(assertion))
     .map(conjunct => asWeakenedConjunct(conjunct))
     .filter(conjunct => conjunct !== undefined));
-}
-
-/**
- * Whether either side of the conjunct reads a *position* of a value rather than a value.
- *
- * Which is what a VALUES row cannot decide: it holds the value of a column, so it decides which term that
- * is and which kind of term it is, but it has no say over the positions of a triple term inside it. Not
- * the same question {@link AssertionConjunction.intoPattern} asks - a row decides `isIRI(?x)` where a
- * pattern has no way to state it, and a pattern states a *position* where a row cannot.
- */
-function readsThroughAccessor(conjunct: AssertionConjunct): boolean {
-  return !isBareAccess(conjunct.access) ||
-    (hasTarget(conjunct.assertion) && isAccessTarget(conjunct.assertion.term) &&
-      !isBareAccess(conjunct.assertion.term));
 }
 
 /** The certainly and possibly bound variables of an operation, computed once and cached on it. */

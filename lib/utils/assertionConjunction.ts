@@ -402,6 +402,29 @@ export class AssertionConjunction {
   }
 
   /**
+   * The substitution a *re-binding* can rebuild out of what is written elsewhere: {@link
+   * strongSubstitution} with the shapes written out of the variables that already read their positions,
+   * and nothing coined for the positions nothing reads.
+   *
+   * One word apart from the substitution above - a position is read the way the whole is, rather than
+   * only the group at the top - and that word is what takes a variable out of a VALUES no single column
+   * holds the value of: under A⟨?o ≡ <<( ?s ?p ?x )>>⟩ the column `?o` goes and `BIND(<<( ?s ?p ?x )>> AS
+   * ?o)` rebuilds it from the three that stay, where {@link strongSubstitution} sees an open shape and
+   * keeps the column.
+   *
+   * Coining nothing is what makes it usable outside a pattern, where S3 rules the materialised shape
+   * out: every variable it writes already reads the group it stands for, so it is bound wherever the
+   * value it rebuilds is - and where a position is read by nothing at all, the whole shape stays
+   * undecided rather than mentioning a variable no one has bound.
+   */
+  public rebuildingSubstitution(): Assertions {
+    return this.strongMembersReplacedBy(group => this.termDecidedByPin(group, (undecided) => {
+      const representative = this.representativeOf(undecided);
+      return representative === undefined ? undefined : DF.variable(representative);
+    }));
+  }
+
+  /**
    * What a *pattern* takes of Θ, and what it leaves behind: the two halves of one decision, which is why
    * they are decided together off the one set of values written for the groups.
    *
@@ -1080,10 +1103,12 @@ export class AssertionConjunction {
    * The term a group is fixed to, which for a shape is the triple term its decided positions make, and
    * `undefined` where a position is decided by nothing at all.
    *
-   * Unless the caller has something to put there, which is the one thing its two callers differ in:
+   * Unless the caller has something to put there, which is the one thing its callers differ in:
    * `valueForUndecidedGroup` is asked for every group the pins leave undecided. A substitution into an
    * expression has nothing to offer (S3) and takes the `undefined`; a substitution into a *pattern* has
-   * the variable that reads the group, and so gets the shape written out whole rather than not at all.
+   * the variable that reads the group, and so gets the shape written out whole rather than not at all;
+   * a re-binding has one for the groups something reads and none for the rest, which is the third
+   * signature - a position nobody reads leaves the shape as undecided as a position nothing pins.
    * Everything else - that a pin is a term or three groups, and that three terms make one - is this
    * walk, here once so that the two cannot come to disagree about what a shape is.
    *
@@ -1100,7 +1125,14 @@ export class AssertionConjunction {
    */
   private termDecidedByPin(group: number): RDF.Term | undefined;
   private termDecidedByPin(group: number, valueForUndecidedGroup: (group: number) => RDF.Term): RDF.Term;
-  private termDecidedByPin(group: number, valueForUndecidedGroup?: (group: number) => RDF.Term): RDF.Term | undefined {
+  private termDecidedByPin(
+    group: number,
+    valueForUndecidedGroup: (group: number) => RDF.Term | undefined,
+  ): RDF.Term | undefined;
+  private termDecidedByPin(
+    group: number,
+    valueForUndecidedGroup?: (group: number) => RDF.Term | undefined,
+  ): RDF.Term | undefined {
     // The walk is a function of its own so that it recurses on what it *is* rather than on what the
     // signatures above promise: the two modes are one traversal, and only the promise is per caller.
     const recurse = (reached: number): RDF.Term | undefined => {

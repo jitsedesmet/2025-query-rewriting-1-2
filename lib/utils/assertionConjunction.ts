@@ -5,6 +5,7 @@ import type { PinChildren, TriplePosition } from '../datastructures/TermClusterS
 import { childGroupsOf, triplePositions } from '../datastructures/TermClusterSet.js';
 import type { RangeSet } from '../RangeSet.js';
 import type { TransformContext } from '../transformContext.js';
+import type { DerivedVarNamer } from '../utils.js';
 import type {
   Access,
   AssertableTermType,
@@ -15,6 +16,7 @@ import type {
 import {
   access,
   accessId,
+  componentOf,
   assertableTermTypes,
   assertBound,
   strongAssertionAsExpression,
@@ -349,20 +351,6 @@ export class AssertionConjunction {
   }
 
   /**
-   * The conjuncts a substitution of *terms* cannot carry, and which a rewrite that discharges Θ by
-   * substituting therefore has to leave behind as a condition.
-   *
-   * Everything a shape says, in other words: an accessor conjunct names a position no variable holds, and
-   * T⟨?x⟩ names no term at all. The one exception is a shape every position of which is decided - it *is*
-   * a ground triple term, {@link strongSubstitution} hands it over as one, and restating it would only
-   * write the same fact twice.
-   */
-  public structuralPartOfConjunction(): AssertionConjunction {
-    return AssertionConjunction.of(this.conjuncts().filter(conjunct =>
-      isStructuralConjunct(conjunct) && !variablesReadByConjunct(conjunct).every(name => this.decidesTerm(name))));
-  }
-
-  /**
    * Θ with every conjunct in the strongest form that survives a move somewhere its variables may be
    * unbound: a pinned member becomes weak, and the forms that have no weak form at all - B⟨?x⟩ and the
    * edges - are dropped.
@@ -399,21 +387,88 @@ export class AssertionConjunction {
    *
    * Dropping the other forms is the point: substituting `c` for `?x` under W⟨?x ≡ c⟩ would claim `?x` is
    * bound, and B⟨?x⟩ and U⟨?x⟩ have no term to substitute. An *open* shape has no term either - it is a
-   * pattern rather than a value, which is what materialising it into the plan will be about.
+   * pattern rather than a value, so it may only go where a pattern may ({@link intoPattern}) and
+   * never into an expression (S3).
    */
   public strongSubstitution(): Assertions {
+    return this.strongMembersReplacedBy((group) => {
+      const term = this.termDecidedByPin(group);
+      if (term !== undefined) {
+        return term;
+      }
+      const representative = this.representativeOf(group);
+      return representative === undefined ? undefined : DF.variable(representative);
+    });
+  }
+
+  /**
+   * What a *pattern* takes of Θ, and what it leaves behind: the two halves of one decision, which is why
+   * they are decided together off the one set of values written for the groups.
+   *
+   * The substitution is {@link strongSubstitution} with the shapes written out:
+   * a member of a shaped group maps to the triple term that shape is, its positions filled in with the
+   * terms they are pinned to, the variables that name them, and a variable coined for each position
+   * nothing names (D4).
+   *
+   * That last part is why this may only go into a pattern (S3). `<<( ?s ?o_p ?o_o )>>` in an object
+   * position *binds* `?o_p` and `?o_o` - the pattern is what gives the coined variables a value, and the
+   * re-binding `BIND(<<( ?s ?o_p ?o_o )>> AS ?o)` below it hands `?o` back the value it had. The same
+   * term in a condition would read two variables nothing has bound and error away every row.
+   *
+   * A shape *no* position of which names anything is left alone ({@link shapeIsWorthWriting}): writing
+   * it coins three variables to say only that the value is a triple term, which is what T⟨?x : Quad⟩
+   * already says without coining anything, and which is the form the very same fact takes when it
+   * arrives as `isTRIPLE(?x)` rather than through an accessor. Below a shape that *is* written, every
+   * nested one is written with it - there the three variables cost nothing beyond what the position they
+   * sit in already writes.
+   *
+   * The residual is what the pattern that substitution builds does **not** state, read off the *value the
+   * pattern holds* at each side of a conjunct rather than off the form of the conjunct - which is what
+   * keeps the two halves in step as more of Θ becomes writable:
+   *
+   * - an equality holds where both sides are written, whatever they are written as - the same term
+   *   twice, or the same variable twice, which is the join compatibility a repeated variable in a BGP
+   *   already enforces;
+   * - T⟨a : Quad⟩ holds where `a` is written as a triple term - the three positions of a materialised
+   *   shape *are* the assertion that it is one;
+   * - T⟨a : τ⟩ for any other kind does not, a position holding a variable saying nothing about which
+   *   kind of term that variable takes. `isIRI(SUBJECT(?o))` is written back over the pattern, about
+   *   `?o` rather than about the variable materialised for the position (D6): the condition sits above
+   *   the re-binding of `?o`, where it is bound, and a derived name never enters a condition.
+   *
+   * The forms that say a variable is *not* bound to something (W and U), and B⟨?x⟩ which names no value
+   * at all, are never written into a pattern and so always stay. None of them ever reaches one -
+   * {@link normalisedFor} promotes or prunes all three against the `cVars` of a leaf that binds every
+   * variable it has - but the rule is about what the pattern enforces, not about what happens to arrive.
+   *
+   * @param namer - Coins the variable for a position, once per position and query ({@link derivedVarNamer}).
+   */
+  public intoPattern(namer: DerivedVarNamer): { substitution: Assertions; residual: AssertionConjunction } {
+    const values = this.patternValues(namer);
+    return {
+      substitution: this.strongMembersReplacedBy(group => values.get(group)),
+      residual: AssertionConjunction.of(this.conjuncts()
+        .filter(conjunct => !this.enforcedByPattern(conjunct, values))),
+    };
+  }
+
+  /**
+   * The substitution replacing every strong member by what `valueOf` makes of its group, which is the
+   * one thing the two substitutions above differ in.
+   *
+   * Only the strong members: substituting `c` for `?x` under W⟨?x ≡ c⟩ would claim `?x` is bound, and
+   * B⟨?x⟩ and U⟨?x⟩ have no term to substitute. And never a variable standing for itself - the
+   * representative of its own group is already written where it is, and re-binding it below would be the
+   * `BIND(?x AS ?x)` the algebra raises on.
+   */
+  private strongMembersReplacedBy(valueOf: (group: number) => RDF.Term | undefined): Assertions {
     const result = new Map<string, RDF.Term>();
     for (const name of this.names()) {
       const group = this.clusters.groupOf(name);
-      if (this.strength.get(name) === 'strong' && group !== undefined) {
-        const term = this.resolveTerm(group);
-        if (term === undefined) {
-          const representative = this.representativeOf(group);
-          if (representative !== undefined && representative !== name) {
-            result.set(name, DF.variable(representative));
-          }
-        } else {
-          result.set(name, term);
+      if (group !== undefined && this.strength.get(name) === 'strong') {
+        const value = valueOf(group);
+        if (value !== undefined && (value.termType !== 'Variable' || value.value !== name)) {
+          result.set(name, value);
         }
       }
     }
@@ -1017,48 +1072,168 @@ export class AssertionConjunction {
   }
 
   /** Whether what is said about an access holds outright, rather than only where its root is bound. */
-  private isStrong(read: Access): boolean {
-    return this.strength.get(read.name) !== 'weak';
-  }
-
-  /** Whether Θ decides the whole term a variable is bound to, shape and all. */
-  private decidesTerm(name: string): boolean {
-    const group = this.clusters.groupOf(name);
-    return group !== undefined && this.strength.get(name) === 'strong' &&
-      this.resolveTerm(group) !== undefined;
+  private isStrong(access: Access): boolean {
+    return this.strength.get(access.name) !== 'weak';
   }
 
   /**
-   * The term a group is fixed to, which for a shape is the triple term its decided positions make.
+   * The term a group is fixed to, which for a shape is the triple term its decided positions make, and
+   * `undefined` where a position is decided by nothing at all.
    *
-   * The three need no type checking of their own. A position of a shape carries the range that position
-   * admits from the moment it is created ({@link AssertionClusterSet.assertTriplePin}), and a pin the
-   * range does not admit is refused where it is placed rather than here - so a predicate that got this
-   * far is a NamedNode, and a subject is neither a Literal nor a triple term.
+   * Unless the caller has something to put there, which is the one thing its two callers differ in:
+   * `valueForUndecidedGroup` is asked for every group the pins leave undecided. A substitution into an
+   * expression has nothing to offer (S3) and takes the `undefined`; a substitution into a *pattern* has
+   * the variable that reads the group, and so gets the shape written out whole rather than not at all.
+   * Everything else - that a pin is a term or three groups, and that three terms make one - is this
+   * walk, here once so that the two cannot come to disagree about what a shape is.
+   *
+   * **A caller that always has one always gets a term back**, which the second signature states: every
+   * way out of the walk is a pin's term, a quad built from three of those, or the reading of an
+   * undecided group, so nothing else can come back. That is the one step the compiler takes on trust -
+   * a conditional return type would not defer over a parameter that is not generic, and would hand the
+   * *first* caller a term it can be missing - so it is stated here once, where the argument for it is.
+   *
+   * The three positions need no type checking of their own. A position of a shape carries the range that
+   * position admits from the moment it is created ({@link AssertionClusterSet.assertTriplePin}), and a
+   * pin the range does not admit is refused where it is placed rather than here - so a predicate that
+   * got this far is a NamedNode, and a subject is neither a Literal nor a triple term.
    */
-  private resolveTerm(group: number): RDF.Term | undefined {
-    const pin = this.clusters.pinOf(group);
-    if (pin?.kind === 'term') {
-      return pin.term;
+  private termDecidedByPin(group: number): RDF.Term | undefined;
+  private termDecidedByPin(group: number, valueForUndecidedGroup: (group: number) => RDF.Term): RDF.Term;
+  private termDecidedByPin(group: number, valueForUndecidedGroup?: (group: number) => RDF.Term): RDF.Term | undefined {
+    // The walk is a function of its own so that it recurses on what it *is* rather than on what the
+    // signatures above promise: the two modes are one traversal, and only the promise is per caller.
+    const recurse = (reached: number): RDF.Term | undefined => {
+      const term = this.clusters.termOf(reached);
+      if (term !== undefined) {
+        return term;
+      }
+      const children = this.clusters.childrenOf(reached);
+      if (children === undefined) {
+        return valueForUndecidedGroup?.(reached);
+      }
+      const subject = recurse(children.subject);
+      const predicate = recurse(children.predicate);
+      const object = recurse(children.object);
+      if (subject === undefined || predicate === undefined || object === undefined) {
+        // A position nothing decides leaves the whole shape undecided, so the group is read the way any
+        // other undecided one is - which for the caller that has no reading is the `undefined` above.
+        return valueForUndecidedGroup?.(reached);
+      }
+      return DF.quad(<RDF.Quad_Subject> subject, <RDF.Quad_Predicate> predicate, <RDF.Quad_Object> object);
+    };
+    return recurse(group);
+  }
+
+  /**
+   * The value a pattern holds for every group a variable of Θ names: the term it is pinned to, the
+   * triple term its shape is written out as, or the variable that reads it.
+   *
+   * Only the groups a variable names are in the result, since only those can be *read* from the pattern
+   * - a position nobody named is reached through the triple term written for the group holding it, and
+   * has no way of being asked for on its own.
+   *
+   * The value is what every alias of the group is written as, wherever it occurs, which is where the
+   * enforcement comes from: two aliases of one group become the same term or the same variable in the
+   * same pattern, and matching that pattern is what states the equality Θ carried as a condition.
+   */
+  private patternValues(namer: DerivedVarNamer): Map<number, RDF.Term> {
+    const accessesPerGroup = this.anchoredAccessesPerGroup();
+
+    const nameOfGroup = (group: number): string => {
+      const [ representative ] = accessesPerGroup.get(group)!;
+      return representative.positions.reduce<string>(
+        (name, position) => namer(name, position).value,
+        representative.name,
+      );
+    };
+
+    const materialisedTerm = (group: number): RDF.Term =>
+      this.termDecidedByPin(group, undecided => DF.variable(nameOfGroup(undecided)));
+
+    const result = new Map<number, RDF.Term>();
+    for (const [ group, [ representative ]] of accessesPerGroup) {
+      // A group no variable names is only ever read through the shape holding it, and the anchor of one
+      // that has them is the variable it is read by: its representative.
+      if (isBareAccess(representative)) {
+        // Without its shape, a group is what {@link strongSubstitution} makes of it: the term it is
+        // pinned to, or the representative every member of a clique substitutes to.
+        result.set(group, this.shapeIsWorthWriting(group) ?
+          materialisedTerm(group) :
+          this.clusters.termOf(group) ?? DF.variable(representative.name));
+      }
     }
+    return result;
+  }
+
+  /**
+   * Whether writing the shape of a group into a pattern states anything the pattern did not already
+   * state - which is exactly whether some position of it, however deep, holds a term or is named.
+   *
+   * A shape none of whose positions says anything is three coined variables that constrain nothing but
+   * the value being a triple term, which the condition T⟨?x : Quad⟩ says without growing the pattern.
+   * Leaving it is also what keeps `isTRIPLE(?o)` and the shape an accessor opens on the way to a
+   * position it says nothing about - `sameTerm(SUBJECT(?o), SUBJECT(?o))` - the one plan, the two being
+   * the one fact.
+   */
+  private shapeIsWorthWriting(group: number): boolean {
     const children = this.clusters.childrenOf(group);
     if (children === undefined) {
+      return false;
+    }
+    return childGroupsOf(children).some(child =>
+      this.clusters.termOf(child) !== undefined ||
+      this.namedMembers(child).length > 0 ||
+      this.shapeIsWorthWriting(child));
+  }
+
+  /**
+   * The value the pattern holds where an access reads it, `undefined` where it holds none.
+   *
+   * Reading a position is following the written triple term into it, so an access is answered exactly as
+   * deep as the shapes were written: what the pattern says about `SUBJECT(?o)` is the subject of what it
+   * wrote for `?o`, and where that is a variable rather than a triple term it says nothing at all.
+   *
+   * A weak member is never written - the pattern would claim it is bound - so it reads as nothing here.
+   */
+  private patternValueOf(access: Access, values: ReadonlyMap<number, RDF.Term>): RDF.Term | undefined {
+    if (!this.isStrong(access)) {
       return undefined;
     }
-    const subject = this.resolveTerm(children.subject);
-    const predicate = this.resolveTerm(children.predicate);
-    const object = this.resolveTerm(children.object);
-    if (subject === undefined || predicate === undefined || object === undefined) {
-      return undefined;
+    const groupOfRoot = this.clusters.groupOf(access.name);
+    let valueOfRoot = groupOfRoot === undefined ? undefined : values.get(groupOfRoot);
+    for (const position of access.positions) {
+      valueOfRoot = valueOfRoot === undefined ? undefined : componentOf(valueOfRoot, position);
     }
-    return DF.quad(<RDF.Quad_Subject> subject, <RDF.Quad_Predicate> predicate, <RDF.Quad_Object> object);
+    return valueOfRoot;
+  }
+
+  /** Whether matching the pattern the substitution builds already states what the conjunct states. */
+  private enforcedByPattern(conjunct: AssertionConjunct, values: ReadonlyMap<number, RDF.Term>): boolean {
+    const value = this.patternValueOf(conjunct.access, values);
+    if (value === undefined) {
+      return false;
+    }
+    const { assertion } = conjunct;
+    if (assertion.subType === 'termType') {
+      // Only being a triple term is something a pattern can state, by writing the three positions of one.
+      return assertion.strong && value.termType === assertion.termType;
+    }
+    if (assertion.subType !== 'strong') {
+      return false;
+    }
+    const target = isAccessTarget(assertion.term) ?
+      this.patternValueOf(assertion.term, values) :
+      assertion.term;
+    // The same term written twice, or the same variable - which in a pattern is the equality itself.
+    return target !== undefined && value.equals(target);
   }
 
   /**
    * What an *expression* may be given in place of an access: the term it reads where Θ decides one, and
    * otherwise the variable that reads its group most directly.
    *
-   * The second half is what sets this apart from {@link resolveTerm}, which hands back a value or
+   * The second half is what sets this apart from {@link termDecidedByPin}, which hands back a value or
    * nothing. A representative is not a value - it still has to be evaluated - but Θ proves it equal to
    * what the access reads, so writing it there is sound and is what turns `sameTerm(SUBJECT(?o), ?s)`
    * into `sameTerm(?s, ?s)` when the pass meets its own output again.
@@ -1072,7 +1247,7 @@ export class AssertionConjunction {
     if (group === undefined) {
       return undefined;
     }
-    const term = this.resolveTerm(group);
+    const term = this.termDecidedByPin(group);
     if (term !== undefined) {
       return term;
     }
@@ -1118,17 +1293,6 @@ function wrapAccess(access: Access, position: TriplePosition): Access {
 function isCliqueEdge(conjunct: AssertionConjunct): boolean {
   return isBareAccess(conjunct.access) && hasTarget(conjunct.assertion) &&
     isAccessTarget(conjunct.assertion.term) && isBareAccess(conjunct.assertion.term);
-}
-
-/** Whether the conjunct is about the *shape* of a value rather than about which term it is. */
-function isStructuralConjunct(conjunct: AssertionConjunct): boolean {
-  // You assert triple term or assert termtype -- so not a value assertion
-  if (!isBareAccess(conjunct.access) || conjunct.assertion.subType === 'termType') {
-    return true;
-  }
-  // You are equal to something that is not a precise value, but rather a true access
-  return hasTarget(conjunct.assertion) && isAccessTarget(conjunct.assertion.term) &&
-      !isBareAccess(conjunct.assertion.term);
 }
 
 /**

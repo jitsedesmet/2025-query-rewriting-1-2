@@ -47,3 +47,12 @@ PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 # and the row drops, exactly as `:d` does one level up.
 :e :nests <<( :a :p <<( :b :q :c )>> )>> .
 :f :nests <<( :a :p :shared )>> .
+
+# The same triple term reached through two predicates, so that a join over `?o` hands the *same* shape
+# to both of its operands: once both have materialised it, they no longer join on `?o` alone but on the
+# variables coined for its positions, which only agree because both sites coined the same names.
+# `:h` holds one the assertion rejects, so a rewrite that lost the shape on one side would show up as a
+# row rather than as a missing one.
+:g :holds <<( :a :p :shared )>> .
+:h :holds <<( :b :q :other )>> .
+:g :mirrors <<( :a :p :shared )>> .

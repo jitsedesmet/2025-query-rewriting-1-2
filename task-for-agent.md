@@ -36,12 +36,39 @@ of it, and where this file and a symbol disagree, the symbol wins.
 | 2 | branch | the pin lattice of D3, plus the per-group ranges of D5.3 — `Pin`, `TriplePin`, `meetPins`, `GroupConstraint`, the work-list merge, the occurs check, anonymous groups, `groupToRange` lifted down from `ClusterSolver`. |
 | 3 | branch | accesses and T⟨?x : τ⟩ (D1, D2), the recognisers, `toExpression`, the folds of S7. Θ round-trips through a condition; nothing is written into patterns yet. |
 | 3+ | branch | **beyond the plan**: all four term-type predicates rather than `isTRIPLE` alone (D2), and `AssertionClusterSet`, which is where the asserted half of a group's range lives. |
+| 4 | working tree | materialisation (D4): `derivedVarNamer`, `intoPattern` (the substitution and what it leaves behind), and the namer threaded through the pass. The target example works. |
 
-**To build: 4 (materialisation), 5 (what is left of the operation rules)**, and the optional 6. The
+**To build: 5 (what is left of the operation rules)**, and the optional 6. The
 per-operation table below says which rows are already done.
 
 Step 2 is not separable from step 3 in the build: `AssertionConjunction` is the only caller of
 `TermClusterSet`'s comparator, so the lattice and the conjunction that meets pins on it land together.
+
+### What phase 4 decided that this file left open
+
+`structuralPartOfConjunction` is gone. The plan's two methods landed as **one**, `intoPattern(namer)`,
+handing back the substitution and the residual together: the residual is defined against the values that
+substitution writes, so deciding them apart is deciding one thing twice. It asks **what the materialised
+pattern enforces** rather than which *form* a conjunct has: an equality holds where both
+sides are written — the same term or the same variable twice, which in a BGP is the join compatibility a
+repeated variable already states — T⟨a : Quad⟩ holds where `a` is written as a triple term, and nothing
+else a pattern can state. That is what keeps the residual in step with the substitution as more of Θ
+becomes writable.
+
+The one judgement call: **a shape no position of which says anything is not written**
+(`shapeIsWorthWriting`). Writing it coins three variables to state that the value is a triple term,
+which is what `isTRIPLE(?o)` states while coining none — and `isTRIPLE(?o)` and
+`sameTerm(SUBJECT(?o), SUBJECT(?o))` are the one fact reached two ways (D2), so they have to be the one
+plan. Below a shape that *is* written, every nested one is written with it, the three variables costing
+nothing beyond the position they already sit in. That is why materialising replaces *most* of the
+remainder rather than all of it.
+
+`cVars` survives the re-binding by the one thing that makes a triple-term construction certain
+(`constructionCannotFail`): the components are bound by the pattern the `BIND` wraps, and each is a term
+its position admits **because the pattern is the narrowing** — a variable written into the subject slot
+of a triple term has the range of that slot in the operation below, whatever range it had before. So
+`?s ?p ?o . ?y :q ?x FILTER(sameTerm(SUBJECT(?o), ?x))` keeps `?o` certain although `?x` was an object
+everywhere before the rewrite.
 
 ### Two mistakes this phase made, so that the next does not
 
@@ -96,6 +123,7 @@ where `vRanges` decides the finer *type*-level fact — in scope, and no term le
 | `lib/datastructures/ClusterSet.ts`, `TermClusterSet.ts` | the union-find Θ is built on, and the pin lattice over it |
 | `lib/datastructures/AssertionClusterSet.ts` | the subclass Θ uses: its `meetPins`, and the *asserted* half of a group's range as against the derived half. Read this before writing anything that reports what Θ says. |
 | `lib/transformations/pushDownAssertions.ts` | the pass; its file comment explains the rules per operation |
+| `lib/utils.ts` | `derivedVarNamer`, which names a materialised position, and `collectVariableNames`, which is what it is kept off (D4) |
 | `lib/utils/certainlyBoundVars.ts` | `cVars`/`vRanges` metadata, computed by dynamic programming — `vRanges` is scope *and* term types in one (D5) |
 | `lib/transformations/nullifyUnbindableVars.ts` | the type-level emptiness proof step 0 added; a range consumer to keep working |
 | `lib/utils/partialExpressionEvaluation.ts` | substitution into expressions + constant folding |
@@ -197,6 +225,7 @@ A materialised position is named `${anchor}_${s|p|o}`, with a numeric suffix **o
 (`collectVariableNames` in `lib/utils.ts`, as `removeProjections` does). Keep the memo in one
 pass-scoped map keyed by `${anchor(g)}_${p}`, threaded as a per-pass context so
 `assertionConjunction.ts` stays context-free — `patternSubstitution(namer)` takes it as an argument.
+(In the tree that method is `intoPattern(namer)`, which hands back the residual with it.)
 
 **Half of this already exists.** `AssertionConjunction.anchoredAccessesPerGroup` computes exactly the
 anchor above — every group reachable from a named variable, with the accesses reading it, anchor first,
@@ -298,7 +327,7 @@ shape-pinned group: `isTRIPLE(anchor)` when no position is informative, otherwis
 `sameTerm(position(anchor), …)` per informative position (which already entails `isTRIPLE`).
 
 **S3 — never substitute an open shape into an expression.** Split `strongSubstitution()` into
-`patternSubstitution(namer)` (materialises shapes, used by BGP/PATH/re-binding) and
+`patternSubstitution(namer)` (materialises shapes, used by BGP/PATH/re-binding; `intoPattern` in the tree) and
 `expressionSubstitution()` (ground pins and clique representatives only, used by `collectAssertions`,
 `pushIntoExtend`, `pushIntoLeftJoin`). A fully ground shape may substitute anywhere.
 
@@ -328,7 +357,7 @@ pass stacks a second copy. The substitution argument becomes a view (`resolve(ac
 
 | operation | change | state |
 |---|---|---|
-| BGP / PATH | `patternSubstitution`; `bindAssertedTerms` gains the quad case. `canOccupy` already refuses a quad outside object position. | **phase 4.** Today the terms substitute and `structuralPartOfConjunction()` stays on top as a condition; materialising replaces most of that remainder. |
+| BGP / PATH | `patternSubstitution`; `bindAssertedTerms` gains the quad case. `canOccupy` already refuses a quad outside object position. | **done**, as `intoPattern`. `bindAssertedTerms` needed no change — a quad is a term expression like any other. What stays on top is the residual half of it: a kind of term, and a position no pattern reached. |
 | VALUES | prune *rows* by asserting the row into a clone of Θ (a ground triple-term value decomposes against a shape by itself); drop a *column* iff Θ can rebuild its value from the columns that survive. Worked examples in `report.md` §4. Whether you rewrite the per-variable `switch` or extend it is **your call** — keep the existing evaluation tests green. | **partly.** A row decides a term, another column, a term *type*, and being absent. It does not decide a *position*, so `readsThroughAccessor` hands those upward — conservative, not wrong. The row-into-Θ rule replaces the per-variable reading and is what closes it. |
 | UNION, PROJECT, DISTINCT, REDUCED, ORDER BY, FROM, FILTER, GROUP | nothing beyond D1 | **done.** |
 | GRAPH | a shape pin on `?g` is a contradiction — state it as a *range* fact (`graphRange` is `{NamedNode, BlankNode}`, no `Quad`) and let `normalisedFor` empty the plan, the way the term case now does; `pushIntoGraph` no longer type-checks terms itself | **done.** The one `termType` test left in `pushIntoGraph` asks whether a term can be *written* as a graph name (`createGraph` takes a Variable or a NamedNode), not whether it is one. |
@@ -365,17 +394,26 @@ written back in accessor form, so it does not round-trip verbatim — that is ac
    reconstruct from them; and the BGP/PATH/VALUES rules keep `structural()` on top, since a rewrite that
    discharges Θ by substituting terms cannot carry what a shape says. Then, in commits of their own:
    the four term-type predicates as one form; `AssertionClusterSet`; and the fixes the review turned up.
-4. Materialisation: D4, `patternSubstitution`, `bindAssertedTerms`. The target example works here. The
-   anchors it needs are already computed (D4); what is missing is the namer and the substitution.
+4. ~~Materialisation: D4, `patternSubstitution`, `bindAssertedTerms`.~~ **Done**, as `intoPattern`. The namer is
+   `derivedVarNamer` in `lib/utils.ts`, threaded from `pushDownAssertions` — which collects the taken
+   names off the whole query before rewriting anything — down to the BGP and PATH rules. The residual
+   grew a rule of its own, and the shape that is not worth writing is where this file was
+   underspecified: see "What phase 4 decided" above.
 5. The operation rules in the table above.
-6. Follow-up, optional: `ClusterSolver` drops the `Quad` exclusion from `RawBasicTerm` and resolves its
+6. Follow-up, optional: read a materialised position through the variable the pattern wrote for it -
+   `isIRI(?o_o)` where the residual now says `isIRI(OBJECT(?o))`. Sound as it stands, the residual
+   sitting directly above the pattern that binds `?o_o`, and cheaper: a plain variable an engine can
+   push into the scan rather than an accessor it has to evaluate. It may **not** be done by putting the
+   coined name into Θ - a derived name in there is a name a licence could be read off (D6) - so it is a
+   substitution over the condition after `toExpression`, against the values `intoPattern` wrote.
+7. Follow-up, optional: `ClusterSolver` drops the `Quad` exclusion from `RawBasicTerm` and resolves its
    TODO at line 191 — the mapping head `?t rdf:reifies <<( ?s ?p ?o )>>` against a pattern binding a
    triple term is the same unification problem.
 
 ## Tests
 
-Extend the four layers that now exist; keep every current test green (**344 passing, 1 skipped** after
-steps 0 to 3, from the 261 those first two steps left).
+Extend the four layers that now exist; keep every current test green (**358 passing, 1 skipped** after
+step 4, from the 344 steps 0 to 3 left and the 261 the first two left).
 
 * `test/termClusterSet.test.ts` (new in step 2) — the pin lattice on its own: pins, shapes, the
   decomposition of a ground triple term against one, the positional ranges, the occurs check both ways,
@@ -387,6 +425,9 @@ steps 0 to 3, from the 261 those first two steps left).
   helper serialises Θ through the generator, which is exactly the check that S2 holds. Also the two that
   guard the asserted/derived line: a clone keeps what was asserted, and a range worked out from the plan
   is never written back.
+* `test/assertionConjunction.test.ts`, `materialisation` — what Θ writes into a pattern and what it
+  keeps back: a coined position, a named one, a nested shape, a weak member (never written), the shape
+  that is not worth writing, and the namer's memo and its collision suffix.
 * `test/pushDownAssertions.test.ts` — the structural rules as generated SPARQL, which is where a
   suppression or a serialisation shows; and the two meta-tests that must keep passing: *"applying the
   transformation twice yields the same result as once"* — add every new form to its list, a chain above
@@ -395,6 +436,10 @@ steps 0 to 3, from the 261 those first two steps left).
   the MINUS bug. The data is in `test/statics/assertionPushdown.ttl`: `:a`/`:b`/`:c` `:says` a triple
   term, `:d` says a non-triple term, and `:e`/`:f` `:nests` one triple term inside another. Extend it
   under a **fresh predicate** — several tests assert exact row counts over `:says`.
+
+Phase 4 added two of its own: two operands of a join that both materialise the same shape and have to
+keep joining on it (which is what the shared namer buys, over the fresh `:holds` / `:mirrors`
+predicates), and a kind of term left standing over a pattern that materialised the position it is about.
 
 What is already covered there, so you can tell a regression from a gap: a shape pushed weakly into a
 join operand that never binds the variable; a shape over a VALUES with an UNDEF column; a shape on the

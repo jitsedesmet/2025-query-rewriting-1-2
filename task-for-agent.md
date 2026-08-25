@@ -400,7 +400,13 @@ written back in accessor form, so it does not round-trip verbatim — that is ac
    grew a rule of its own, and the shape that is not worth writing is where this file was
    underspecified: see "What phase 4 decided" above.
 5. The operation rules in the table above.
-6. Follow-up, optional: `ClusterSolver` drops the `Quad` exclusion from `RawBasicTerm` and resolves its
+6. Follow-up, optional: read a materialised position through the variable the pattern wrote for it -
+   `isIRI(?o_o)` where the residual now says `isIRI(OBJECT(?o))`. Sound as it stands, the residual
+   sitting directly above the pattern that binds `?o_o`, and cheaper: a plain variable an engine can
+   push into the scan rather than an accessor it has to evaluate. It may **not** be done by putting the
+   coined name into Θ - a derived name in there is a name a licence could be read off (D6) - so it is a
+   substitution over the condition after `toExpression`, against the values `intoPattern` wrote.
+7. Follow-up, optional: `ClusterSolver` drops the `Quad` exclusion from `RawBasicTerm` and resolves its
    TODO at line 191 — the mapping head `?t rdf:reifies <<( ?s ?p ?o )>>` against a pattern binding a
    triple term is the same unification problem.
 

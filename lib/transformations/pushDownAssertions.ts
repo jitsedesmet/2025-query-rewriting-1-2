@@ -133,8 +133,16 @@ import { collectVariableNames, derivedVarNamer } from '../utils.js';
 const keepMetadata = { shallowKeys: new Set([ 'metadata' ]) };
 
 /**
- * Pushes every assertion filter (`FILTER(sameTerm(?x, c))`, `FILTER(sameTerm(?x, ?y))`) in `op` as deep as
- * possible, and into every branch that permits it - for a join, that may be both sides at once.
+ * Pushes every assertion filter (`FILTER(sameTerm(?x, c))`, `FILTER(sameTerm(?x, ?y))`) in `rootOp` as
+ * deep as possible, and into every branch that permits it - for a join, that may be both sides at once.
+ *
+ * **Takes the root of a query, not a subtree of one.** Materialising a shape coins variables for the
+ * positions nothing names, and the only thing keeping a coined name off a variable of the query is that
+ * every variable of the query was collected before the pass ran. Handed a subtree, the pass cannot see
+ * what its ancestors use, and a coined name colliding with one of those would not be a fresh variable at
+ * all: whatever the ancestor joins, minuses or optionally binds on that name would start constraining a
+ * position of a triple term. Nothing else in the pass cares - the licences are read per operation - so
+ * this is the one precondition it has.
  *
  * @example
  * // Before:
@@ -150,18 +158,15 @@ const keepMetadata = { shallowKeys: new Set([ 'metadata' ]) };
  * // After:
  * // SELECT * WHERE { ?o ?p ?o . BIND(?o AS ?s) }
  */
-export function pushDownAssertions<T extends Algebra.Operation>(c: TransformContext, op: T): T {
+export function pushDownAssertions<T extends Algebra.Operation>(c: TransformContext, rootOp: T): T {
   const callbacks: Parameters<typeof algebraUtils.mapOperationPreOrder<'unsafe', T>>[1] = Object.fromEntries(
     Object.values(Algebra.Types).map(type => [ type, (copy: Algebra.Operation) => keep(copy) ]),
   );
-  // One namer for the whole pass, over the variables of the whole query as it stands *before* anything
-  // is rewritten (D4): a materialised position has to get the same name wherever it is written, and a
-  // name coined against a subtree would collide with a variable further along that has not been met yet.
-  // TODO: I think this is incorrect since the scope of the variables if we introduce them here is way
-  //  larger so accidental name collisions mu=ight stil happen in parrents of this operation.
-  //   Maybe the solution is as simple as renaming op to rootOp and saying we expect
-  //   root algebra operations (in the JSDocs).
-  const namer = derivedVarNamer(collectVariableNames(c.astTransformer, op));
+  // One namer for the whole pass, over every variable of the query as it stands *before* anything is
+  // rewritten (D4). Both halves of that matter: a materialised position has to get the same name
+  // wherever it is written, and a name coined against a part of the tree would collide with a variable
+  // in the part that has not been met yet - which is also why this takes the root, see above.
+  const namer = derivedVarNamer(collectVariableNames(c.astTransformer, rootOp));
   callbacks[Algebra.Types.FILTER] = (filter: Algebra.Filter) => pushFilter(c, namer, filter);
   // Starting from a copy without metadata gives us both a tree of our own to rewrite and the guarantee
   // that what `withCpVars` hands us describes the plan as it is now.
@@ -170,7 +175,7 @@ export function pushDownAssertions<T extends Algebra.Operation>(c: TransformCont
   // plan at the moment it passed, which the rewrites below it have since changed. This may *not* be done
   // inside `mapOperationPreOrder` - `keepMetadata` is how an assertion filter hands its conjunction to the
   // `pushFilter` that meets it next, and how a `reTransform` keeps the work it has already done.
-  return withoutCpVars(algebraUtils.mapOperationPreOrder<'unsafe', T>(withoutCpVars(op), callbacks));
+  return withoutCpVars(algebraUtils.mapOperationPreOrder<'unsafe', T>(withoutCpVars(rootOp), callbacks));
 }
 
 /**

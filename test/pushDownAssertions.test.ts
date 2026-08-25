@@ -1961,8 +1961,6 @@ GROUP BY ?x?y`,
     });
 
     it('keeps the kind of a position over the pattern that materialised it', ({ expect }) => {
-      // TODO(future (or now if next phases do not account it)):
-      //  ensure we use the materialized variable instead of the accessor?
       // A pattern states which term a position holds and which positions the value has; which *kind* of
       // term a variable takes is not something it states, so that conjunct stays a condition - written
       // about `?o`, which the re-binding above the pattern has bound, rather than about the variable
@@ -1980,11 +1978,11 @@ GROUP BY ?x?y`,
       );
     });
 
-    it('does not keep the kind of a position over the pattern that materialised it when redunent', ({ expect }) => {
-      // A pattern states which term a position holds and which positions the value has; which *kind* of
-      // term a variable takes is not something it states, so that conjunct stays a condition - written
-      // about `?o`, which the re-binding above the pattern has bound, rather than about the variable
-      // coined for the position.
+    it('drops the kind of a position the term written there already decides', ({ expect }) => {
+      // The other side of the test above: `isIRI` says which kind of term the subject is, and the
+      // pattern writes *which* term it is - a NamedNode, which is the kind. A term decides its own kind,
+      // so the conjunct states nothing the pattern does not and is not written back, exactly as it is
+      // not written back into a condition (`termTypeToState`).
       expectTransform(
         expect,
         'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(subject(?o), :a) && isIRI(subject(?o))) }',

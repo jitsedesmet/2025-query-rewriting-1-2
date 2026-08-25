@@ -1087,37 +1087,42 @@ export class AssertionConjunction {
    * Everything else - that a pin is a term or three groups, and that three terms make one - is this
    * walk, here once so that the two cannot come to disagree about what a shape is.
    *
-   * **A caller that always has one always gets a term back**: every way out of the walk below is a pin's
-   * term, a quad built from three of those, or the reading of an undecided group. The types cannot say
-   * so - the reading is optional here and the answer is not - which is why the pattern side reads the
-   * group itself where it comes back empty rather than asserting that it cannot ({@link patternValues}).
+   * **A caller that always has one always gets a term back**, which the second signature states: every
+   * way out of the walk is a pin's term, a quad built from three of those, or the reading of an
+   * undecided group, so nothing else can come back. That is the one step the compiler takes on trust -
+   * a conditional return type would not defer over a parameter that is not generic, and would hand the
+   * *first* caller a term it can be missing - so it is stated here once, where the argument for it is.
    *
    * The three positions need no type checking of their own. A position of a shape carries the range that
    * position admits from the moment it is created ({@link AssertionClusterSet.assertTriplePin}), and a
    * pin the range does not admit is refused where it is placed rather than here - so a predicate that
    * got this far is a NamedNode, and a subject is neither a Literal nor a triple term.
    */
-  private termDecidedByPin(group: number, valueForUndecidedGroup?: (group: number) => RDF.Term):
-      typeof valueForUndecidedGroup extends undefined ? RDF.Term | undefined : RDF.Term {
-    const term = this.clusters.termOf(group);
-    if (term !== undefined) {
-      return term;
-    }
-    const children = this.clusters.childrenOf(group);
-    if (children === undefined) {
-      return valueForUndecidedGroup ?
-        valueForUndecidedGroup(group) :
-        <ReturnType<typeof this.termDecidedByPin>> <unknown> undefined;
-    }
-    const subject = this.termDecidedByPin(children.subject, valueForUndecidedGroup);
-    const predicate = this.termDecidedByPin(children.predicate, valueForUndecidedGroup);
-    const object = this.termDecidedByPin(children.object, valueForUndecidedGroup);
-    if (subject === undefined || predicate === undefined || object === undefined) {
-      return valueForUndecidedGroup ?
-        valueForUndecidedGroup(group) :
-          <ReturnType<typeof this.termDecidedByPin>> <unknown> undefined;
-    }
-    return DF.quad(<RDF.Quad_Subject> subject, <RDF.Quad_Predicate> predicate, <RDF.Quad_Object> object);
+  private termDecidedByPin(group: number): RDF.Term | undefined;
+  private termDecidedByPin(group: number, valueForUndecidedGroup: (group: number) => RDF.Term): RDF.Term;
+  private termDecidedByPin(group: number, valueForUndecidedGroup?: (group: number) => RDF.Term): RDF.Term | undefined {
+    // The walk is a function of its own so that it recurses on what it *is* rather than on what the
+    // signatures above promise: the two modes are one traversal, and only the promise is per caller.
+    const recurse = (reached: number): RDF.Term | undefined => {
+      const term = this.clusters.termOf(reached);
+      if (term !== undefined) {
+        return term;
+      }
+      const children = this.clusters.childrenOf(reached);
+      if (children === undefined) {
+        return valueForUndecidedGroup?.(reached);
+      }
+      const subject = recurse(children.subject);
+      const predicate = recurse(children.predicate);
+      const object = recurse(children.object);
+      if (subject === undefined || predicate === undefined || object === undefined) {
+        // A position nothing decides leaves the whole shape undecided, so the group is read the way any
+        // other undecided one is - which for the caller that has no reading is the `undefined` above.
+        return valueForUndecidedGroup?.(reached);
+      }
+      return DF.quad(<RDF.Quad_Subject> subject, <RDF.Quad_Predicate> predicate, <RDF.Quad_Object> object);
+    };
+    return recurse(group);
   }
 
   /**
@@ -1192,8 +1197,7 @@ export class AssertionConjunction {
    * A weak member is never written - the pattern would claim it is bound - so it reads as nothing here.
    */
   private patternValueOf(access: Access, values: ReadonlyMap<number, RDF.Term>): RDF.Term | undefined {
-    // TODO: should we use this.isStrong() instead?
-    if (this.strength.get(access.name) !== 'strong') {
+    if (!this.isStrong(access)) {
       return undefined;
     }
     const groupOfRoot = this.clusters.groupOf(access.name);

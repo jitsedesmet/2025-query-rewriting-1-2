@@ -1072,8 +1072,8 @@ export class AssertionConjunction {
   }
 
   /** Whether what is said about an access holds outright, rather than only where its root is bound. */
-  private isStrong(read: Access): boolean {
-    return this.strength.get(read.name) !== 'weak';
+  private isStrong(access: Access): boolean {
+    return this.strength.get(access.name) !== 'weak';
   }
 
   /**
@@ -1097,22 +1097,25 @@ export class AssertionConjunction {
    * pin the range does not admit is refused where it is placed rather than here - so a predicate that
    * got this far is a NamedNode, and a subject is neither a Literal nor a triple term.
    */
-  private termDecidedByPin(group: number, valueForUndecidedGroup?: (group: number) => RDF.Term): RDF.Term | undefined {
+  private termDecidedByPin(group: number, valueForUndecidedGroup?: (group: number) => RDF.Term):
+      typeof valueForUndecidedGroup extends undefined ? RDF.Term | undefined : RDF.Term {
     const term = this.clusters.termOf(group);
     if (term !== undefined) {
       return term;
     }
     const children = this.clusters.childrenOf(group);
     if (children === undefined) {
-      return valueForUndecidedGroup?.(group);
+      return valueForUndecidedGroup ?
+        valueForUndecidedGroup(group) :
+        <ReturnType<typeof this.termDecidedByPin>> <unknown> undefined;
     }
     const subject = this.termDecidedByPin(children.subject, valueForUndecidedGroup);
     const predicate = this.termDecidedByPin(children.predicate, valueForUndecidedGroup);
     const object = this.termDecidedByPin(children.object, valueForUndecidedGroup);
     if (subject === undefined || predicate === undefined || object === undefined) {
-      // A position nothing decides leaves the whole shape undecided, so the group is read the way any
-      // other undecided one is - which for the caller that has no reading is the `undefined` above.
-      return valueForUndecidedGroup?.(group);
+      return valueForUndecidedGroup ?
+        valueForUndecidedGroup(group) :
+          <ReturnType<typeof this.termDecidedByPin>> <unknown> undefined;
     }
     return DF.quad(<RDF.Quad_Subject> subject, <RDF.Quad_Predicate> predicate, <RDF.Quad_Object> object);
   }
@@ -1132,22 +1135,6 @@ export class AssertionConjunction {
   private patternValues(namer: DerivedVarNamer): Map<number, RDF.Term> {
     const accessesPerGroup = this.anchoredAccessesPerGroup();
 
-    /**
-     * The name of the variable reading a group: its own where a variable names it, and otherwise the
-     * one coined for the position it sits in, read from the name of the group holding that position.
-     *
-     * Off the *anchor*, which is what makes a group reachable two ways render the same everywhere (D4):
-     * the anchor of a named group is that name, so a path through the shapes never runs past a variable
-     * that could have named the rest of it.
-     *
-     * Never off the group's *id*, which is the obvious thing to reach for and names nothing. An id is a
-     * counter private to one union-find: it changes under {@link TermClusterSet.unifyGroups}, where the
-     * merged group keeps one of the two ids, and two conjunctions that say exactly the same thing number
-     * their groups however they happened to be built. Both matter here, because the conjunction handed
-     * to one operand of a join is rebuilt from conjuncts ({@link split}, {@link cliques}) rather than
-     * shared - so ids would have the two operands coin different variables for the one position they
-     * have to keep joining on. A name has to come from the query's own vocabulary, and the anchor is it.
-     */
     const nameOfGroup = (group: number): string => {
       const [ representative ] = accessesPerGroup.get(group)!;
       return representative.positions.reduce<string>(
@@ -1156,23 +1143,8 @@ export class AssertionConjunction {
       );
     };
 
-    /**
-     * The whole of a shape, written out: every position holds something - the term it is pinned to, the
-     * shape it holds in turn, or the variable reading it - so the fold never comes back empty. It
-     * terminates for the reason the lattice refuses a cycle: a triple term is strictly larger than each
-     * of its positions.
-     *
-     * The three positions need no type check of their own either: each carries the range its position
-     * admits from the moment it is created, so a predicate that got this far is an IRI, and a subject is
-     * neither a Literal nor a triple term.
-     */
     const materialisedTerm = (group: number): RDF.Term =>
-      // The right hand side is what the fold would have written for a group it could not decide, and it
-      // cannot be reached while every undecided group has a reading - which is the point of giving it
-      // one. Written out rather than asserted away: a pattern holding the variable in place of the shape
-      // states less than it could, where a wrong term would be an answer nobody asked for.
-      this.termDecidedByPin(group, undecided => DF.variable(nameOfGroup(undecided))) ??
-        DF.variable(nameOfGroup(group));
+      this.termDecidedByPin(group, undecided => DF.variable(nameOfGroup(undecided)));
 
     const result = new Map<number, RDF.Term>();
     for (const [ group, [ representative ]] of accessesPerGroup) {
@@ -1219,16 +1191,17 @@ export class AssertionConjunction {
    *
    * A weak member is never written - the pattern would claim it is bound - so it reads as nothing here.
    */
-  private patternValueOf(read: Access, values: ReadonlyMap<number, RDF.Term>): RDF.Term | undefined {
-    if (this.strength.get(read.name) !== 'strong') {
+  private patternValueOf(access: Access, values: ReadonlyMap<number, RDF.Term>): RDF.Term | undefined {
+    // TODO: should we use this.isStrong() instead?
+    if (this.strength.get(access.name) !== 'strong') {
       return undefined;
     }
-    const group = this.clusters.groupOf(read.name);
-    let value = group === undefined ? undefined : values.get(group);
-    for (const position of read.positions) {
-      value = value === undefined ? undefined : componentOf(value, position);
+    const groupOfRoot = this.clusters.groupOf(access.name);
+    let valueOfRoot = groupOfRoot === undefined ? undefined : values.get(groupOfRoot);
+    for (const position of access.positions) {
+      valueOfRoot = valueOfRoot === undefined ? undefined : componentOf(valueOfRoot, position);
     }
-    return value;
+    return valueOfRoot;
   }
 
   /** Whether matching the pattern the substitution builds already states what the conjunct states. */

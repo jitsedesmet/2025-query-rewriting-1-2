@@ -157,6 +157,10 @@ export function pushDownAssertions<T extends Algebra.Operation>(c: TransformCont
   // One namer for the whole pass, over the variables of the whole query as it stands *before* anything
   // is rewritten (D4): a materialised position has to get the same name wherever it is written, and a
   // name coined against a subtree would collide with a variable further along that has not been met yet.
+  // TODO: I think this is incorrect since the scope of the variables if we introduce them here is way
+  //  larger so accidental name collisions mu=ight stil happen in parrents of this operation.
+  //   Maybe the solution is as simple as renaming op to rootOp and saying we expect
+  //   root algebra operations (in the JSDocs).
   const namer = derivedVarNamer(collectVariableNames(c.astTransformer, op));
   callbacks[Algebra.Types.FILTER] = (filter: Algebra.Filter) => pushFilter(c, namer, filter);
   // Starting from a copy without metadata gives us both a tree of our own to rewrite and the guarantee

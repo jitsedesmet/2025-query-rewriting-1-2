@@ -11,6 +11,7 @@ import {
 import type { Access, AssertionConjunct, Assertions } from '../utils/assertions.js';
 import {
   accessId,
+  asTransferSource,
   assertBound,
   assertStrong,
   assertTermType,
@@ -22,12 +23,14 @@ import {
   isBareAccess,
   substituteInPattern,
   substituteInTerm,
+  variablesOfTransferSource,
   asWeakenedConjunct,
 } from '../utils/assertions.js';
 import type { CPMeta } from '../utils/certainlyBoundVars.js';
 import { withCpVars, withoutCpVars } from '../utils/certainlyBoundVars.js';
-import { sameTermExpression } from '../utils/expressionHelpers.js';
+import { booleanConstantOf, sameTermExpression } from '../utils/expressionHelpers.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
+import type { AssertionView } from '../utils/partialExpressionEvaluation.js';
 import { substituteInExpression } from '../utils/partialExpressionEvaluation.js';
 import { unionSets } from '../utils/setUtils.js';
 import type { DerivedVarNamer } from '../utils.js';
@@ -251,12 +254,12 @@ function swapWith(
     // VALUES pays by pruning rows, and a row *is* a solution mapping rather than a pattern to match, so
     // it settles everything Θ says at once and leaves nothing over ({@link pruneValues}).
     case Algebra.Types.BGP: {
-      const { substitution, residual } = assertions.intoPattern(namer);
-      return keep(assertionFilter(c, substituteIntoPatterns(c, op, substitution), residual));
+      const written = assertions.intoPattern(namer);
+      return keep(aroundPattern(c, substituteIntoPatterns(c, op, written.substitution), written));
     }
     case Algebra.Types.PATH: {
-      const { substitution, residual } = assertions.intoPattern(namer);
-      return keep(assertionFilter(c, substituteIntoPath(c, op, substitution), residual));
+      const written = assertions.intoPattern(namer);
+      return keep(aroundPattern(c, substituteIntoPath(c, op, written.substitution), written));
     }
     // The one leaf where all of the forms do real work, since a VALUES column may be UNDEF.
     case Algebra.Types.VALUES: {
@@ -386,7 +389,7 @@ function substituteIntoPatterns(
     }
     substituted.push(replacement);
   }
-  return bindAssertedTerms(c, c.AF.createBgp(substituted), assertions);
+  return c.AF.createBgp(substituted);
 }
 
 /**
@@ -403,7 +406,53 @@ function substituteIntoPath(c: TransformContext, path: Algebra.Path, assertions:
   if (subject === undefined || object === undefined || graph === undefined) {
     return emptyOperation(c, path);
   }
-  return bindAssertedTerms(c, c.AF.createPath(subject, path.predicate, object, graph), assertions);
+  return c.AF.createPath(subject, path.predicate, object, graph);
+}
+
+/**
+ * Puts back around a materialised pattern what the two halves of {@link AssertionConjunction.intoPattern}
+ * leave to do: the re-binding of every variable the substitution took out of it, and the condition for
+ * what the pattern does not state.
+ *
+ * The condition is written **against the values the pattern holds** rather than against the accesses Θ
+ * reads them by: `isIRI(OBJECT(?o))` over `?s ?p <<( :a ?o_p ?o_o )>>` is `isIRI(?o_o)`, which asks the
+ * same of the same value while reading a variable the pattern binds rather than an accessor over one the
+ * re-binding above it does. Cheaper for an engine - a plain variable it can push into the scan - and it
+ * is what keeps the pass a fixpoint over its own output, since a condition reading through the re-bound
+ * variable is one the next run pushes through the re-binding and writes this way anyway.
+ *
+ * That also decides where it goes. A condition mentioning none of the re-bound variables holds of the
+ * pattern alone, so it sits directly on it, *below* the re-binding - which is where the next run would
+ * put it, and which lets the re-binding stay the last thing the plan does. One that still mentions one -
+ * a weak member, which is never written into a pattern and so never resolved to a value - has to stay
+ * above the re-binding that gives that variable its value again.
+ *
+ * The filter carries no conjunction of its own, deliberately: what it says is about the values the
+ * pattern wrote, where Θ is about the accesses, and the two are no longer the same statement. Whatever
+ * reads it next reads an ordinary condition, over ordinary variables of the plan (D6).
+ */
+function aroundPattern(
+  c: TransformContext,
+  pattern: Algebra.Operation,
+  written: { substitution: Assertions; residual: AssertionConjunction; asWritten: AssertionView },
+): Algebra.Operation {
+  const { substitution, residual, asWritten } = written;
+  if (residual.size === 0) {
+    return bindAssertedTerms(c, pattern, substitution);
+  }
+  // The condition is read where it is placed, so nothing is proven bound for it beyond what Θ proves.
+  const condition = substituteInExpression(c, residual.toExpression(c), asWritten, new Set());
+  if (booleanConstantOf(condition) === true) {
+    // A conjunct the values decide - `bound(?x)` of a variable the pattern writes, say - leaves nothing
+    // to ask. `false` is not the mirror of this and keeps its filter: that is the empty operation, which
+    // {@link transformFilterFalse} normalises away afterwards.
+    return bindAssertedTerms(c, pattern, substitution);
+  }
+  const readsReBound = [ ...collectVariableNames(c.astTransformer, condition) ]
+    .some(name => substitution.has(name));
+  return readsReBound ?
+    c.AF.createFilter(bindAssertedTerms(c, pattern, substitution), condition) :
+    bindAssertedTerms(c, c.AF.createFilter(pattern, condition), substitution);
 }
 
 /**
@@ -489,17 +538,24 @@ function rowSatisfies(
  * of `A` for which `e` evaluates to `c` - an error in `e` makes `sameTerm(e,c)` error, which a filter
  * treats as false, matching the dropped unbound case.
  *
- * Whenever `e` is a *term*, that is not shortcut to constant folding, because whatever `?x` had to be
- * equal to, the thing the BIND copies into it has to be equal to below. Everything the conjunction says
- * about `?x` {@link AssertionConjunction.transferred | transfers} onto that term there, and the four
- * combinations of what it was equal to with what now carries it are one rule:
+ * Whenever `e` is something Θ can *name* - a variable it copies, a constant it fixes the target to, an
+ * accessor reading a position, or the triple term it builds out of those ({@link asTransferSource}) -
+ * that is not shortcut to constant folding, because whatever `?x` had to be equal to, the thing the BIND
+ * puts into it has to be equal to below. Everything the conjunction says about `?x`
+ * {@link AssertionConjunction.transferred | transfers} onto it there, and every combination of what it
+ * was equal to with what now carries it is one rule:
  *
  * - `BIND(?z AS ?t)` under A⟨?t ≡ c⟩ leaves A⟨?z ≡ c⟩ below, so a *renaming* propagates an assertion;
  * - `BIND(?z AS ?t)` under A⟨?t ≡ ?y⟩ leaves A⟨?z ≡ ?y⟩ below, so it propagates a unification too, and
  *   either may then reach a BGP;
  * - `BIND(:c AS ?t)` under A⟨?t ≡ d⟩ is the ground comparison `c ≡ d`, decided here;
  * - `BIND(:c AS ?t)` under A⟨?t ≡ ?y⟩ leaves A⟨?y ≡ :c⟩ below - a constant BIND is what pins a clique the
- *   assertions had found no term for, so every variable it unified reaches its pattern as `:c`.
+ *   assertions had found no term for, so every variable it unified reaches its pattern as `:c`;
+ * - `BIND(SUBJECT(?o) AS ?t)` under anything about `?t` leaves it on the *access* below, which is what
+ *   gives a shape to `?o` and lets it travel on into a pattern;
+ * - `BIND(<<( ?a ?b ?c )>> AS ?t)` under a *shape* on `?t` is that shape taken apart: what it said about
+ *   a position is restated about the variable holding it, so `sameTerm(SUBJECT(?t), :a)` above the BIND
+ *   reaches the pattern binding `?a` as `sameTerm(?a, :a)`.
  *
  * Transferring rather than deleting matters: `?x` has to leave Θ before descending (an EXTEND target is
  * not bound below itself), and simply dropping it would drop the edges of a clique it happened to be the
@@ -507,7 +563,9 @@ function rowSatisfies(
  *
  * Only the forms that imply `bnd(?x)` do any of that. W⟨?x ≡ c⟩ on the BIND target is also satisfied by
  * the solutions where `e` errored and left `?x` unbound, so it says nothing about `e` and stays above the
- * EXTEND, as do B⟨?x⟩ and U⟨?x⟩ - which are about the EXTEND's own binding rather than about `e`.
+ * EXTEND, as does U⟨?x⟩ - which is about the EXTEND's own binding rather than about `e`. B⟨?x⟩ is about
+ * `e` after all: it says the expression yielded a value, which the transfer restates as reading the
+ * source yielding one.
  */
 function pushIntoExtend(
   c: TransformContext,
@@ -525,25 +583,17 @@ function pushIntoExtend(
   // or the (FBndII) check at the top of the swap wrongly yields empty.
   const { inside: notAboutTarget, outside: aboutTarget } = assertions.split(name => name !== target);
 
-  // A BIND of a term - a variable it copies, or a constant it fixes the target to - carries below the
-  // EXTEND whatever the target carries above it, so Θ transfers onto it.
-  // TODO(next time): here is where restrictions on triple terms could be transferred.
-  let replacementTerm: RDF.Term | undefined;
-  if (expression.subType === Algebra.ExpressionTypes.TERM) {
-    if (expression.term.termType === 'Variable') {
-      // BIND(?x as ?x) we see only valid if ?x not in pvars of input, so, `?x` remains unbound -> NOP
-      if (expression.term.value !== target) {
-        replacementTerm = expression.term;
-      }
-    } else if (isAssertableTerm(expression.term)) {
-      replacementTerm = expression.term;
-    }
-  }
+  // A BIND of something Θ can name carries below the EXTEND whatever the target carries above it, so Θ
+  // transfers onto it. A source *reading the target* is not one of them: `BIND(?x AS ?x)` binds nothing,
+  // the target being unbound below itself, and a construction mentioning it reads a variable that is
+  // equally unbound there - so there is nothing down there for Θ to be about.
+  const read = asTransferSource(expression);
+  const source = read === undefined || variablesOfTransferSource(read).has(target) ? undefined : read;
 
   // If we know the expression, and we have something to say about the target, and we NEED the target to be bounded:
   //   BIND(:c as ?x) -- :c is a assertableTerm or var; ?x is asserted that it should be bound
-  if (replacementTerm !== undefined && assertionOfTarget !== undefined && impliesBound(assertionOfTarget)) {
-    const below = assertions.transferred(target, replacementTerm);
+  if (source !== undefined && assertionOfTarget !== undefined && impliesBound(assertionOfTarget)) {
+    const below = assertions.transferred(target, source);
     if (below === undefined) {
       // The two terms the target had to be at once, or two cliques pinned to different ones.
       return empty(c, extend);

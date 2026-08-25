@@ -12,6 +12,7 @@ import type {
   Assertion,
   AssertionConjunct,
   Assertions,
+  TransferSource,
 } from './assertions.js';
 import {
   access,
@@ -32,6 +33,8 @@ import {
   impliesBound,
   isAccessTarget,
   isBareAccess,
+  isTripleConstruction,
+  normalisedTarget,
   rangeOfTermType,
   sameAccessAs,
   termTypeAssertionAsExpression,
@@ -446,23 +449,42 @@ export class AssertionConjunction {
    * - T⟨a : Quad⟩ holds where `a` is written as a triple term - the three positions of a materialised
    *   shape *are* the assertion that it is one;
    * - T⟨a : τ⟩ for any other kind does not, a position holding a variable saying nothing about which
-   *   kind of term that variable takes. `isIRI(SUBJECT(?o))` is written back over the pattern, about
-   *   `?o` rather than about the variable materialised for the position (D6): the condition sits above
-   *   the re-binding of `?o`, where it is bound, and a derived name never enters a condition.
+   *   kind of term that variable takes. It is written back over the pattern - and *against the values
+   *   the pattern holds* rather than against the accesses Θ reads them by, which is what `asWritten` is
+   *   for: `isIRI(SUBJECT(?o))` becomes `isIRI(?o_s)`, a condition over a variable the pattern binds
+   *   rather than an accessor over one only the re-binding above it does.
    *
    * The forms that say a variable is *not* bound to something (W and U), and B⟨?x⟩ which names no value
    * at all, are never written into a pattern and so always stay. None of them ever reaches one -
    * {@link normalisedFor} promotes or prunes all three against the `cVars` of a leaf that binds every
    * variable it has - but the rule is about what the pattern enforces, not about what happens to arrive.
    *
+   * `asWritten` is that last part: what the residual has to be *read against* once the pattern holds the
+   * values, which is a substitution over its condition rather than over Θ itself. Θ may not hold a
+   * coined name - a name in Θ is a name a licence could be read off, and the metadata a licence is read
+   * against does not know one that was coined half way through a traversal (D6) - so what the residual
+   * says stays about the accesses until the very moment it is written down, and what reads it back after
+   * that reads an ordinary condition over ordinary variables of the plan.
+   *
+   * It is also what keeps the pass a fixpoint over its own output: the condition it writes is the one it
+   * would write again, where an accessor over the re-bound variable is one the next run pushes through
+   * the re-binding and writes differently.
+   *
    * @param namer - Coins the variable for a position, once per position and query ({@link derivedVarNamer}).
    */
-  public intoPattern(namer: DerivedVarNamer): { substitution: Assertions; residual: AssertionConjunction } {
+  public intoPattern(namer: DerivedVarNamer): {
+    substitution: Assertions;
+    residual: AssertionConjunction;
+    asWritten: AssertionView;
+  } {
     const values = this.patternValues(namer);
     return {
       substitution: this.strongMembersReplacedBy(group => values.get(group)),
       residual: AssertionConjunction.of(this.conjuncts()
         .filter(conjunct => !this.enforcedByPattern(conjunct, values))),
+      // No `typeRange`: the kinds of term are what the residual is *about* here, and what the pattern
+      // decided about one has already taken the conjunct out of the residual.
+      asWritten: { resolve: read => this.patternValueOf(read, values), bound: this.boundImpliedBy() },
     };
   }
 
@@ -601,42 +623,84 @@ export class AssertionConjunction {
   }
 
   /**
-   * Θ with `name` taken out of it and whatever it was equal *to* restated against `replacement` -
-   * the term that carries its value where the result is going, which the caller is responsible for establishing.
+   * Θ with `name` taken out of it and whatever it said about it restated against `replacement` - what
+   * carries its value where the result is going, which the caller is responsible for establishing.
    *
-   * For a BIND, that is its expression: below `BIND(?z AS ?t)` it is `?z` that holds what `?t` holds above,
-   * and below `BIND(:c AS ?t)` it is `:c`. Two cases, which are the same rule read against the two kinds
-   * of thing the replacement can be:
+   * For a BIND, that is its expression: below `BIND(?z AS ?t)` it is `?z` that holds what `?t` holds
+   * above, and below `BIND(:c AS ?t)` it is `:c`. Three cases, which are the same rule read against the
+   * three kinds of thing a {@link TransferSource} can be:
    *
-   * - a variable *joins the group* `name` was in, taking over everything the group holds - the term it is
-   *   pinned to, the shape it has, and the edges to its other members;
-   * - a term is what the group has to be, which either agrees with what it already was - decomposing
-   *   against a shape, position by position - or makes the whole thing empty.
+   * - an *access* takes over everything the group holds - the term it is pinned to, the shape it has, and
+   *   the edges to its other members - which for a bare variable is joining that group, and for
+   *   `SUBJECT(?o)` is the same after opening the shape of `?o` on the way to it;
+   * - a *term* is what the group has to be, which either agrees with what it already was - decomposing
+   *   against a shape, position by position - or makes the whole thing empty;
+   * - a *construction* is the shape itself: `BIND(<<( ?a ?b ?c )>> AS ?o)` says that the value has
+   *   `?a`, `?b` and `?c` in its positions, so everything the group said about a position is restated
+   *   about the variable holding it, and `sameTerm(SUBJECT(?o), :a)` reaches the pattern binding `?a` as
+   *   `sameTerm(?a, :a)`.
    *
    * Taking the variable out one member at a time, rather than dropping every conjunct that mentions it,
    * is what keeps the rest of its group intact when it happens to be the representative all of the edges
-   * point at, or the only variable a shape is reached through. Only what it was equal to travels: B⟨?x⟩
-   * and U⟨?x⟩ on `name` are simply removed, and stay where the caller put them.
+   * point at, or the only variable a shape is reached through.
+   *
+   * U⟨?x⟩ is simply removed and stays where the caller put it - it is about the EXTEND's own binding
+   * rather than about what the expression yields. B⟨?x⟩ is *not*: it says the expression produced a
+   * value, which for the source is that reading it yields one - `bnd(?z)` for a variable it copies, and
+   * for `SUBJECT(?o)` that `?o` is a triple term at all. Dropping it instead loses the one thing the
+   * assertion said, and with it the solutions where the expression errored.
    */
-  public transferred(name: string, replacement: RDF.Term): AssertionConjunction | undefined {
+  public transferred(name: string, replacement: TransferSource): AssertionConjunction | undefined {
     const result = this.clone();
-    result.bound.delete(name);
+    const wasBound = result.bound.delete(name);
     result.unbound.delete(name);
-    const group = result.clusters.groupOf(name);
-    if (group === undefined) {
+    if (wasBound && !result.readableAgainst(replacement)) {
+      return undefined;
+    }
+    if (result.clusters.groupOf(name) === undefined) {
       return result;
     }
-    // The replacement joins before `name` leaves, so that a group nothing else names does not go away
-    // between the two - with it, the shape it carries and the anonymous groups that shape holds.
-    if (replacement.termType === 'Variable') {
-      if (!result.joinGroup(replacement.value, group)) {
-        return undefined;
-      }
-    } else if (!result.clusters.setTerm(group, replacement)) {
+    // The replacement takes over before `name` leaves, so that a group nothing else names does not go
+    // away between the two - with it, the shape it carries and the anonymous groups that shape holds.
+    if (!result.restatedAgainst(access(name), replacement)) {
       return undefined;
     }
     result.removeMember(name);
     return result;
+  }
+
+  /**
+   * Restates on the source what Θ holds about the access being transferred away.
+   *
+   * A construction is taken apart rather than met as a whole, which is the one thing that makes it
+   * different from the two kinds of value: what it hands down is a statement per position, and a
+   * position that is a construction of its own hands down three more.
+   */
+  private restatedAgainst(read: Access, source: TransferSource): boolean {
+    if (isTripleConstruction(source)) {
+      return triplePositions.every(position =>
+        this.restatedAgainst(wrapAccess(read, position), source[position]));
+    }
+    // A⟨read ≡ source⟩ is what a value carrying another's is, so it is asserted as one - which also
+    // spells a variable the single way Θ holds one, as the access reading it.
+    return this.assert(read, assertStrong(source));
+  }
+
+  /**
+   * Conjoins what the source has to satisfy for reading it to yield a value at all, which is what
+   * B⟨?x⟩ on a transferred target comes to.
+   *
+   * A ground term is one by being one. An access says that what it reads *through* is a triple term,
+   * which for a bare variable is `bnd(?x)` - both of which asserting `a ≡ a` already is. A construction
+   * that yields a value is one every position of which does, since it raises where a component is
+   * unbound.
+   */
+  private readableAgainst(source: TransferSource): boolean {
+    if (isTripleConstruction(source)) {
+      return triplePositions.every(position => this.readableAgainst(source[position]));
+    }
+    const read = normalisedTarget(source);
+    return !isAccessTarget(read) || this.assertUnify(read, read);
   }
 
   /** Conjoins everything `other` says with what this conjunction already says. */
@@ -902,18 +966,6 @@ export class AssertionConjunction {
       group = children[position];
     }
     return group;
-  }
-
-  /** Puts a variable into an existing group, taking over everything that group holds. */
-  private joinGroup(name: string, group: number): boolean {
-    this.remember(name);
-    if (this.unbound.has(name)) {
-      // Whatever the group holds, its members are equal to each other, which implies they are bound.
-      return false;
-    }
-    this.bound.delete(name);
-    this.strength.set(name, 'strong');
-    return this.clusters.unifyGroups(this.clusters.getGroup(name), group);
   }
 
   /** The conjuncts one group of Θ contributes, given how the whole of it can be read. */

@@ -452,6 +452,48 @@ describe('assertionConjunction', () => {
       expect(aliasGroupsOf(transferred)).toEqual([]);
     });
 
+    it('takes a shape apart onto the components of the construction that carries it', ({ expect }) => {
+      // `BIND(<<( ?a ?b ?c )>> AS ?t)` under a shape on `?t`: what the shape said about a position is
+      // what it says about the variable written there, so it can travel on to the pattern binding it.
+      const assertions = <AssertionConjunction> structuralConjunctionOf(
+        [ access('t', 'subject'), assertStrong(termC) ],
+        [ access('t', 'object'), assertStrong(access('y')) ],
+      );
+      const transferred = <AssertionConjunction> assertions.transferred('t', {
+        subject: access('a'),
+        predicate: access('b'),
+        object: access('c'),
+      });
+      expect(stateOf(transferred, 'a')).toBe('strong(ex://c)');
+      expect(aliasGroupsOf(transferred)).toEqual([[ 'c', 'y' ]]);
+      expect(stateOf(transferred, 't')).toBe('none');
+    });
+
+    it('moves what it holds onto the access a BIND reads', ({ expect }) => {
+      // `BIND(SUBJECT(?o) AS ?x)` under A⟨?x ≡ ?y⟩: below the EXTEND it is the subject of `?o` that has
+      // to equal `?y`, which is a shape on `?o` where nothing was known about it before.
+      const assertions = <AssertionConjunction> conjunctionOf([ 'x', assertStrong(DF.variable('y')) ]);
+      const transferred = <AssertionConjunction> assertions.transferred('x', access('o', 'subject'));
+      expect(conjunctsOf(transferred)).toEqual([ 'o.subject=strong(y)' ]);
+      expect(stateOf(transferred, 'x')).toBe('none');
+    });
+
+    it('restates `bound` as reading the source yielding a value', ({ expect }) => {
+      // B⟨?x⟩ says the expression produced a value rather than erroring, which for a variable it copies
+      // is that the variable is bound, and for a position that what it is read through is a triple term.
+      expect(stateOf(conjunctionOf([ 'x', assertBound() ])?.transferred('x', DF.variable('z')), 'z'))
+        .toBe('bound');
+      expect(stateOf(conjunctionOf([ 'x', assertBound() ])?.transferred('x', access('o', 'subject')), 'o'))
+        .toBe('type(Quad)');
+      // And on a construction it is every position of it, since one that raises leaves the target unbound.
+      const built = conjunctionOf([ 'x', assertBound() ])?.transferred('x', {
+        subject: access('a'),
+        predicate: access('b'),
+        object: access('c'),
+      });
+      expect(conjunctsOf(built)).toEqual([ 'a=bound', 'b=bound', 'c=bound' ]);
+    });
+
     it('decides a term against the term the group was already pinned to', ({ expect }) => {
       const assertions = <AssertionConjunction> conjunctionOf(
         [ 't', assertStrong(termC) ],

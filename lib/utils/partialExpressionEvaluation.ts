@@ -22,12 +22,13 @@ export interface AssertionView {
   /** The term the access is fixed to, or the variable that reads its value most directly. */
   resolve: (access: Access) => RDF.Term | undefined;
   /**
-   * The term types left to the access, when the access is proven bound - `undefined` otherwise.
+   * The term types left to the access, when the access is proven bound - `undefined` otherwise, and
+   * absent altogether for a view that decides no kinds of term at all.
    *
    * Boundedness is what makes both directions of `isIRI(a)` foldable: it is `false` of a bound term of
    * another kind, but an *error* of an unbound one, and an error is not `false` in every context.
    */
-  typeRange: (access: Access) => RangeSet | undefined;
+  typeRange?: (access: Access) => RangeSet | undefined;
   /** The variables proven bound, which is what makes `bound(?x)` and `sameTerm(?x, ?x)` decidable. */
   bound: ReadonlySet<string>;
 }
@@ -124,7 +125,7 @@ function decidedByAccess(
   const termTypeAssertion = asAssertableTermType(expression.operator);
   if (termTypeAssertion !== undefined && expression.args.length === 1) {
     const access = asAccess(expression.args[0]);
-    const rangeOfAccess = access === undefined ? undefined : assertions.typeRange(access);
+    const rangeOfAccess = access === undefined ? undefined : assertions.typeRange?.(access);
     if (rangeOfAccess === undefined) {
       return undefined;
     }

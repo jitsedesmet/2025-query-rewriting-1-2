@@ -6,6 +6,7 @@ import { RangeSet } from '../RangeSet.js';
 import type { TransformContext } from '../transformContext.js';
 import { termVars } from './certainlyBoundVars.js';
 import { DF } from './rdfDatatypes.js';
+import { unionSets } from './setUtils.js';
 
 /**
  * @fileoverview The assertion (`FILTER(sameTerm(?x, c))`) toolbox: recognizing the assertions a filter
@@ -207,7 +208,7 @@ export function assertWeak(term: AssertionTarget): WeakAssertion {
  * spelling only - everything downstream tells the two apart by asking whether it is an access, and a
  * variable spelled as a term would answer no while being exactly one.
  */
-function normalisedTarget(target: AssertionTarget): AssertionTarget {
+export function normalisedTarget(target: AssertionTarget): AssertionTarget {
   return !isAccessTarget(target) && target.termType === 'Variable' ? access(target.value) : target;
 }
 
@@ -301,6 +302,90 @@ function asAssertionTarget(expression: Algebra.Expression): AssertionTarget | un
       undefined;
   }
   return read;
+}
+
+/**
+ * What a BIND hands Θ in place of its target: the thing below the EXTEND that carries the value the
+ * target holds above it.
+ *
+ * Either a value Θ can name - a ground term, or an {@link Access} reading one - or the *shape* of one,
+ * which is what a triple term construction over variables is. `<<( ?a ?b ?c )>>` names no value until
+ * its components do, so what it hands down is one statement per position rather than one about the
+ * whole, exactly as the shape of a group is.
+ *
+ * Told apart by their shape, the way an {@link AssertionTarget} already is: a construction has neither
+ * the `positions` of an access nor the `termType` of a term.
+ */
+export type TransferSource = AssertionTarget | TripleConstruction;
+
+/** The three positions a triple term construction builds its value out of. */
+export interface TripleConstruction {
+  subject: TransferSource;
+  predicate: TransferSource;
+  object: TransferSource;
+}
+
+/** Whether the source builds its value rather than being one. */
+export function isTripleConstruction(source: TransferSource): source is TripleConstruction {
+  return !('positions' in source) && !('termType' in source);
+}
+
+/**
+ * Reads what a BIND expression hands down, or `undefined` for one Θ cannot name at all - a compound
+ * expression, whose value is whatever evaluating it comes to.
+ *
+ * `TRIPLE(?a, ?b, ?c)` and `<<( ?a ?b ?c )>>` are the same construction written two ways, and only the
+ * first is an operator: the second parses to a *term* expression holding a quad with variables in it,
+ * which is also what {@link withCpVars} reads for its own construction rule.
+ */
+export function asTransferSource(expression: Algebra.Expression): TransferSource | undefined {
+  if (expression.subType === Algebra.ExpressionTypes.TERM) {
+    return transferSourceOfTerm(expression.term);
+  }
+  const read = asAccess(expression);
+  if (read !== undefined) {
+    return read;
+  }
+  if (expression.subType === Algebra.ExpressionTypes.OPERATOR && expression.operator === 'triple' &&
+    expression.args.length === 3) {
+    return constructionOf(expression.args.map(arg => asTransferSource(arg)));
+  }
+  return undefined;
+}
+
+/** The same for a term, which is where a construction over variables actually arrives. */
+function transferSourceOfTerm(term: RDF.Term): TransferSource | undefined {
+  if (term.termType === 'Variable') {
+    return access(term.value);
+  }
+  if (term.termType === 'Quad' && !isAssertableTerm(term)) {
+    // A quad carrying a graph is a generalised statement rather than a triple term, so no value Θ can
+    // hold is one and nothing is handed down. A *ground* one is a term like any other, and was decided
+    // by the branch above.
+    return term.graph.termType === 'DefaultGraph' ?
+      constructionOf(triplePositions.map(position => transferSourceOfTerm(term[position]))) :
+      undefined;
+  }
+  return isAssertableTerm(term) ? term : undefined;
+}
+
+/** The construction of three positions, `undefined` when one of them is not something Θ can name. */
+function constructionOf(positions: (TransferSource | undefined)[]): TripleConstruction | undefined {
+  const [ subject, predicate, object ] = positions;
+  if (subject === undefined || predicate === undefined || object === undefined) {
+    // One position Θ cannot name is one statement that would be lost, and a transfer that no longer says
+    // what the conjunction said - so nothing is transferred and the assertion stays above the EXTEND.
+    return undefined;
+  }
+  return { subject, predicate, object };
+}
+
+/** The variables a source reads, which is what tells a BIND that its own target is one of them. */
+export function variablesOfTransferSource(source: TransferSource): Set<string> {
+  if (isTripleConstruction(source)) {
+    return unionSets(triplePositions.map(position => variablesOfTransferSource(source[position])));
+  }
+  return isAccessTarget(source) ? new Set([ source.name ]) : termVars(source);
 }
 
 /**

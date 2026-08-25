@@ -1353,6 +1353,13 @@ GROUP BY ?x?y`,
           ?s :r ?o
           FILTER(sameTerm(subject(?o), :a))
         }`,
+        // The transfer through a BIND: what it leaves below has to be what the next run derives again,
+        // which is what the residual of a materialisation being written against the values the pattern
+        // holds buys - an accessor over the re-bound variable is one the next run would push through the
+        // re-binding and write differently.
+        'SELECT * WHERE { ?s ?p ?o BIND(<<( ?s ?p ?o )>> AS ?t) FILTER(sameTerm(subject(?t), :a)) }',
+        'SELECT * WHERE { ?s ?p ?o BIND(subject(?o) AS ?x) FILTER(sameTerm(?x, ?s)) }',
+        'SELECT * WHERE { ?a :p ?b OPTIONAL { ?a :q ?z } BIND(?z AS ?x) FILTER(bound(?x)) }',
         // A VALUES discharges what it is handed, so the second run finds no condition to read at all -
         // which it only does where the first one left the rows saying everything the condition said.
         'SELECT * WHERE { VALUES (?o ?s) { (<<( :a :b :c )>> :a) } FILTER(sameTerm(subject(?o), ?s)) }',
@@ -1365,6 +1372,22 @@ GROUP BY ?x?y`,
   });
 
   describe('condition handling', () => {
+    it('keeps `bound` on a renamed variable, which collapses the OPTIONAL below', ({ expect }) => {
+      // B⟨?x⟩ is about the value the expression produced, so it transfers like everything else: below
+      // `BIND(?z AS ?x)` it is B⟨?z⟩, which is what turns the OPTIONAL binding `?z` into a join.
+      // Dropping it instead - which is what happens when a transfer only carries what the target was
+      // *equal to* - keeps the solutions where the expression errored, and those are the ones
+      // `bound(?x)` rules out.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?a :p ?b OPTIONAL { ?a :q ?z } BIND(?z AS ?x) FILTER(bound(?x)) }',
+        `SELECT ?a ?b ( ?z AS ?x ) ?z WHERE {
+  ?a <ex://p> ?b .
+  ?a <ex://q> ?z .
+}`,
+      );
+    });
+
     it('propagates the assertion through a renaming BIND', ({ expect }) => {
       expectTransform(
         expect,
@@ -1965,18 +1988,16 @@ GROUP BY ?x?y`,
 
     it('keeps the kind of a position over the pattern that materialised it', ({ expect }) => {
       // A pattern states which term a position holds and which positions the value has; which *kind* of
-      // term a variable takes is not something it states, so that conjunct stays a condition - written
-      // about `?o`, which the re-binding above the pattern has bound, rather than about the variable
-      // coined for the position.
+      // term a variable takes is not something it states, so that conjunct stays a condition - read
+      // against the value the pattern wrote for the position rather than through the accessor Θ names it
+      // by, so it sits on the pattern itself, below the re-binding, and asks a variable an engine can
+      // push into the scan instead of an accessor it has to evaluate.
       expectTransform(
         expect,
         'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(subject(?o), :a) && isIRI(object(?o))) }',
-        `SELECT ?o ?p ?s WHERE {
-  {
-    ?s ?p <<( <ex://a> ?o_p ?o_o )>> .
-    BIND( <<( <ex://a> ?o_p ?o_o )>> AS ?o )
-  }
-  FILTER ( ISIRI( OBJECT( ?o ) ) )
+        `SELECT ( <<( <ex://a> ?o_p ?o_o )>> AS ?o ) ?p ?s WHERE {
+  ?s ?p <<( <ex://a> ?o_p ?o_o )>> .
+  FILTER ( ISIRI( ?o_o ) )
 }`,
       );
     });
@@ -2069,6 +2090,33 @@ GROUP BY ?x?y`,
     ?s ?p ?q .
     FILTER ( FALSE )
   }
+}`,
+      );
+    });
+
+    it('transfers a shape onto the components the BIND builds its triple term out of', ({ expect }) => {
+      // The shape is taken apart by the construction that carries it: what Θ said about the subject of
+      // `?t` is what it says about the variable the BIND writes there, so it reaches the pattern binding
+      // that variable as an ordinary term assertion - and the construction above keeps building the same
+      // value out of it.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o BIND(<<( ?s ?p ?o )>> AS ?t) FILTER(sameTerm(subject(?t), :a)) }',
+        `SELECT ?o ?p ( <ex://a> AS ?s ) ( <<( ?s ?p ?o )>> AS ?t ) WHERE {
+  <ex://a> ?p ?o .
+}`,
+      );
+    });
+
+    it('transfers onto the access a BIND reads, which then shapes the variable it reads through', ({ expect }) => {
+      // `BIND(SUBJECT(?o) AS ?x)` under A⟨?x ≡ ?s⟩ leaves `SUBJECT(?o) ≡ ?s` below, which is a shape on
+      // `?o` and materialises into the pattern - where the assertion had nowhere to go before, `?x`
+      // being bound by the BIND alone.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o BIND(subject(?o) AS ?x) FILTER(sameTerm(?x, ?s)) }',
+        `SELECT ( <<( ?s ?o_p ?o_o )>> AS ?o ) ?p ?s ( ?s AS ?x ) WHERE {
+  ?s ?p <<( ?s ?o_p ?o_o )>> .
 }`,
       );
     });
@@ -2891,6 +2939,37 @@ GROUP BY ?x?y`,
         { SELECT ?o WHERE { ?t :says ?o } }
         FILTER(sameTerm(subject(?o), ?s))
       }`, 2);
+    });
+
+    it('keeps the rows a shape transferred onto a construction selects', async({ expect }) => {
+      // The construction is what carries the value, so the assertion about its subject is an assertion
+      // about `?s` below the BIND - and the answer has to be the one the condition selected up here.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :p ?y
+        BIND(<<( ?s :p ?y )>> AS ?t)
+        FILTER(sameTerm(subject(?t), :a))
+      }`, 1);
+    });
+
+    it('keeps the rows a shape transferred onto an accessor selects', async({ expect }) => {
+      // `:d` says something that is no triple term, so the BIND leaves `?x` unbound there and the row
+      // drops - which the rewritten plan reproduces through the pattern the shape reached instead.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :says ?o
+        BIND(subject(?o) AS ?x)
+        FILTER(sameTerm(?x, ?s))
+      }`, 2);
+    });
+
+    it('keeps the rows `bound` over a renaming BIND selects', async({ expect }) => {
+      // The wrong answer a dropped B⟨?x⟩ gives: the rows where the OPTIONAL missed leave `?z` and with it
+      // `?x` unbound, and `bound(?x)` is exactly what rules them out. Only `:a` has a `:p` to find.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :says ?o
+        OPTIONAL { ?s :p ?y }
+        BIND(?y AS ?x)
+        FILTER(bound(?x))
+      }`, 1);
     });
 
     it('keeps the rows an OPTIONAL collapsed by a shape selects', async({ expect }) => {

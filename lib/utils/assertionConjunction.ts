@@ -392,7 +392,7 @@ export class AssertionConjunction {
    */
   public strongSubstitution(): Assertions {
     return this.strongMembersReplacedBy((group) => {
-      const term = this.resolveTerm(group);
+      const term = this.termDecidedByPin(group);
       if (term !== undefined) {
         return term;
       }
@@ -1092,20 +1092,21 @@ export class AssertionConjunction {
    * pin the range does not admit is refused where it is placed rather than here - so a predicate that
    * got this far is a NamedNode, and a subject is neither a Literal nor a triple term.
    */
-  private resolveTerm(group: number, leaf?: (group: number) => RDF.Term): RDF.Term | undefined {
+  private termDecidedByPin(group: number, valueForUndecidedGroup?: (group: number) => RDF.Term): RDF.Term | undefined {
     const term = this.clusters.termOf(group);
     if (term !== undefined) {
       return term;
     }
     const children = this.clusters.childrenOf(group);
     if (children === undefined) {
-      return leaf?.(group);
+      return valueForUndecidedGroup ? valueForUndecidedGroup(group) : undefined;
     }
-    const parts = triplePositions.map(position => this.resolveTerm(children[position], leaf));
-    if (parts.includes(undefined)) {
+    const subject = this.termDecidedByPin(children.subject, valueForUndecidedGroup);
+    const predicate = this.termDecidedByPin(children.predicate, valueForUndecidedGroup);
+    const object = this.termDecidedByPin(children.object, valueForUndecidedGroup);
+    if (subject === undefined || predicate === undefined || object === undefined) {
       return undefined;
     }
-    const [ subject, predicate, object ] = parts;
     return DF.quad(<RDF.Quad_Subject> subject, <RDF.Quad_Predicate> predicate, <RDF.Quad_Object> object);
   }
 
@@ -1132,9 +1133,13 @@ export class AssertionConjunction {
      * the anchor of a named group is that name, so a path through the shapes never runs past a variable
      * that could have named the rest of it.
      */
-    const nameOf = (group: number): string => {
-      const [ anchor ] = accessesPerGroup.get(group)!;
-      return anchor.positions.reduce<string>((name, position) => namer(name, position).value, anchor.name);
+    // TODO: how does this differ from groupID?
+    const nameOfGroup = (group: number): string => {
+      const [ representative ] = accessesPerGroup.get(group)!;
+      return representative.positions.reduce<string>(
+        (name, position) => namer(name, position).value,
+        representative.name,
+      );
     };
 
     /**
@@ -1145,10 +1150,12 @@ export class AssertionConjunction {
      *
      * The three positions need no type check of their own either: each carries the range its position
      * admits from the moment it is created, so a predicate that got this far is an IRI, and a subject is
-     * neither a Literal nor a triple term ({@link resolveTerm}).
+     * neither a Literal nor a triple term ({@link termDecidedByPin}).
      */
+    // TODO: what could we name this function if it can be slightly longer?
+    //    Also: please do not use the `!` here since it is unsafe in this case?
     const written = (group: number): RDF.Term =>
-      this.resolveTerm(group, reached => DF.variable(nameOf(reached)))!;
+      this.termDecidedByPin(group, reached => DF.variable(nameOfGroup(reached)))!;
 
     const result = new Map<number, RDF.Term>();
     for (const [ group, [ representative ]] of accessesPerGroup) {
@@ -1232,7 +1239,7 @@ export class AssertionConjunction {
    * What an *expression* may be given in place of an access: the term it reads where Θ decides one, and
    * otherwise the variable that reads its group most directly.
    *
-   * The second half is what sets this apart from {@link resolveTerm}, which hands back a value or
+   * The second half is what sets this apart from {@link termDecidedByPin}, which hands back a value or
    * nothing. A representative is not a value - it still has to be evaluated - but Θ proves it equal to
    * what the access reads, so writing it there is sound and is what turns `sameTerm(SUBJECT(?o), ?s)`
    * into `sameTerm(?s, ?s)` when the pass meets its own output again.
@@ -1246,7 +1253,7 @@ export class AssertionConjunction {
     if (group === undefined) {
       return undefined;
     }
-    const term = this.resolveTerm(group);
+    const term = this.termDecidedByPin(group);
     if (term !== undefined) {
       return term;
     }

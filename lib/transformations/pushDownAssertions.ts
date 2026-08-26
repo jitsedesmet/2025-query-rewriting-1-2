@@ -254,12 +254,12 @@ function swapWith(
     // VALUES pays by pruning rows, and a row *is* a solution mapping rather than a pattern to match, so
     // it settles everything Θ says at once and leaves nothing over ({@link pruneValues}).
     case Algebra.Types.BGP: {
-      const written = assertions.intoPattern(namer);
-      return keep(aroundPattern(c, substituteIntoPatterns(c, op, written.substitution), written));
+      const toWrite = assertions.intoPattern(namer);
+      return keep(completePatternRewrite(c, substituteIntoPatterns(c, op, toWrite.substitution), toWrite));
     }
     case Algebra.Types.PATH: {
       const written = assertions.intoPattern(namer);
-      return keep(aroundPattern(c, substituteIntoPath(c, op, written.substitution), written));
+      return keep(completePatternRewrite(c, substituteIntoPath(c, op, written.substitution), written));
     }
     // The one leaf where all of the forms do real work, since a VALUES column may be UNDEF.
     case Algebra.Types.VALUES: {
@@ -369,7 +369,7 @@ function swapWith(
 
 /**
  * Substitutes the assertions into a BGP. What the substitution takes out of it - the re-binding, and the
- * condition for what a pattern cannot state - is put back by {@link aroundPattern}.
+ * condition for what a pattern cannot state - is put back by {@link completePatternRewrite}.
  *
  * All variables of a BGP are certainly bound, so the only thing left to check is whether the terms can
  * occupy the positions they land in. BGPs are duplicate-free and substituting only restricts which
@@ -394,7 +394,7 @@ function substituteIntoPatterns(
 }
 
 /**
- * Substitutes the assertions into a property path, {@link aroundPattern} putting back what that takes out.
+ * Substitutes the assertions into a property path, {@link completePatternRewrite} putting back what that takes out.
  *
  * Unlike a BGP, a path may legitimately have a literal in its subject slot (`?lit ^:p ?s`), so only the
  * graph position is checked. Paths are not duplicate-free, but substituting only restricts the set of
@@ -444,7 +444,9 @@ function substituteIntoPath(c: TransformContext, path: Algebra.Path, assertions:
  * operation it is about (D6, and {@link AssertionConjunction.intoPattern} on why it is written rather
  * than injected).
  */
-function aroundPattern(
+// TODO: this functions feels weird. It would make more sense to have a function that simply does the
+//  rewrite instead of having a function 'complete a partially done job'
+function completePatternRewrite(
   c: TransformContext,
   pattern: Algebra.Operation,
   written: { substitution: Assertions; residual: AssertionConjunction; asWritten: AssertionView },
@@ -454,6 +456,7 @@ function aroundPattern(
     return bindAssertedTerms(c, pattern, substitution);
   }
   // The condition is read where it is placed, so nothing is proven bound for it beyond what Θ proves.
+  // TODO: should we not decide the cVars for 'pattern' instead?
   const condition = substituteInExpression(c, residual.toExpression(c), asWritten, new Set());
   if (booleanConstantOf(condition) === true) {
     // A conjunct the values decide - `bound(?x)` of a variable the pattern writes, say - leaves nothing
@@ -461,6 +464,8 @@ function aroundPattern(
     // {@link transformFilterFalse} normalises away afterwards.
     return bindAssertedTerms(c, pattern, substitution);
   }
+  // TODO: currently this is all or nothing. Either a filter or an extend. Is it not possible to have
+  //  a more granular approach? What can be a bind, should be a bind, the rest it be a filter? Or is this the case?
   const readsReBound = [ ...collectVariableNames(c.astTransformer, condition) ]
     .some(name => substitution.has(name));
   return readsReBound ?
@@ -600,13 +605,15 @@ function pushIntoExtend(
   // transfers onto it. A source *reading the target* is not one of them: `BIND(?x AS ?x)` binds nothing,
   // the target being unbound below itself, and a construction mentioning it reads a variable that is
   // equally unbound there - so there is nothing down there for Θ to be about.
-  const read = asTransferSource(expression);
-  const source = read === undefined || variablesOfTransferSource(read).has(target) ? undefined : read;
+  const sourceTransfer = asTransferSource(expression);
+  const exprWithFollowUp = sourceTransfer === undefined || variablesOfTransferSource(sourceTransfer).has(target) ?
+    undefined :
+    sourceTransfer;
 
   // If we know the expression, and we have something to say about the target, and we NEED the target to be bounded:
   //   BIND(:c as ?x) -- :c is a assertableTerm or var; ?x is asserted that it should be bound
-  if (source !== undefined && assertionOfTarget !== undefined && impliesBound(assertionOfTarget)) {
-    const below = assertions.transferred(target, source);
+  if (exprWithFollowUp !== undefined && assertionOfTarget !== undefined && impliesBound(assertionOfTarget)) {
+    const below = assertions.transferred(target, exprWithFollowUp);
     if (below === undefined) {
       // The two terms the target had to be at once, or two cliques pinned to different ones.
       return empty(c, extend);
@@ -1067,7 +1074,7 @@ function splitClique(aliases: Access[], licensedPer: Access[][], connects: boole
 } {
   const edgesPerBranch = licensedPer.map(licensed => cliqueStar(licensed));
   const intoTarget: AssertionConjunct[][] = licensedPer.map((licensed, index) => edgesPerBranch[index].length > 0 ?
-    edgesPerBranch[index].map(([ alias, hub ]) => unification(alias, hub)) :
+    edgesPerBranch[index].map(([ representative, hub ]) => unification(representative, hub)) :
     // Means licensed.size is 0 or 1
     licensed.map(alias => entailedByReading(alias)));
 
@@ -1119,8 +1126,8 @@ function cliqueStar(aliases: Access[]): [ Access, Access ][] {
 }
 
 /** The conjunct A⟨a ≡ anchor⟩: one edge of a group. */
-function unification(alias: Access, anchor: Access): AssertionConjunct {
-  return { access: alias, assertion: assertStrong(anchor) };
+function unification(alias: Access, representative: Access): AssertionConjunct {
+  return { access: alias, assertion: assertStrong(representative) };
 }
 
 /**

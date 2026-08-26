@@ -1464,6 +1464,10 @@ export function collectAssertions(
 
   let learned = true;
   let residual: Algebra.Expression[] = [];
+  // The rounds that learned something, which is what the fixpoint terminating comes down to: a round only
+  // runs again when the substitution changed, and {@link substitutionGrew} is where the argument that such
+  // a change is always a *gain* - and so only ever made finitely often - is written down and checked.
+  let rounds = 0;
   while (learned) {
     residual = [];
     learned = false;
@@ -1495,8 +1499,17 @@ export function collectAssertions(
 
     const grown = assertions.rebuildingSubstitution();
     // Only a change to what can be substituted below can collapse a leftover into an assertion.
-    if (!sameSubstitution(substitution, grown)) {
+    if (substitutionGrew(substitution, grown, assertions)) {
       learned = true;
+      rounds += 1;
+      // The steps of {@link substitutionGrew} counted for the variables Θ has: each enters the substitution
+      // once, moves to an earlier representative at most `size - 1` times, is pinned once and leaves once.
+      // Every step a round took was a step of a variable Θ already names, so a round past that many has
+      // taken one twice - which the per-round check missed, the variables themselves having grown.
+      if (rounds > assertions.size * (assertions.size + 2)) {
+        throw new Error(`Unreachable: the assertions of a condition over ${assertions.size} variables kept ` +
+          `growing for ${rounds} rounds`);
+      }
       substitution = grown;
       conjuncts = residual.flatMap(conjunct =>
         splitConjunction(substituteInExpression(c, conjunct, assertions.expressionSubstitution(), cVars)));
@@ -1510,12 +1523,75 @@ export function collectAssertions(
 }
 
 /**
- * Whether two substitutions replace the same variables by the same terms.
- * @param left - One substitution
- * @param right - The other
- * @returns whether they are equal
+ * Whether the round that just ran learned something, which is what makes the fixpoint of
+ * {@link collectAssertions} terminate.
+ *
+ * A round runs again whenever the substitution changed, so termination rests on a change never being a
+ * *different* answer to a question Θ already answered. Every way a round writes into Θ is a step down one
+ * finite chain per variable:
+ *
+ * - A variable enters the substitution when it becomes a strong member of a group, and it does so once:
+ *   {@link AssertionConjunction.assertUnbound} is the only thing that takes one out again, and it takes it
+ *   out into U⟨?x⟩, where every further assertion about it is a contradiction that ends the collection.
+ * - A member of an unpinned group substitutes to the representative of the group, its lexicographically
+ *   first member. Groups only ever merge over a round - nothing splits one, and the single member that
+ *   leaves is a weak one, which is alone in its group - so a group only gains members and its
+ *   representative only moves earlier: at most as many steps as Θ names variables.
+ * - A pinned group substitutes to its term, and a pin is final: a second one either meets the first to the
+ *   same term or contradicts. So the step from a representative to a term is taken once, and a shape is the
+ *   same argument one position at a time, the positions being groups of their own.
+ *
+ * The chain is finite, a round that runs again steps down at least one of them, and the collection stops.
+ * @param before - The substitution the round started with
+ * @param after - The substitution Θ rebuilds now that the round has run
+ * @param assertions - Θ as the round left it, which is what says a variable left the substitution because it
+ * is unbound
+ * @returns whether anything changed, which is whether the leftovers are worth another round
+ * @throws when a variable's value changed into one that does not refine it, Θ answering a question twice
+ * over being the one thing that could keep the loop running
  */
-function sameSubstitution(left: Assertions, right: Assertions): boolean {
-  return left.size === right.size &&
-    [ ...left ].every(([ name, term ]) => right.get(name)?.equals(term) === true);
+function substitutionGrew(before: Assertions, after: Assertions, assertions: AssertionConjunction): boolean {
+  let grew = false;
+  // The variables of `before` that `after` still has, so that the ones only `after` has are what is left.
+  let kept = 0;
+  for (const [ name, value ] of before) {
+    const now = after.get(name);
+    if (now === undefined) {
+      if (assertions.get(name)?.subType !== 'unbound') {
+        throw new Error(`Unreachable: ?${name} left the substitution without becoming unbound`);
+      }
+      grew = true;
+      continue;
+    }
+    kept += 1;
+    if (!now.equals(value)) {
+      if (!refinesTerm(value, now)) {
+        throw new Error(`Unreachable: what Θ substitutes for ?${name} changed rather than grew, ` +
+          `from ${value.termType} to ${now.termType}`);
+      }
+      grew = true;
+    }
+  }
+  return grew || after.size > kept;
+}
+
+/**
+ * Whether the value Θ substitutes for a variable now *refines* the one it substituted before - the same
+ * value, decided further - which is the step {@link substitutionGrew} allows a round to take.
+ * @param before - What was substituted before the round
+ * @param after - What is substituted now
+ * @returns whether the second is a refinement of the first
+ */
+function refinesTerm(before: RDF.Term, after: RDF.Term): boolean {
+  if (before.termType === 'Variable') {
+    // A representative, which a merge moves earlier and a pin replaces by the term the group is fixed to.
+    return after.termType !== 'Variable' || after.value.localeCompare(before.value) <= 0;
+  }
+  if (before.termType === 'Quad') {
+    // A shape written out: what a round can decide about it is a position of it, one group further down.
+    return after.termType === 'Quad' &&
+      triplePositions.every(position => refinesTerm(before[position], after[position]));
+  }
+  // A pin is final, so a term never becomes a different one.
+  return after.equals(before);
 }

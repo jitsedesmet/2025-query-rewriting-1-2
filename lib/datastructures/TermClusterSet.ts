@@ -78,8 +78,8 @@ export interface PinMeet<Term> {
  *   has left, or the pin pointing at it would dangle.
  */
 export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> extends ClusterSet<T> {
-  /** Maps group ID to what the group is pinned to (if anything) */
-  public groupToPin: Record<number, Pin<Term> | undefined>;
+  /** Maps group ID to what the group is pinned to (if anything) - read through {@link pinOf}. */
+  protected groupToPin: Record<number, Pin<Term> | undefined>;
   /** Maps group ID to the term types its value may have, needed for groups that are e.g. the subject of a TripleTerm */
   protected groupToRange: Record<number, RangeSet>;
   /**
@@ -173,7 +173,7 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
    * meet decides ({@link PinMeet}).
    * @returns `false` on a contradiction, after which the set holds no meaningful state.
    */
-  public setPin(group: number, pin: Pin<Term>): boolean {
+  private setPin(group: number, pin: Pin<Term>): boolean {
     return this.resolveAllConstraints([{ kind: 'pin', group, pin }]);
   }
 

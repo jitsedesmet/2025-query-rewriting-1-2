@@ -40,7 +40,6 @@ import {
   termTypeAssertionAsExpression,
   unboundAssertionAsExpression,
   weakAssertionAsExpression,
-  asWeakenedConjunct,
   weakenedExpression,
 } from './assertions.js';
 import type { CPMeta } from './certainlyBoundVars.js';
@@ -345,17 +344,6 @@ export class AssertionConjunction {
   }
 
   /**
-   * Θ with every conjunct in the strongest form that survives a move somewhere its variables may be
-   * unbound: a pinned member becomes weak, and the forms that have no weak form at all - B⟨?x⟩ and the
-   * edges - are dropped.
-   */
-  public weakened(): AssertionConjunction {
-    return AssertionConjunction.of(this.conjuncts()
-      .map(conjunct => asWeakenedConjunct(conjunct))
-      .filter(conjunct => conjunct !== undefined));
-  }
-
-  /**
    * The variables Θ entails `bound(?x)` of.
    *
    * Every member of a clique is one of them, and so is every variable a shape reaches - a triple term is
@@ -376,40 +364,19 @@ export class AssertionConjunction {
 
   /**
    * The substitution the strong assertions stand for, in the form the `substituteIn…` helpers take: a
-   * pinned member maps to its term, a member of a shape every position of which is decided maps to the
-   * ground triple term that shape *is*, and a clique member maps to the representative of its clique.
+   * pinned member maps to its term, a clique member to the representative of its clique, and a member of
+   * a shaped group to the triple term that shape is - written out of the variables that already read its
+   * positions, and undecided where a position is read by nothing at all.
    *
    * Dropping the other forms is the point: substituting `c` for `?x` under W⟨?x ≡ c⟩ would claim `?x` is
-   * bound, and B⟨?x⟩ and U⟨?x⟩ have no term to substitute. An *open* shape has no term either - it is a
-   * pattern rather than a value, so it may only go where a pattern may ({@link intoPattern}) and
-   * never into an expression (S3).
-   */
-  public strongSubstitution(): Assertions {
-    return this.strongMembersReplacedBy((group) => {
-      const term = this.termDecidedByPin(group);
-      if (term !== undefined) {
-        return term;
-      }
-      const representative = this.representativeOf(group);
-      return representative === undefined ? undefined : DF.variable(representative);
-    });
-  }
-
-  /**
-   * The substitution a *re-binding* can rebuild out of what is written elsewhere: {@link
-   * strongSubstitution} with the shapes written out of the variables that already read their positions,
-   * and nothing coined for the positions nothing reads.
+   * bound, and B⟨?x⟩ and U⟨?x⟩ have no term to substitute.
    *
-   * One word apart from the substitution above - a position is read the way the whole is, rather than
-   * only the group at the top - and that word is what takes a variable out of a VALUES no single column
-   * holds the value of: under A⟨?o ≡ <<( ?s ?p ?x )>>⟩ the column `?o` goes and `BIND(<<( ?s ?p ?x )>> AS
-   * ?o)` rebuilds it from the three that stay, where {@link strongSubstitution} sees an open shape and
-   * keeps the column.
-   *
-   * Coining nothing is what makes it usable outside a pattern, where S3 rules the materialised shape
-   * out: every variable it writes already reads the group it stands for, so it is bound wherever the
-   * value it rebuilds is - and where a position is read by nothing at all, the whole shape stays
-   * undecided rather than mentioning a variable no one has bound.
+   * Everything it writes is something already written elsewhere, which is what makes it usable outside a
+   * pattern where S3 rules the *materialised* shape out ({@link intoPattern}): every variable it names
+   * already reads the group it stands for, so it is bound wherever the value it rebuilds is. That is
+   * also what takes a variable out of a VALUES no single column holds the value of - under
+   * A⟨?o ≡ <<( ?s ?p ?x )>>⟩ the column `?o` goes and `BIND(<<( ?s ?p ?x )>> AS ?o)` rebuilds it from
+   * the three that stay.
    */
   public rebuildingSubstitution(): Assertions {
     return this.strongMembersReplacedBy(group => this.termDecidedByPin(group, (undecided) => {
@@ -422,7 +389,7 @@ export class AssertionConjunction {
    * What a *pattern* takes of Θ, and what it leaves behind: the two halves of one decision, which is why
    * they are decided together off the one set of values written for the groups.
    *
-   * The substitution is {@link strongSubstitution} with the shapes written out:
+   * The substitution is {@link rebuildingSubstitution} with the shapes written out further:
    * a member of a shaped group maps to the triple term that shape is, its positions filled in with the
    * terms they are pinned to, the variables that name them, and a variable coined for each position
    * nothing names (D4).
@@ -701,11 +668,6 @@ export class AssertionConjunction {
     }
     const read = normalisedTarget(source);
     return !targetIsAccess(read) || this.assertUnify(read, read);
-  }
-
-  /** Conjoins everything `other` says with what this conjunction already says. */
-  public absorb(other: AssertionConjunction): boolean {
-    return other.conjuncts().every(({ access, assertion }) => this.assert(access, assertion));
   }
 
   /**
@@ -1230,7 +1192,7 @@ export class AssertionConjunction {
       // A group no variable names is only ever read through the shape holding it, and the anchor of one
       // that has them is the variable it is read by: its representative.
       if (isBareAccess(representative)) {
-        // Without its shape, a group is what {@link strongSubstitution} makes of it: the term it is
+        // Without its shape, a group is what {@link rebuildingSubstitution} makes of it: the term it is
         // pinned to, or the representative every member of a clique substitutes to.
         result.set(group, this.shapeIsWorthWriting(group) ?
           materialisedTerm(group) :
@@ -1417,7 +1379,7 @@ export type AssertionFilter = Algebra.Filter & {
  * Like {@link withCpVars}, this is dynamic programming: a filter this pass created already knows its own
  * assertions, and one met in the input tree is analysed once and carries the result from then on.
  */
-export function withAssertionConjunction(c: TransformContext, filter: Algebra.Filter): AssertionFilter {
+function withAssertionConjunction(c: TransformContext, filter: Algebra.Filter): AssertionFilter {
   const casted = <Algebra.Filter & { metadata?: Partial<AssertionFilter['metadata']> }> filter;
   const known = casted.metadata?.assertions;
   if (known === undefined) {
@@ -1475,7 +1437,7 @@ export function collectAssertions(
 ): AssertionConjunctionMeta | undefined {
   // Make copy and perform substitution
   const assertions = known.clone();
-  let substitution = assertions.strongSubstitution();
+  let substitution = assertions.rebuildingSubstitution();
   let conjuncts = splitConjunction(
     substituteInExpression(c, expression, assertions.expressionSubstitution(), cVars),
   );
@@ -1511,7 +1473,7 @@ export function collectAssertions(
       }
     }
 
-    const grown = assertions.strongSubstitution();
+    const grown = assertions.rebuildingSubstitution();
     // Only a change to what can be substituted below can collapse a leftover into an assertion.
     if (!sameSubstitution(substitution, grown)) {
       learned = true;

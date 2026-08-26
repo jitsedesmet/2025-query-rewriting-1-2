@@ -21,7 +21,7 @@ import { unionSets } from './setUtils.js';
  *
  * This is the *substitutable* form - the map every `substituteIn...` helper takes - which is why the
  * weak, unbound and bound assertions of an {@link AssertionConjunction} are kept out of it, see
- * {@link AssertionConjunction.strongSubstitution}. The term may be a *variable*: that is what a
+ * {@link AssertionConjunction.rebuildingSubstitution}. The term may be a *variable*: that is what a
  * unification substitutes, replacing every member of a clique by the representative of it.
  */
 export type Assertions = ReadonlyMap<string, RDF.Term>;
@@ -416,7 +416,7 @@ export function variablesOfTransferSource(source: TransferSource): Set<string> {
  * substituting under `=` would drop solutions. An `=` against an IRI is the one place the two coincide,
  * and {@link constantFoldOperator} has already rewritten that into the `sameTerm` read here.
  */
-export function asStrongAssertion(expression: Algebra.Expression):
+function asStrongAssertion(expression: Algebra.Expression):
     (AssertionConjunct & { assertion: StrongAssertion })[] | undefined {
   if (expression.subType === Algebra.ExpressionTypes.OPERATOR && expression.operator === 'sameterm' &&
     expression.args.length === 2) {
@@ -472,7 +472,7 @@ function decomposedConstruction(read: Algebra.Expression, built: Algebra.Express
  * one with anything below it - the three positions of a shape - and that is a property of the *group*
  * rather than of this conjunct, which says nothing about the parts.
  */
-export function asTermTypeAssertion(expression: Algebra.Expression):
+function asTermTypeAssertion(expression: Algebra.Expression):
     (AssertionConjunct & { assertion: TermTypeAssertion }) | undefined {
   if (expression.subType === Algebra.ExpressionTypes.OPERATOR && expression.args.length === 1) {
     const termType = asAssertableTermType(expression.operator);
@@ -500,7 +500,7 @@ export function asTermTypeAssertion(expression: Algebra.Expression):
  * OBJECT(?o))` does mention one variable only, but weakening a whole shape one edge at a time is not
  * something the conjunction can carry, so it too is left where it is.
  */
-export function asWeakAssertion(expression: Algebra.Expression): AssertionConjunct[] | undefined {
+function asWeakAssertion(expression: Algebra.Expression): AssertionConjunct[] | undefined {
   if (expression.subType === Algebra.ExpressionTypes.OPERATOR && expression.operator === '||' &&
     expression.args.length === 2) {
     for (const [ index, arg ] of expression.args.entries()) {
@@ -571,7 +571,7 @@ function variableOfNotBound(expression: Algebra.Expression): string | undefined 
 }
 
 /** The expression reading an access: the variable, wrapped in one accessor per position it reads. */
-export function accessAsExpression(c: TransformContext, access: Access): Algebra.Expression {
+function accessAsExpression(c: TransformContext, access: Access): Algebra.Expression {
   return access.positions.reduce<Algebra.Expression>(
     (inner, position) => c.AF.createOperatorExpression(position, [ inner ]),
     c.AF.createTermExpression(DF.variable(access.name)),

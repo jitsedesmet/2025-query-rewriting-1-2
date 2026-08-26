@@ -368,7 +368,8 @@ function swapWith(
 }
 
 /**
- * Substitutes the assertions into a BGP, re-binding the substituted variables.
+ * Substitutes the assertions into a BGP. What the substitution takes out of it - the re-binding, and the
+ * condition for what a pattern cannot state - is put back by {@link aroundPattern}.
  *
  * All variables of a BGP are certainly bound, so the only thing left to check is whether the terms can
  * occupy the positions they land in. BGPs are duplicate-free and substituting only restricts which
@@ -393,7 +394,7 @@ function substituteIntoPatterns(
 }
 
 /**
- * Substitutes the assertions into a property path, re-binding the substituted variables.
+ * Substitutes the assertions into a property path, {@link aroundPattern} putting back what that takes out.
  *
  * Unlike a BGP, a path may legitimately have a literal in its subject slot (`?lit ^:p ?s`), so only the
  * graph position is checked. Paths are not duplicate-free, but substituting only restricts the set of

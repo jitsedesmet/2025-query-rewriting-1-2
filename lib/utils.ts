@@ -191,25 +191,3 @@ export function deleteVarExtensionsInPlace(
   };
   return pruneExtensions(op);
 }
-
-/**
- * Optimizes a template array by concatenating adjacent string values.
- * This reduces the number of CONCAT operations needed when generating SPARQL.
- * @param arr - Array of template components (strings and variables)
- * @returns Optimized array with adjacent strings merged
- * @example
- * optimizeTemplateArray(['http://', 'example.org/', varX])
- * // Returns: ['http://example.org/', varX]
- */
-export function optimizeTemplateArray<T>(arr: T[]): (T | string)[] {
-  const optimizedTemplate: (T | string)[] = [];
-  for (const val of arr) {
-    if (typeof val === 'string' && typeof optimizedTemplate.at(-1) === 'string') {
-      const prev = <string> optimizedTemplate.pop();
-      optimizedTemplate.push(prev + val);
-    } else {
-      optimizedTemplate.push(val);
-    }
-  }
-  return optimizedTemplate;
-}

@@ -16,6 +16,7 @@ import {
   assertTermType,
   assertUnbound,
   assertWeak,
+  asWeakenedConjunct,
 } from '../lib/utils/assertions.js';
 import type { CPMeta } from '../lib/utils/certainlyBoundVars.js';
 import { VRanges } from '../lib/utils/certainlyBoundVars.js';
@@ -117,6 +118,16 @@ function termString(term: RDF.Term): string {
   return term.value;
 }
 
+/**
+ * Θ in the strongest form that survives a move where its variables may be unbound: what the rules that
+ * demote a conjunction do to it, one conjunct at a time ({@link asWeakenedConjunct}).
+ */
+function weakenedForm(assertions: AssertionConjunction): AssertionConjunction {
+  return AssertionConjunction.of(assertions.conjuncts()
+    .map(conjunct => asWeakenedConjunct(conjunct))
+    .filter(conjunct => conjunct !== undefined));
+}
+
 /** The groups Θ can read more than one way, each as the ids of its aliases, anchor first. */
 function aliasGroupsOf(assertions: AssertionConjunction | undefined): string[][] {
   return (assertions?.aliasGroups() ?? []).map(aliases => aliases.map(alias => accessId(alias)));
@@ -172,7 +183,7 @@ describe('assertionConjunction', () => {
       expect(stateOf(assertions, 'x')).toBe('unbound');
       expect(stateOf(assertions, 'y')).toBe('strong(ex://c)');
       // Disjointness: `?x` is in no group any more, so nothing about it can be substituted.
-      expect([ ...(<AssertionConjunction> assertions).strongSubstitution().keys() ]).toEqual([ 'y' ]);
+      expect([ ...(<AssertionConjunction> assertions).rebuildingSubstitution().keys() ]).toEqual([ 'y' ]);
     });
 
     it('contradicts a member of a clique, which is always strong', ({ expect }) => {
@@ -221,7 +232,7 @@ describe('assertionConjunction', () => {
       expect(stateOf(assertions, 's')).toBe('strong(o)');
       // The representative has nothing left to be equal to, and reads as what the clique entails of it.
       expect(stateOf(assertions, 'o')).toBe('bound');
-      expect([ ...assertions.strongSubstitution() ]).toEqual([[ 's', DF.variable('o') ]]);
+      expect([ ...assertions.rebuildingSubstitution() ]).toEqual([[ 's', DF.variable('o') ]]);
       expect(conditionOf(assertions)).toBe('FILTER ( SAMETERM( ?s , ?o ) )');
     });
 
@@ -231,7 +242,7 @@ describe('assertionConjunction', () => {
         [ 'o', assertStrong(DF.variable('a')) ],
       );
       expect(aliasGroupsOf(assertions)).toEqual([[ 'a', 'o', 's' ]]);
-      expect([ ...assertions.strongSubstitution() ])
+      expect([ ...assertions.rebuildingSubstitution() ])
         .toEqual([[ 's', DF.variable('a') ], [ 'o', DF.variable('a') ]]);
     });
 
@@ -304,8 +315,7 @@ describe('assertionConjunction', () => {
         [ 'c', assertStrong(DF.variable('b')) ],
       );
       const { inside, outside } = assertions.split(name => name !== 'c');
-      const rejoined = inside.clone();
-      expect(rejoined.absorb(outside)).toBe(true);
+      const rejoined = AssertionConjunction.of([ ...inside.conjuncts(), ...outside.conjuncts() ]);
       expect(aliasGroupsOf(rejoined)).toEqual([[ 'a', 'b', 'c' ]]);
     });
   });
@@ -318,7 +328,7 @@ describe('assertionConjunction', () => {
         [ 'w', assertBound() ],
         [ 'v', assertUnbound() ],
       );
-      const weakened = assertions.weakened();
+      const weakened = weakenedForm(assertions);
       expect(stateOf(weakened, 'x')).toBe('none');
       expect(stateOf(weakened, 'y')).toBe('none');
       // B⟨?x⟩ weakened is `¬b ∨ b`, which is `true`, so it is dropped too.
@@ -644,7 +654,7 @@ describe('assertionConjunction', () => {
         [ subjectOfO, assertStrong(termC) ],
         [ access('x'), assertStrong(access('y', 'object')) ],
       );
-      expect(conjunctsOf(assertions.weakened())).toEqual([ 'o.subject=weak(ex://c)' ]);
+      expect(conjunctsOf(weakenedForm(assertions))).toEqual([ 'o.subject=weak(ex://c)' ]);
     });
 
     it('reads the four term-type predicates as one form', ({ expect }) => {

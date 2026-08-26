@@ -11,8 +11,7 @@
  * @module query-rewriting-1-2
  * @see {@link https://w3c.github.io/rdf-interop/spec/} RDF 1.2 Interoperability Spec
  * @example
- * import { transformContextFromConstructs } from 'query-rewriting-1-2/lib/transformContext.js';
- * import { operationTransform, queryTransform } from 'query-rewriting-1-2/lib/transformBgp.js';
+ * import { operationTransform, queryTransform, transformContextFromConstructs } from 'query-rewriting-1-2';
  *
  * const context = transformContextFromConstructs([
  *   'CONSTRUCT { ?t rdf:reifies <<( ?s ?p ?o )>> } WHERE { ... RDF 1.1 pattern ... }'
@@ -20,4 +19,8 @@
  * const rewrittenQuery =
  *   queryTransform(context, 'SELECT * WHERE { ?x rdf:reifies <<( ?s ?p ?o )>> }', [ operationTransform ]);
  */
+export { operationTransform, queryTransform } from './transformBgp.js';
+export { createPartialContext, transformContextFromConstructs } from './transformContext.js';
+export type { TransformContext } from './transformContext.js';
+export type { Mapping, MappingHead } from './types.js';
 export * from './transformations/index.js';

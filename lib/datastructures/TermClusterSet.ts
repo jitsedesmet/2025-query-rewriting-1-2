@@ -136,7 +136,7 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
     return this.groupToPin[this.resolveGroup(group)];
   }
 
-  /** The term the group is pinned to, or `undefined` when it is anchorless or pinned to a shape instead. */
+  /** The term the group is pinned to, or `undefined` when nothing pins it, or a shape does instead. */
   public termOf(group: number): Term | undefined {
     const pin = this.pinOf(group);
     return pin?.kind === 'term' ? pin.term : undefined;

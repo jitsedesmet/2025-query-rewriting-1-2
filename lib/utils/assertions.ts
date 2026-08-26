@@ -59,8 +59,8 @@ export function accessId(access: Access): string {
  * Orders the ways of reading one value: the most direct first - a variable before a position of one, and
  * lexicographic within that.
  *
- * The one order Θ reads a group's {@link Access | aliases} in, which is what makes a re-run of the pass
- * derive the same anchor, write the same conjuncts against it, and absorb what it finds rather than
+ * The one order Θ reads a group's {@link Access | readings} in, which is what makes a re-run of the pass
+ * derive the same representative, write the same conjuncts against it, and absorb what it finds rather than
  * stacking a second copy.
  */
 export function compareAccesses(left: Access, right: Access): number {
@@ -427,7 +427,7 @@ function asStrongAssertion(expression: Algebra.Expression):
       return decomposed;
     }
     // Which side is read as the subject of the assertion does not matter for an access on both: the
-    // conjunction unifies the two groups and picks the anchor of the result itself.
+    // conjunction unifies the two groups and picks the representative of the result itself.
     const leftAccess = asAccess(left);
     if (leftAccess !== undefined) {
       const target = asAssertionTarget(right);

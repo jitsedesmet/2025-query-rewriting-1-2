@@ -128,9 +128,9 @@ function weakenedForm(assertions: AssertionConjunction): AssertionConjunction {
     .filter(conjunct => conjunct !== undefined));
 }
 
-/** The groups Θ can read more than one way, each as the ids of its aliases, anchor first. */
-function aliasGroupsOf(assertions: AssertionConjunction | undefined): string[][] {
-  return (assertions?.aliasGroups() ?? []).map(aliases => aliases.map(alias => accessId(alias)));
+/** The groups Θ can read more than one way, each as the ids of its readings, representative first. */
+function equatedReadingsOf(assertions: AssertionConjunction | undefined): string[][] {
+  return (assertions?.equatedReadings() ?? []).map(readings => readings.map(reading => accessId(reading)));
 }
 
 /** A substitution as `name=term`, in the order it hands the replacements over. */
@@ -228,7 +228,7 @@ describe('assertionConjunction', () => {
   describe('unification', () => {
     it('makes a clique whose representative is its lexicographically first member', ({ expect }) => {
       const assertions = <AssertionConjunction> conjunctionOf([ 's', assertStrong(DF.variable('o')) ]);
-      expect(aliasGroupsOf(assertions)).toEqual([[ 'o', 's' ]]);
+      expect(equatedReadingsOf(assertions)).toEqual([[ 'o', 's' ]]);
       expect(stateOf(assertions, 's')).toBe('strong(o)');
       // The representative has nothing left to be equal to, and reads as what the clique entails of it.
       expect(stateOf(assertions, 'o')).toBe('bound');
@@ -241,7 +241,7 @@ describe('assertionConjunction', () => {
         [ 's', assertStrong(DF.variable('o')) ],
         [ 'o', assertStrong(DF.variable('a')) ],
       );
-      expect(aliasGroupsOf(assertions)).toEqual([[ 'a', 'o', 's' ]]);
+      expect(equatedReadingsOf(assertions)).toEqual([[ 'a', 'o', 's' ]]);
       expect([ ...assertions.rebuildingSubstitution() ])
         .toEqual([[ 's', DF.variable('a') ], [ 'o', DF.variable('a') ]]);
     });
@@ -249,7 +249,7 @@ describe('assertionConjunction', () => {
     it('is only `bound` between a variable and itself', ({ expect }) => {
       const assertions = <AssertionConjunction> conjunctionOf([ 'x', assertStrong(DF.variable('x')) ]);
       expect(stateOf(assertions, 'x')).toBe('bound');
-      expect(aliasGroupsOf(assertions)).toEqual([]);
+      expect(equatedReadingsOf(assertions)).toEqual([]);
     });
 
     it('drags a term met later onto every member of the clique', ({ expect }) => {
@@ -259,7 +259,7 @@ describe('assertionConjunction', () => {
       );
       expect(stateOf(assertions, 's')).toBe('strong(ex://c)');
       expect(stateOf(assertions, 'o')).toBe('strong(ex://c)');
-      expect(aliasGroupsOf(assertions)).toEqual([]);
+      expect(equatedReadingsOf(assertions)).toEqual([]);
     });
 
     it('promotes a weak member it meets, membership implying bound', ({ expect }) => {
@@ -316,7 +316,7 @@ describe('assertionConjunction', () => {
       );
       const { inside, outside } = assertions.split(name => name !== 'c');
       const rejoined = AssertionConjunction.of([ ...inside.conjuncts(), ...outside.conjuncts() ]);
-      expect(aliasGroupsOf(rejoined)).toEqual([[ 'a', 'b', 'c' ]]);
+      expect(equatedReadingsOf(rejoined)).toEqual([[ 'a', 'b', 'c' ]]);
     });
   });
 
@@ -435,7 +435,7 @@ describe('assertionConjunction', () => {
       // `BIND(?z AS ?t)` under A⟨?t ≡ ?y⟩: below the EXTEND `?z` is what `?t` was.
       const assertions = <AssertionConjunction> conjunctionOf([ 'y', assertStrong(DF.variable('t')) ]);
       const transferred = <AssertionConjunction> assertions.transferred('t', DF.variable('z'));
-      expect(aliasGroupsOf(transferred)).toEqual([[ 'y', 'z' ]]);
+      expect(equatedReadingsOf(transferred)).toEqual([[ 'y', 'z' ]]);
       expect(stateOf(transferred, 't')).toBe('none');
     });
 
@@ -459,7 +459,7 @@ describe('assertionConjunction', () => {
       expect(stateOf(transferred, 'y')).toBe('strong(ex://c)');
       expect(stateOf(transferred, 'w')).toBe('strong(ex://c)');
       expect(stateOf(transferred, 't')).toBe('none');
-      expect(aliasGroupsOf(transferred)).toEqual([]);
+      expect(equatedReadingsOf(transferred)).toEqual([]);
     });
 
     it('takes a shape apart onto the components of the construction that carries it', ({ expect }) => {
@@ -475,7 +475,7 @@ describe('assertionConjunction', () => {
         object: access('c'),
       });
       expect(stateOf(transferred, 'a')).toBe('strong(ex://c)');
-      expect(aliasGroupsOf(transferred)).toEqual([[ 'c', 'y' ]]);
+      expect(equatedReadingsOf(transferred)).toEqual([[ 'c', 'y' ]]);
       expect(stateOf(transferred, 't')).toBe('none');
     });
 
@@ -550,7 +550,7 @@ describe('assertionConjunction', () => {
         [ access('a'), assertStrong(subjectOfO) ],
         [ access('b'), assertStrong(subjectOfO) ],
       );
-      expect(aliasGroupsOf(assertions)).toEqual([[ 'a', 'b', 'o.subject' ]]);
+      expect(equatedReadingsOf(assertions)).toEqual([[ 'a', 'b', 'o.subject' ]]);
     });
 
     it('carries what it knows about a position onto everything unified with it', ({ expect }) => {
@@ -691,7 +691,7 @@ describe('assertionConjunction', () => {
         [ 'y', assertStrong(DF.variable('x')) ],
       );
       expect(stateOf(assertions, 'y')).toBe('strong(x)');
-      // The edge comes first: the group writes itself out from its anchor, and `?x` is that anchor.
+      // The edge comes first: the group writes itself out from its representative, and `?x` is that representative.
       expect(conjunctsOf(assertions)).toEqual([ 'y=strong(x)', 'x=type(Literal)' ]);
     });
 
@@ -796,7 +796,7 @@ describe('assertionConjunction', () => {
         [ access('y'), assertStrong(access('z')) ],
       );
       expect(assertions.unaryConjuncts().map(conjunct => accessId(conjunct.access))).toEqual([]);
-      expect(aliasGroupsOf(assertions)).toEqual([[ 's', 'o.subject' ], [ 'y', 'z' ]]);
+      expect(equatedReadingsOf(assertions)).toEqual([[ 's', 'o.subject' ], [ 'y', 'z' ]]);
     });
   });
 
@@ -899,7 +899,7 @@ describe('assertionConjunction', () => {
     const assertions = <AssertionConjunction> conjunctionOf([ 'x', assertStrong(DF.variable('y')) ]);
     const copy = assertions.clone();
     expect(copy.assert(access('z'), assertStrong(DF.variable('y')))).toBe(true);
-    expect(aliasGroupsOf(copy)).toEqual([[ 'x', 'y', 'z' ]]);
-    expect(aliasGroupsOf(assertions)).toEqual([[ 'x', 'y' ]]);
+    expect(equatedReadingsOf(copy)).toEqual([[ 'x', 'y', 'z' ]]);
+    expect(equatedReadingsOf(assertions)).toEqual([[ 'x', 'y' ]]);
   });
 });

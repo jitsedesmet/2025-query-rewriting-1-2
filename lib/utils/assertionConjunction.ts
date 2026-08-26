@@ -70,7 +70,7 @@ import { DF } from './rdfDatatypes.js';
  * |----------------------------------------|---------------------------------------------------|
  * | strong member of a pinned group        | `sameTerm(?x, c)`                                 |
  * | weak member of a pinned group          | `!bound(?x) \|\| sameTerm(?x, c)`                 |
- * | member of an anchorless group (clique) | `sameTerm(?x, ?rep)`                              |
+ * | member of an unpinned group (clique)   | `sameTerm(?x, ?rep)`                              |
  * | group with an asserted term type       | `isIRI(?x)`, `isBLANK(?x)`, `isLITERAL(?x)`, `isTRIPLE(?x)` |
  * | the same, asserted weakly              | `!bound(?x) \|\| is<τ>(?x)`                       |
  * | member of a shaped group               | one conjunct per position of the shape that says something |
@@ -96,9 +96,9 @@ import { DF } from './rdfDatatypes.js';
  * **Weak ⇔ sole member of a pinned group.** There is no usable weak form of a clique: cluster-level weak
  * ("all bound members pairwise `sameTerm`") does not distribute over a join - `μ₁={?x↦a}` and `μ₂={?y↦b}`
  * each satisfy it and their merge does not - and merging two independent weak edges is unsound
- * (`W⟨{x,y}⟩ ∧ W⟨{y,z}⟩ ⊭ W⟨{x,y,z}⟩`, take `?y` unbound). A pin is what makes the weak form work: an
- * anchor both sides of a join already agree on. So {@link weakened} drops anchorless groups rather than
- * inventing a weak form for them, exactly as it drops B⟨?x⟩, and every operation that would put a second
+ * (`W⟨{x,y}⟩ ∧ W⟨{y,z}⟩ ⊭ W⟨{x,y,z}⟩`, take `?y` unbound). A pin is what makes the weak form work: a
+ * value both sides of a join already agree on. So {@link asWeakenedConjunct} hands back nothing for an
+ * edge, exactly as it does for B⟨?x⟩, and every operation that would put a second
  * named member into a group promotes the weak one first - which is why a group holding a weak member
  * holds nothing else, and why a shape reached through a weak root is read only through that root.
  *
@@ -202,7 +202,7 @@ export class AssertionConjunction {
     if (pin?.kind === 'term') {
       return isStrong ? assertStrong(pin.term) : assertWeak(pin.term);
     }
-    const representative = this.representativeOf(group);
+    const representative = this.representativeMemberOf(group);
     if (representative === undefined || representative === name) {
       const termType = this.assertedTermTypeOf(group);
       return termType === undefined ? assertBound() : assertTermType(termType, isStrong);
@@ -235,27 +235,28 @@ export class AssertionConjunction {
   }
 
   /**
-   * The independent conjuncts Θ decomposes into: one per alias of every group it can reach from a named
+   * The independent conjuncts Θ decomposes into: one per reading of every group it can reach from a named
    * variable, plus the two term-less forms.
    *
-   * An *alias* of a group is a way of reading it: a variable that is a member of it, or the position of a
-   * shape that holds it, read from the alias of the group holding that shape. A group with several
-   * aliases states that they are equal - which for a clique is the star from its representative, and for
-   * `sameTerm(SUBJECT(?o), ?s)` is that one edge. All of them point at the *anchor*, the alias that reads
-   * the group most directly (a member before a position, lexicographic within that), so that the same Θ
-   * always decomposes the same way and a re-run of the pass absorbs what it finds instead of stacking it.
+   * The *readings* of a group are the ways of naming its value: a variable that is a member of it, or a
+   * position of a shape that holds it, read from the representative of the group holding that shape. A
+   * group with several readings states that they are equal - which for a clique is the star from its
+   * representative, and for `sameTerm(SUBJECT(?o), ?s)` is that one edge. All of them point at the
+   * *representative*, the reading that names the value most directly (a member before a position,
+   * lexicographic within that), so that the same Θ always decomposes the same way and a re-run of the
+   * pass absorbs what it finds instead of stacking it.
    *
    * Splitting a clique means splitting its *edges*, never its variables: a clique is transitively closed,
    * so any spanning tree of it is equivalent to the whole, and what a caller pushes plus what it keeps has
-   * to span it. Dropping the anchor's own (empty) conjunct is what makes that work out: the edges of the
+   * to span it. Dropping the representative's own (empty) conjunct is what makes that work out: the edges of the
    * star already entail B⟨?rep⟩.
    *
-   * A shape adds T⟨anchor⟩ only where no position of it says anything - reading a position already
+   * A shape adds T⟨representative⟩ only where no position of it says anything - reading a position already
    * entails that what it is read from is a triple term, so `isTRIPLE(?o) && sameTerm(SUBJECT(?o), :a)`
    * would state the same thing twice and stop the pass being idempotent.
    */
   public conjuncts(): AssertionConjunct[] {
-    const accessesPerGroup = this.anchoredAccessesPerGroup();
+    const accessesPerGroup = this.readingsPerGroup();
     const result: AssertionConjunct[] = [];
     const emitted = new Set<number>();
 
@@ -297,28 +298,28 @@ export class AssertionConjunction {
   }
 
   /**
-   * The groups Θ can read more than one way, each as its {@link Access | aliases}, anchor first - the
-   * conjuncts of {@link conjuncts} a rule cannot take one at a time.
+   * Every group Θ names more than one way, each as its {@link Access | readings}, representative first -
+   * the conjuncts of {@link conjuncts} a rule cannot take one at a time.
    *
-   * An *alias* is a way of reading a group: a variable in it, or a position of a shape, read from the
-   * anchor of the group holding that shape. Several of them is the statement that they are equal, which
+   * A *reading* names the value of a group: a variable in it, or a position of a shape, read from the
+   * representative of the group holding that shape. Several of them is the statement that they are equal, which
    * for a group of variables is a clique and for `sameTerm(SUBJECT(?o), ?s)` is that one edge - and the
    * two are one thing here, since a group reached both as `?s` and as `SUBJECT(?o)` says that equality
    * exactly as two variables in one group do.
    *
-   * A rule that decided per alias would split such a group into pieces that no longer say it, so it
+   * A rule that decided per reading would split such a group into pieces that no longer say it, so it
    * decides per group and splits the *edges* instead ({@link splitClique}): a group is transitively
    * closed, so any spanning tree of it is equivalent to the whole, and what a rule pushes plus what it
    * keeps has to span it again.
    *
-   * A group pinned to a *term* is not one of them: every alias of it is that term, which already states
+   * A group pinned to a *term* is not one of them: every reading of it is that term, which already states
    * that they are equal, so each writes a conjunct of its own and no edge is left to split.
    */
-  public aliasGroups(): Access[][] {
+  public equatedReadings(): Access[][] {
     const result: Access[][] = [];
-    for (const [ group, aliases ] of this.anchoredAccessesPerGroup()) {
-      if (this.clusters.pinOf(group)?.kind !== 'term' && aliases.length > 1) {
-        result.push(aliases);
+    for (const [ group, readings ] of this.readingsPerGroup()) {
+      if (this.clusters.pinOf(group)?.kind !== 'term' && readings.length > 1) {
+        result.push(readings);
       }
     }
     return result;
@@ -375,7 +376,7 @@ export class AssertionConjunction {
    */
   public rebuildingSubstitution(): Assertions {
     return this.strongMembersReplacedBy(group => this.termDecidedByPin(group, (undecided) => {
-      const representative = this.representativeOf(undecided);
+      const representative = this.representativeMemberOf(undecided);
       return representative === undefined ? undefined : DF.variable(representative);
     }));
   }
@@ -527,7 +528,7 @@ export class AssertionConjunction {
    *   U⟨?x⟩. Which is why the rewrites downstream need no term-type checks of their own.
    *
    * A strong member narrows its *group*, rather than only being checked against it: its value is the
-   * group's value, so what the plan leaves for the variable is what it leaves for every alias of the
+   * group's value, so what the plan leaves for the variable is what it leaves for every reading of the
    * group - which is what confines the nesting of shapes to the `object` chain, a shape in a subject
    * position being the same contradiction a Literal there is.
    *
@@ -942,7 +943,7 @@ export class AssertionConjunction {
     const pin = this.clusters.pinOf(group);
     const result: AssertionConjunct[] = [];
     if (pin?.kind === 'term') {
-      // Every alias is that term, which already says they are equal to each other.
+      // Every reading is that term, which already says they are equal to each other.
       return accesses.map(access => ({
         access,
         assertion: this.isStrong(access) ? assertStrong(pin.term) : assertWeak(pin.term),
@@ -988,12 +989,12 @@ export class AssertionConjunction {
   }
 
   /**
-   * Whether a position of the shape says something of its own, in which case T⟨anchor : Quad⟩ need not be
+   * Whether a position of the shape says something of its own, in which case T⟨representative : Quad⟩ need not be
    * stated: reading a position already entails that what it is read through is a triple term.
    *
    * "Says something" is asked of the position by writing it out, rather than by listing the ways it might
-   * - which is what keeps the two from drifting apart as more of them appear. A position with an alias of
-   * its own writes an edge back to this one; one without writes whatever it writes from here.
+   * - which is what keeps the two from drifting apart as more of them appear. A position with a reading
+   * of its own writes an edge back to this one; one without writes whatever it writes from here.
    */
   private shapeIsWitnessed(group: number, accessesPerGroup: Map<number, Access[]>): boolean {
     const childGroups = childGroupsOf(this.clusters.childrenOf(group));
@@ -1023,21 +1024,23 @@ export class AssertionConjunction {
   }
 
   /**
-   * Every group Θ can reach from a variable it names, with the accesses reading it, anchor first.
-   * - FILTER(sameTerm(?x, ?y)) — one group, two members. Entry: [?x, ?y], anchor ?x. The conjunct is the edge ?y ≡ ?x.
+   * Every group Θ can reach from a variable it names, with the readings of it, representative first.
+   * - FILTER(sameTerm(?x, ?y)) — one group, two members. Entry: [?x, ?y], representative ?x.
+   *      The conjunct is the edge ?y ≡ ?x.
    * - FILTER(sameTerm(SUBJECT(?o), ?s)) — two groups. ?o's group: [?o]. The subject position:
-   *      [?s, SUBJECT(?o)], anchor ?s, giving the edge SUBJECT(?o) ≡ ?s.
-   *      The other two positions are anonymous: [PREDICATE(?o)] and [OBJECT(?o)], one reading each, nothing to say.
+   *      [?s, SUBJECT(?o)], representative ?s, giving the edge SUBJECT(?o) ≡ ?s.
+   *      The other two positions are anonymous: [PREDICATE(?o)] and [OBJECT(?o)], one reading each,
+   *      nothing to say.
    * - FILTER(sameTerm(SUBJECT(?o), :a)) — the subject position has only [SUBJECT(?o)], so no edge;
    *      it writes SUBJECT(?o) ≡ :a from that single reading.
    *
-   * Two passes, because an access reading a group through a shape is written from the *anchor* of the
-   * group holding that shape: the anchors are settled first, shortest path and lexicographic first within
-   * that, and the aliases are collected against them afterwards. A group nothing reaches is not in the
+   * Two passes, because a reading through a shape is written from the *representative* of the group
+   * holding that shape: the representatives are settled first, shortest path and lexicographic first within
+   * that, and the readings are collected against them afterwards. A group nothing reaches is not in the
    * result at all - it is what is left of a shape a variable was taken out of, and nothing may be written
    * about it, since there is no way left to name it.
    */
-  private anchoredAccessesPerGroup(): Map<number, Access[]> {
+  private readingsPerGroup(): Map<number, Access[]> {
     // The shortest access pattern into a group
     const representatives = new Map<number, Access>();
     // Seed with every group that has a named member, including groups created for
@@ -1094,7 +1097,7 @@ export class AssertionConjunction {
   }
 
   /** The representative of a group: its lexicographically first member, so that the pass stays idempotent. */
-  private representativeOf(group: number): string | undefined {
+  private representativeMemberOf(group: number): string | undefined {
     return this.namedMembers(group)[0];
   }
 
@@ -1123,8 +1126,8 @@ export class AssertionConjunction {
    * walk, here once so that the two cannot come to disagree about what a shape is.
    *
    * **A caller that always has one always gets a term back**, which the second signature states: every
-   * way out of the walk is a pin's term, a quad built from three of those, or the reading of an
-   * undecided group, so nothing else can come back. That is the one step the compiler takes on trust -
+   * way out of the walk is a pin's term, a quad built from three of those, or the value the caller has
+   * for an undecided group, so nothing else can come back. That is the one step the compiler takes on trust -
    * a conditional return type would not defer over a parameter that is not generic, and would hand the
    * *first* caller a term it can be missing - so it is stated here once, where the argument for it is.
    *
@@ -1175,12 +1178,12 @@ export class AssertionConjunction {
    * - a position nobody named is reached through the triple term written for the group holding it, and
    * has no way of being asked for on its own.
    *
-   * The value is what every alias of the group is written as, wherever it occurs, which is where the
-   * enforcement comes from: two aliases of one group become the same term or the same variable in the
+   * The value is what every reading of the group is written as, wherever it occurs, which is where the
+   * enforcement comes from: two readings of one group become the same term or the same variable in the
    * same pattern, and matching that pattern is what states the equality Θ carried as a condition.
    */
   private patternValues(namer: DerivedVarNamer): Map<number, RDF.Term> {
-    const accessesPerGroup = this.anchoredAccessesPerGroup();
+    const accessesPerGroup = this.readingsPerGroup();
 
     const nameOfGroup = (group: number): string => {
       const [ representative ] = accessesPerGroup.get(group)!;
@@ -1195,7 +1198,7 @@ export class AssertionConjunction {
 
     const result = new Map<number, RDF.Term>();
     for (const [ group, [ representative ]] of accessesPerGroup) {
-      // A group no variable names is only ever read through the shape holding it, and the anchor of one
+      // A group no variable names is only ever read through the shape holding it, and the representative of one
       // that has them is the variable it is read by: its representative.
       if (isBareAccess(representative)) {
         // Without its shape, a group is what {@link rebuildingSubstitution} makes of it: the term it is
@@ -1293,7 +1296,7 @@ export class AssertionConjunction {
     if (term !== undefined) {
       return term;
     }
-    const representative = this.representativeOf(group);
+    const representative = this.representativeMemberOf(group);
     if (representative === undefined || (isBareAccess(read) && representative === read.name)) {
       return undefined;
     }
@@ -1335,7 +1338,7 @@ function wrapAccess(access: Access, position: TriplePosition): Access {
  * Whether the conjunct is an *edge*: one access fixed to another, rather than to a term or to nothing.
  *
  * Which is the one thing that makes a conjunct mention two accesses, and so the one thing a rule cannot
- * place by reading a single one - see {@link AssertionConjunction.aliasGroups}.
+ * place by reading a single one - see {@link AssertionConjunction.equatedReadings}.
  */
 function isEdgeConjunct(conjunct: AssertionConjunct): boolean {
   return hasTarget(conjunct.assertion) && targetIsAccess(conjunct.assertion.term);

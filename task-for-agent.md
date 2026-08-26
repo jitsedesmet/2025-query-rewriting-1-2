@@ -37,7 +37,7 @@ of it, and where this file and a symbol disagree, the symbol wins.
 | 3 | `c15adc9` (#34), main | accesses and T⟨?x : τ⟩ (D1, D2), the recognisers, `toExpression`, the folds of S7. Θ round-trips through a condition; nothing is written into patterns yet. |
 | 3+ | `c15adc9` (#34), main | **beyond the plan**: all four term-type predicates rather than `isTRIPLE` alone (D2), and `AssertionClusterSet`, which is where the asserted half of a group's range lives. |
 | 4 | `6a3f2fa` (#35), main | materialisation (D4): `derivedVarNamer`, `intoPattern` (the substitution and what it leaves behind), and the namer threaded through the pass. The target example works. |
-| 5 | branch `feat/phase-5-operation-rules` | the operation rules: the VALUES row rule, `aliasGroups` + S6 in `splitClique`, and the EXTEND transfer - which forced 6 (see below). |
+| 5 | branch `feat/phase-5-operation-rules` | the operation rules: the VALUES row rule, `equatedReadings` + S6 in `splitClique`, and the EXTEND transfer - which forced 6 (see below). |
 
 **Everything in the plan is built.** What is left is the optional 7
 (`ClusterSolver`). The per-operation table below says what each row came to.
@@ -112,10 +112,10 @@ wrote, where Θ is about the accesses, and the two are no longer the same statem
 where a BGP leaves a residual. Asserting the row into a clone decides every form at once, so the
 per-variable `switch` went away rather than growing a case.
 
-**An alias is licensed by the one variable it reads through**, which is what made `splitClique`
-generalise cleanly: `variablesReadByConjunct` over an edge is the two roots, and an alias has exactly
+**An reading is licensed by the one variable it reads through**, which is what made `splitClique`
+generalise cleanly: `variablesReadByConjunct` over an edge is the two roots, and a reading has exactly
 one, so the per-target licence is unchanged in form. `placeAccessConjunct` and the split between
-`cliques` / `accessConjuncts` / `singleVariableConjuncts` all collapsed into `aliasGroups` +
+`cliques` / `accessConjuncts` / `singleVariableConjuncts` all collapsed into `equatedReadings` +
 `unaryConjuncts`.
 
 ## Grounding
@@ -241,12 +241,12 @@ contributes nothing to `size` / `names` / `conjuncts` until a named variable joi
 * **Occurs check**: pinning `g` to a shape reachable from `g`, or a merge that closes a cycle in the
   child DAG, is a contradiction (`false`). Without it, resolving a group to a term does not terminate.
 
-### D4 — anchors and derived variable names
+### D4 — representatives and derived variable names
 
-Each group has one canonical **anchor**, memoised per group:
+Each group has one canonical **representative**, memoised per group:
 
 ```
-anchor(g) = its term pin, else its lexicographically first named member,
+representative(g) = its term pin, else its lexicographically first named member,
             else the lexicographically first access path reaching it from a named group
 ```
 
@@ -254,18 +254,18 @@ Use it for *everything*: the accessor form written into a condition, the represe
 substitutes to, and the name of a materialised position. A group reachable two ways (`?x` and
 `object(?o)`; an anonymous child of two shapes) must render identically everywhere.
 
-A materialised position is named `${anchor}_${s|p|o}`, with a numeric suffix **only** on collision
+A materialised position is named `${representative}_${s|p|o}`, with a numeric suffix **only** on collision
 (`?x_s`, then `?x_s0`). The taken set is collected **once from the whole query before the pass runs**
 (`collectVariableNames` in `lib/utils.ts`, as `removeProjections` does). Keep the memo in one
-pass-scoped map keyed by `${anchor(g)}_${p}`, threaded as a per-pass context so
+pass-scoped map keyed by `${representative(g)}_${p}`, threaded as a per-pass context so
 `assertionConjunction.ts` stays context-free — `patternSubstitution(namer)` takes it as an argument.
 (In the tree that method is `intoPattern(namer)`, which hands back the residual with it.)
 
-**Half of this already exists.** `AssertionConjunction.anchoredAccessesPerGroup` computes exactly the
-anchor above — every group reachable from a named variable, with the accesses reading it, anchor first,
-settled shortest-path-then-lexicographic. `conjuncts()` is built on it, which is why a condition and a
+**Half of this already exists.** `AssertionConjunction.readingsPerGroup` computes exactly the
+representative above — every group reachable from a named variable, with the readings of it,
+representative first, settled shortest-path-then-lexicographic. `conjuncts()` is built on it, which is why a condition and a
 materialised name cannot disagree about which access a group is read by. Phase 4 needs the *namer* and
-the substitution, not the anchor.
+the substitution, not the representative.
 
 Two materialisation sites of the same group **must** produce the same name: that is how the LHS and RHS
 of a join keep joining on a position after both were substituted. It is sound because the position is
@@ -357,8 +357,8 @@ disjunct under `!bound(root) ||`, where `false || error = error` still drops the
 
 **S2 — never serialise a shape as `sameTerm(?o, <<( … )>>)`.** The derived variables are unbound
 wherever the filter sits, so the condition would error and drop every row. `toExpression` emits, per
-shape-pinned group: `isTRIPLE(anchor)` when no position is informative, otherwise one
-`sameTerm(position(anchor), …)` per informative position (which already entails `isTRIPLE`).
+shape-pinned group: `isTRIPLE(representative)` when no position is informative, otherwise one
+`sameTerm(position(representative), …)` per informative position (which already entails `isTRIPLE`).
 
 **S3 — never substitute an open shape into an expression.** Split `strongSubstitution()` into
 `patternSubstitution(namer)` (materialises shapes, used by BGP/PATH/re-binding; `intoPattern` in the tree) and
@@ -395,7 +395,7 @@ pass stacks a second copy. The substitution argument becomes a view (`resolve(ac
 | VALUES | prune *rows* by asserting the row into a clone of Θ (a ground triple-term value decomposes against a shape by itself); drop a *column* iff Θ can rebuild its value from the columns that survive. Worked examples in `report.md` §4. Whether you rewrite the per-variable `switch` or extend it is **your call** — keep the existing evaluation tests green. | **done.** The `switch` is gone: `rowSatisfies` asserts the whole row into a clone, which decides every form at once, so nothing is restated above the VALUES any more. The column half is `rebuildingSubstitution` — `strongSubstitution` with the shapes written out of the variables that already read their positions, coining nothing (S3). |
 | UNION, PROJECT, DISTINCT, REDUCED, ORDER BY, FROM, FILTER, GROUP | nothing beyond D1 | **done.** |
 | GRAPH | a shape pin on `?g` is a contradiction — state it as a *range* fact (`graphRange` is `{NamedNode, BlankNode}`, no `Quad`) and let `normalisedFor` empty the plan, the way the term case now does; `pushIntoGraph` no longer type-checks terms itself | **done.** The one `termType` test left in `pushIntoGraph` asks whether a term can be *written* as a graph name (`createGraph` takes a Variable or a NamedNode), not whether it is one. |
-| JOIN / LEFT JOIN | licences already read `variablesReadByConjunct`; generalise `splitClique` to groups and add S6 | **done.** `aliasGroups()` hands over every group with more than one way of reading it, anchor first, and `splitClique` splits its edges over the targets on the licence of the one variable each alias reads through. The ≤1-licensed fallback is `entailedByReading`: B⟨?x⟩ for a bare alias, T⟨read-through : Quad⟩ for a position of one (S6). |
+| JOIN / LEFT JOIN | licences already read `variablesReadByConjunct`; generalise `splitClique` to groups and add S6 | **done.** `equatedReadings()` hands over every group with more than one way of reading it, representative first, and `splitClique` splits its edges over the targets on the licence of the one variable each reading reads through. The ≤1-licensed fallback is `entailedByReading`: B⟨?x⟩ for a bare reading, T⟨read-through : Quad⟩ for a position of one (S6). |
 | MINUS | `weakenedTerms` per S4 | **done**, as `admissibleOnMinusRhs`. It filters on `impliesBound`: a weak assertion may **not** go right, and doing so was a wrong answer. |
 | EXTEND | `transferred` gains: `BIND(<<( ?a ?b ?c )>> AS ?o)` under a shape on `?o` transfers onto `?a ?b ?c`; `BIND(subject(?o) AS ?x)` transfers onto the access. | **done**, as `asTransferSource` + `restatedAgainst`: a source is a term, an access, or a construction of three of those, and the last is taken apart position by position. It also fixed a wrong answer of its own: B⟨?x⟩ on the target was *dropped* by the transfer, where it says the expression produced a value — `readableAgainst` restates it on the source. And it forced follow-up 6, see above. |
 
@@ -423,7 +423,7 @@ written back in accessor form, so it does not round-trip verbatim — that is ac
 3. ~~Accesses and `T⟨?x⟩` (D1, D2), recognisers, `toExpression`, the folds of S7. At the end of this
    commit Θ round-trips through a condition; nothing is written into patterns yet.~~ **Done.**
    Beyond the plan: `asAssertionConjuncts` returns a *list* of conjuncts, since
-   `sameTerm(?o, <<( ?a ?b ?c )>>)` is three of them; `conjuncts()` enumerates the *aliases* of every
+   `sameTerm(?o, <<( ?a ?b ?c )>>)` is three of them; `conjuncts()` enumerates the *readings* of every
    group reachable from a named variable, which is what makes a shape decompose into conditions and
    reconstruct from them; and the BGP/PATH/VALUES rules keep `structural()` on top, since a rewrite that
    discharges Θ by substituting terms cannot carry what a shape says. Then, in commits of their own:
@@ -434,7 +434,7 @@ written back in accessor form, so it does not round-trip verbatim — that is ac
    grew a rule of its own, and the shape that is not worth writing is where this file was
    underspecified: see "What phase 4 decided" above.
 5. ~~The operation rules in the table above.~~ **Done**, in three commits: the VALUES row rule, the
-   alias generalisation of `splitClique` with S6, and the EXTEND transfer.
+   reading generalisation of `splitClique` with S6, and the EXTEND transfer.
 6. ~~Follow-up, optional: read a materialised position through the variable the pattern wrote for it -
    `isIRI(?o_o)` where the residual said `isIRI(OBJECT(?o))`.~~ **Done, and not optional after all** — 5
    forces it, see "What phase 5 found". By the mechanism this file prescribed: a substitution over the

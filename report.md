@@ -53,8 +53,8 @@ idempotent. Writing `sameTerm(?o, <<( ?s ?o_p ?o_o )>>)` instead would be a wron
 derived variables are unbound wherever the filter sits, so the condition would error and drop
 everything.
 
-**Variables are coined only when writing into a pattern**, named `${anchor}_${s|p|o}` against the
-whole query's pre-transformation variable list, suffixed only on collision. The anchor is the
+**Variables are coined only when writing into a pattern**, named `${representative}_${s|p|o}` against the
+whole query's pre-transformation variable list, suffixed only on collision. The representative is the
 *group's* canonical name (term pin → first named member → shortest access path), memoised per group in
 one pass-scoped map — so two materialisation sites of the same group agree and both operands of a join
 still join on the position. **Done** (`derivedVarNamer`), with one thing this study did not settle: a
@@ -138,8 +138,8 @@ error when every component is bound and `range(c₁) ⊆ {IRI, bnode}`, `range(c
 5. ~~Operation rules — `pruneValues`, EXTEND transfer (`BIND(<<( ?a ?b ?c )>> AS ?o)` and
    `BIND(subject(?o) AS ?x)`), shape-weakening in `splitClique`, the GRAPH and MINUS cases.~~ **Done.**
    A VALUES row is asserted into a clone of Θ, which decides every form at once and leaves nothing over;
-   `splitClique` splits a group of *aliases* rather than a clique of variables, with T⟨?o : Quad⟩ where a
-   target is licensed for one alias only (S6); and the EXTEND transfer takes a construction apart onto
+   `splitClique` splits a group of *readings* rather than a clique of variables, with T⟨?o : Quad⟩ where a
+   target is licensed for one reading only (S6); and the EXTEND transfer takes a construction apart onto
    the variables it writes. That last one also found a wrong answer of its own — B⟨?x⟩ on a transferred
    BIND target was dropped rather than restated — and forced 6.
 6. ~~Follow-up: read a materialised position through the variable the pattern wrote for it.~~ **Done**,

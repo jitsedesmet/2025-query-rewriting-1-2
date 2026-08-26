@@ -1277,7 +1277,7 @@ GROUP BY ?x?y`,
       );
     });
 
-    it('sends nothing into the right hand side of a MINUS, which has no anchor to agree on', ({ expect }) => {
+    it('sends nothing into the right hand side of a MINUS, which has no term to agree on', ({ expect }) => {
       expectTransform(
         expect,
         'SELECT * WHERE { ?x :p ?y MINUS { ?z :q ?y } FILTER(sameTerm(?x, ?y)) }',
@@ -2214,7 +2214,7 @@ GROUP BY ?x?y`,
       // `?s` is bound by the union and `?o` by the pattern, so no single operand is licensed for the edge
       // - and dropping it rather than keeping it would be a wrong answer, not a missed optimisation.
       //
-      // What each operand does get is what *reading* the alias it is licensed for entails (S6): the
+      // What each operand does get is what *reading* the reading it is licensed for entails (S6): the
       // pattern binding `?o` is told that it holds a triple term, which is strictly weaker than the edge
       // and so travels where the edge cannot. The union learns nothing it did not already state, `?s`
       // being bound in it by construction.
@@ -2241,10 +2241,10 @@ GROUP BY ?x?y`,
       );
     });
 
-    it('splits a group of both kinds of alias over the operands of a join', ({ expect }) => {
+    it('splits a group of both kinds of reading over the operands of a join', ({ expect }) => {
       // The mixed case: `?s ≡ ?t ≡ SUBJECT(?o)` is one group read three ways, and it splits over the
-      // operands exactly as a clique of variables does - the left takes the edge between the two aliases
-      // it binds, the right takes what reading the third entails, and one edge back to the anchor spans
+      // operands exactly as a clique of variables does - the left takes the edge between the two readings
+      // it binds, the right takes what reading the third entails, and one edge back to the representative spans
       // what neither could connect.
       expectTransform(
         expect,
@@ -2749,7 +2749,7 @@ GROUP BY ?x?y`,
 
     it('keeps the MINUS a unification must not be pushed into', async({ expect }) => {
       // The trap the missing weak form of a clique avoids: pruning the right hand side by `?s ≡ ?o` -
-      // which it has no anchor for - would stop it removing the `:loop` row, and yield two rows here.
+      // which it has no term for - would stop it removing the `:loop` row, and yield two rows here.
       await assertEquivalent(expect, `SELECT * WHERE {
         ?s :self ?o
         MINUS { ?o :twice ?x }
@@ -3019,7 +3019,7 @@ GROUP BY ?x?y`,
       }`, 1);
     });
 
-    it('keeps the rows a join operand selects off what reading one alias entails', async({ expect }) => {
+    it('keeps the rows a join operand selects off what reading one reading entails', async({ expect }) => {
       // One operand binds `?s`, the other `?o`, so neither may take the edge - and the one binding `?o`
       // still takes `isTRIPLE(?o)` out of it (S6), which drops `:d` before the join rather than after.
       // The answer is what the edge selects either way, which is the half that has to hold.

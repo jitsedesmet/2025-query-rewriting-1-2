@@ -65,8 +65,8 @@ Phase **5** (the per-operation rules) is on `feat/phase-5-operation-rules`, in t
   leaves nothing to restate above the VALUES. A column is dropped wherever what stays rebuilds its
   value, which for a shape is the triple term written out of the columns holding its positions.
 * **JOIN / LEFT JOIN / GRAPH** — a clique of variables and an edge into a position are one thing: a
-  group Θ can read more than one way. `splitClique` splits those *aliases* over the targets, and a
-  target licensed for one alias gets what reading it entails — B⟨?x⟩ for a variable, `isTRIPLE(?o)` for
+  group Θ can read more than one way. `splitClique` splits those *readings* over the targets, and a
+  target licensed for one reading gets what reading it entails — B⟨?x⟩ for a variable, `isTRIPLE(?o)` for
   a position of one, which is the S6 case an edge placed whole could not reach.
 * **EXTEND** — Θ transfers onto anything it can name: a term, an access (`BIND(SUBJECT(?o) AS ?x)`), or
   the construction `BIND(<<( ?a ?b ?c )>> AS ?t)`, which is taken apart position by position. Two things

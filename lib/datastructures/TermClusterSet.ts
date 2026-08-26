@@ -104,6 +104,17 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
    */
   protected groupMergeHistory: Record<number, number>;
   /**
+   * The reverse of {@link childrenOf}, keyed by *resolved* group: the groups whose shape holds this one in
+   * one of its positions. It is what {@link isPinChild} reads instead of walking every pin there is, that
+   * question being asked on every {@link ClusterSet.remove}.
+   *
+   * Kept as an over-approximation the lookup verifies against the pins themselves, so that the only thing
+   * maintenance owes it is never to *lose* an owner: entries move with the group they are keyed by
+   * ({@link migrateGroupData}) and are dropped with it ({@link dropGroup}), while an owner whose pin has
+   * moved on is pruned the next time it is read.
+   */
+  private pinChildToOwners: Record<number, Set<number>>;
+  /**
    * Whether the last work list to settle left the pins acyclic, which is what lets {@link hasCycle} start
    * from the groups a run touched rather than from every group there is. Cleared by a run that gives up
    * halfway, since the constraints it did establish may have closed a cycle nothing went on to check.
@@ -128,6 +139,7 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
     this.groupToPin = {};
     this.groupToRange = {};
     this.groupMergeHistory = {};
+    this.pinChildToOwners = {};
     this.acyclic = true;
   }
 
@@ -143,6 +155,9 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
     copy.groupToPin = { ...this.groupToPin };
     copy.groupToRange = { ...this.groupToRange };
     copy.groupMergeHistory = { ...this.groupMergeHistory };
+    copy.pinChildToOwners = Object.fromEntries(
+      Object.entries(this.pinChildToOwners).map(([ child, owners ]) => [ child, new Set(owners) ]),
+    );
     copy.acyclic = this.acyclic;
   }
 
@@ -346,6 +361,8 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
     const oldPin = this.groupToPin[oldGroup];
     delete this.groupToRange[oldGroup];
     delete this.groupToPin[oldGroup];
+    // The pin moves onto `newGroup` just below, which is what re-registers its positions.
+    this.unregisterPinChildren(oldGroup, oldPin);
     if (!this.narrowRange(newGroup, oldRange)) {
       return false;
     }
@@ -370,7 +387,9 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
       keptPin = pinMeet.pin;
       work.push(...pinMeet.entailed);
     }
+    this.unregisterPinChildren(group, currentPin);
     this.groupToPin[group] = keptPin;
+    this.registerPinChildren(group, keptPin);
     // A pin is a range statement too, and the sharper one: a group pinned to a NamedNode holds nothing else.
     return this.narrowRange(
       group,
@@ -446,14 +465,49 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
   }
 
   /**
-   * Whether some group's shape holds this one in one of its positions.
+   * Whether some group's shape holds this one in one of its positions, read off {@link pinChildToOwners}
+   * and checked against the pins of the owners it names - which is also where an owner that no longer
+   * points here is pruned.
    * @param group - The group to look for
    * @returns whether anything points at it
    */
   private isPinChild(group: number): boolean {
     const resolved = this.resolveGroup(group);
-    return Object.keys(this.groupToPin)
-      .some(owner => childGroupsOf(this.childrenOf(Number(owner))).includes(resolved));
+    const owners = this.pinChildToOwners[resolved];
+    if (owners === undefined) {
+      return false;
+    }
+    for (const owner of owners) {
+      if (childGroupsOf(this.childrenOf(owner)).includes(resolved)) {
+        return true;
+      }
+      owners.delete(owner);
+    }
+    delete this.pinChildToOwners[resolved];
+    return false;
+  }
+
+  /**
+   * Records a group as an owner of every position of the pin it just took on.
+   * @param owner - The group carrying the pin
+   * @param pin - The pin it carries, positions of which are groups when it is a shape
+   */
+  private registerPinChildren(owner: number, pin: Pin<Term> | undefined): void {
+    for (const child of childGroupsOf(pin?.kind === 'triple' ? pin : undefined)) {
+      const resolved = this.resolveGroup(child);
+      (this.pinChildToOwners[resolved] ??= new Set()).add(owner);
+    }
+  }
+
+  /**
+   * Takes a group back out as an owner of the positions of a pin it no longer carries.
+   * @param owner - The group that carried the pin
+   * @param pin - The pin it is losing
+   */
+  private unregisterPinChildren(owner: number, pin: Pin<Term> | undefined): void {
+    for (const child of childGroupsOf(pin?.kind === 'triple' ? pin : undefined)) {
+      this.pinChildToOwners[this.resolveGroup(child)]?.delete(owner);
+    }
   }
 
   /**
@@ -474,10 +528,35 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
     return group;
   }
 
+  /**
+   * Carries the owners pointing at the disappearing group over: {@link pinChildToOwners} is keyed by
+   * resolved group, and this is the point at which the two ids become one.
+   * @param oldGroup - The group disappearing
+   * @param newGroup - The group surviving
+   */
+  protected override migrateGroupData(oldGroup: number, newGroup: number): void {
+    super.migrateGroupData(oldGroup, newGroup);
+    const inherited = this.pinChildToOwners[oldGroup];
+    if (inherited === undefined) {
+      return;
+    }
+    delete this.pinChildToOwners[oldGroup];
+    const owners = this.pinChildToOwners[newGroup];
+    if (owners === undefined) {
+      this.pinChildToOwners[newGroup] = inherited;
+      return;
+    }
+    for (const owner of inherited) {
+      owners.add(owner);
+    }
+  }
+
   protected override dropGroup(group: number): void {
     super.dropGroup(group);
+    this.unregisterPinChildren(group, this.groupToPin[group]);
     delete this.groupToPin[group];
     delete this.groupToRange[group];
+    delete this.pinChildToOwners[group];
   }
 }
 

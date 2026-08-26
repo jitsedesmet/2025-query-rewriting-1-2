@@ -429,8 +429,11 @@ function substituteIntoPath(c: TransformContext, path: Algebra.Path, assertions:
  * above the re-binding that gives that variable its value again.
  *
  * The filter carries no conjunction of its own, deliberately: what it says is about the values the
- * pattern wrote, where Θ is about the accesses, and the two are no longer the same statement. Whatever
- * reads it next reads an ordinary condition, over ordinary variables of the plan (D6).
+ * pattern wrote, where Θ is about the accesses, and the two are no longer the same statement. What reads
+ * it next is this pass, on its way past - the condition is read back into a conjunction of its own, and
+ * the coined name enters that one the way every name enters one, from a condition read against the very
+ * operation it is about (D6, and {@link AssertionConjunction.intoPattern} on why it is written rather
+ * than injected).
  */
 function aroundPattern(
   c: TransformContext,

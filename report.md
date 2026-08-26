@@ -65,7 +65,9 @@ out, since writing it would coin three variables to state what that condition st
 `isIRI(OBJECT(?o))` — and sits on the pattern, below the re-binding, wherever it no longer reads a
 re-bound variable. **Done** with phase 5, which forced it: the pass writes the re-binding itself, so a
 condition reading through it is one the pass would push through it on the next run. A substitution over
-the condition after `toExpression`, never a coined name in Θ.
+the condition after `toExpression`. The coined name still reaches Θ - the pass reads its own condition
+back on the way past - but it gets there the way every name does, from a condition read against the
+operation it is about, rather than by a rewrite injecting what it is about to write.
 
 **The weak/strong line is unchanged**, restated: *a conjunct mentioning one variable has a weak form,
 one mentioning two does not*. `!bound(?o) || sameTerm(subject(?o), :a)` is fine;

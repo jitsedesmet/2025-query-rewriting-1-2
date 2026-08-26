@@ -94,7 +94,12 @@ the pass met its own output: the residual it left above the re-binding read the 
 (`isIRI(?o_o)`) - the "applying the transformation twice" test, failing on a rewrite that was sound both
 times. There is no way to have the transfer and stay a fixpoint without writing the residual against the
 values the pattern holds, so 6 landed with 5, by the mechanism 6 prescribed: a substitution over the
-condition after `toExpression` (`intoPattern`'s third return, `asWritten`), never a coined name in Θ.
+condition after `toExpression` (`intoPattern`'s third return, `asWritten`) rather than a name injected
+into Θ. Not that a coined name may never *reach* Θ: it does, one step later, when the pass reads its own
+condition back against the pattern that binds it - which is the rule D6 is really about, and which two
+things of its own make load-bearing here. A residual folds (`bound(?o_p)` is `true` over the pattern
+that writes `?o_p`, and Θ has no state for a conjunct that is no longer one), and a coined name put into
+a group would have Θ state the equality the pattern already states.
 
 It settled one thing 6 left open: **where the rewritten condition goes**. Reading only the pattern's own
 variables, it sits directly on the pattern, *below* the re-binding - which is where the next run would

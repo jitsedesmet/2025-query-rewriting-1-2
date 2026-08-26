@@ -414,7 +414,8 @@ export class AssertionConjunction {
    *   kind of term that variable takes. It is written back over the pattern - and *against the values
    *   the pattern holds* rather than against the accesses Θ reads them by, which is what `asWritten` is
    *   for: `isIRI(SUBJECT(?o))` becomes `isIRI(?o_s)`, a condition over a variable the pattern binds
-   *   rather than an accessor over one only the re-binding above it does.
+   *   rather than an accessor over one only the re-binding above it does, and one an engine can push
+   *   into the scan.
    *
    * The forms that say a variable is *not* bound to something (W and U), and B⟨?x⟩ which names no value
    * at all, are never written into a pattern and so always stay. None of them ever reaches one -
@@ -422,15 +423,27 @@ export class AssertionConjunction {
    * variable it has - but the rule is about what the pattern enforces, not about what happens to arrive.
    *
    * `asWritten` is that last part: what the residual has to be *read against* once the pattern holds the
-   * values, which is a substitution over its condition rather than over Θ itself. Θ may not hold a
-   * coined name - a name in Θ is a name a licence could be read off, and the metadata a licence is read
-   * against does not know one that was coined half way through a traversal (D6) - so what the residual
-   * says stays about the accesses until the very moment it is written down, and what reads it back after
-   * that reads an ordinary condition over ordinary variables of the plan.
+   * values, as a substitution over the condition it writes rather than over Θ itself. Θ keeps saying
+   * `OBJECT(?o)` where the plan will say `?o_o`, and the two meet only when the condition is written.
    *
-   * It is also what keeps the pass a fixpoint over its own output: the condition it writes is the one it
-   * would write again, where an accessor over the re-bound variable is one the next run pushes through
-   * the re-binding and writes differently.
+   * Not because a coined name may never reach Θ - it does, one step later and by the ordinary route: the
+   * condition written here is read back by the pass on its way past, and `?o_o` enters Θ from it like
+   * any other variable of the plan, checked against the very pattern that binds it. That is the rule
+   * D6 is really about, and writing the name down rather than injecting it is what keeps to it: **a name
+   * enters Θ only from a condition read against the operation it is about**, never from a rewrite that
+   * knows what it is *going* to write.
+   *
+   * The substitution has to be over the condition for two reasons of its own, either of which would sink
+   * a Θ built over the coined names:
+   *
+   * - **Some of the residual stops being a conjunct at all.** `bound(?o_p)` over the pattern that writes
+   *   `?o_p` is `true`, and Θ has no state for that - it would write `BOUND(?o_p)` back out, and the next
+   *   run would delete it, which is the pass failing to be a fixpoint over its own output. An access can
+   *   equally resolve to a *term* (`SUBJECT(?o)` to `:a`), and a conjunct of Θ is never about a term.
+   * - **A coined name in a group would state what the pattern states.** `?o_o` put into the group
+   *   `OBJECT(?o)` names makes {@link conjuncts} write the edge `sameTerm(OBJECT(?o), ?o_o)` - the thing
+   *   the pattern already says, said a second time. Avoiding that means rebuilding Θ over fresh accesses,
+   *   which is this substitution again, only without the folds that come free on an expression (S7).
    *
    * @param namer - Coins the variable for a position, once per position and query ({@link derivedVarNamer}).
    */

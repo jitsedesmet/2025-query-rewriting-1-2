@@ -12,16 +12,17 @@ import { unionSets } from './setUtils.js';
  * @fileoverview The assertion toolbox: recognizing the assertions a filter condition carries, building
  * them, and substituting them into expressions and patterns.
  *
- * A condition is read for all of the forms at once, into the single {@link AssertionConjunction} the
- * pushdown moves around.
+ * A condition is read for all of the forms at once, into the single
+ * {@link utils/assertionConjunction!AssertionConjunction} the pushdown moves around.
  */
 
 /**
  * A substitution theta: variable name to the single term it is fixed to.
  *
  * The *substitutable* form every `substituteIn...` helper takes, which is why the weak, bound and unbound
- * forms of an {@link AssertionConjunction} are kept out of it. The term may be a variable: that is what a
- * unification substitutes, replacing every member of a clique by its representative.
+ * forms of an {@link utils/assertionConjunction!AssertionConjunction} are kept out of it. The term may be
+ * a variable: that is what a unification substitutes, replacing every member of a clique by its
+ * representative.
  */
 export type Assertions = ReadonlyMap<string, RDF.Term>;
 
@@ -236,7 +237,7 @@ export function impliesBound(assertion: Assertion): boolean {
  * Whether an assertion may fix a variable to this *ground* term, i.e. whether it pins a group to it.
  *
  * A triple term is admitted exactly when it is ground: until its components are known it is a *shape*, and
- * that is the business of the pin lattice ({@link TermClusterSet}) instead.
+ * that is the business of the pin lattice ({@link datastructures/TermClusterSet!TermClusterSet}) instead.
  * @param term - The term to check
  * @returns whether the term is variable-free
  */
@@ -281,8 +282,8 @@ function asAssertionTarget(expression: Algebra.Expression): AssertionTarget | un
 }
 
 /**
- * What a BIND hands an {@link AssertionConjunction} in place of its target: the thing below the EXTEND that
- * carries the value the target holds above it.
+ * What a BIND hands an {@link utils/assertionConjunction!AssertionConjunction} in place of its target:
+ * the thing below the EXTEND that carries the value the target holds above it.
  *
  * Either a value the conjunction can name - a ground term, or an {@link Access} reading one - or the shape
  * of one, which is what a triple term construction over variables is. The three are told apart by their
@@ -647,7 +648,8 @@ Algebra.Expression {
 }
 
 /**
- * One conjunct of an {@link AssertionConjunction}: what it says about one access, or one edge between two.
+ * One conjunct of an {@link utils/assertionConjunction!AssertionConjunction}: what it says about one
+ * access, or one edge between two.
  */
 export interface AssertionConjunct {
   access: Access;

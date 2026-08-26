@@ -11,7 +11,7 @@ import { DF } from './rdfDatatypes.js';
 import { unionSets } from './setUtils.js';
 
 /**
- * What an {@link AssertionConjunction} decides about the expressions it is substituted into.
+ * What an {@link utils/assertionConjunction!AssertionConjunction} decides about the expressions it is substituted into.
  *
  * A *view* rather than a map of terms, because a conjunction knows things no map can hold: `SUBJECT(?o)`
  * may be decided where `?o` is not, and `?o` may be known to be a triple term without any term for it being

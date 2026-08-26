@@ -57,7 +57,7 @@ export const serviceNameRange = new RangeSet([ 'NamedNode' ]);
  * Reached by narrowing two ranges with nothing in common - `?x` a Literal here and a NamedNode there -
  * which proves the operation binding it yields no solutions at all. Distinct from a variable that is simply
  * absent: bottom says the variable is in scope and never bound, where absent says it is not in scope. See
- * {@link VRanges}.
+ * {@link utils/certainlyBoundVars!VRanges}.
  */
 export const emptyRange = new RangeSet([]);
 

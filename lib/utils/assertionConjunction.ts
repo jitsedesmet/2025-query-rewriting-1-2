@@ -283,7 +283,7 @@ export class AssertionConjunction {
    *
    * Several readings is the statement that they are equal - a clique for a group of variables, one edge for
    * `sameTerm(SUBJECT(?o), ?s)`, and the two are one thing here. A rule deciding per reading would split
-   * such a group into pieces that no longer say it, so it splits the *edges* instead ({@link splitClique}).
+   * such a group into pieces that no longer say it, so it splits the *edges* instead (`splitClique` in the pushdown).
    * A group pinned to a term is not one of them: every reading of it is that term, which already states it.
    * @returns the readings per group, each list representative first
    */
@@ -356,7 +356,7 @@ export class AssertionConjunction {
    * a conjunct rather than off the form of the conjunct. `asWritten` is what it has to be read against once
    * the pattern holds those values: Θ keeps saying `OBJECT(?o)` where the plan says `?o_o`, so
    * `isIRI(OBJECT(?o))` is written as `isIRI(?o_o)`, a condition over a variable the pattern binds.
-   * @param namer - Coins the variable for a position, once per position and query ({@link derivedVarNamer})
+   * @param namer - Coins the variable for a position, once per position and query ({@link utils!derivedVarNamer})
    * @returns the substitution to write into the pattern, the residual to state over it, and the view that
    * residual has to be written through
    */

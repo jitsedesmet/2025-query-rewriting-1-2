@@ -97,7 +97,7 @@ export class ClusterSet<T> {
 
   /**
    * Creates a group holding no values at all, which is only reachable through whatever a subclass makes point
-   * at it - the positions of a triple pin, for {@link TermClusterSet}.
+   * at it - the positions of a triple pin, for {@link datastructures/TermClusterSet!TermClusterSet}.
    * @returns the new group
    */
   protected createEmptyGroup(): number {

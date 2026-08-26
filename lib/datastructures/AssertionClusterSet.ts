@@ -68,7 +68,7 @@ export class AssertionClusterSet extends TermClusterSet<string, RDF.Term> {
    */
   public assertTermTypeRange(group: number, range: RangeSet): boolean {
     const resolved = this.resolveGroup(group);
-    this.groupToAssertedRange[resolved] = this.assertedRangeOf(resolved).disjunct(range);
+    this.groupToAssertedRange[resolved] = this.assertedRangeOf(resolved).meet(range);
     return this.narrowRange(resolved, range);
   }
 
@@ -81,7 +81,7 @@ export class AssertionClusterSet extends TermClusterSet<string, RDF.Term> {
   protected override migrateGroupData(oldGroup: number, newGroup: number): void {
     super.migrateGroupData(oldGroup, newGroup);
     this.groupToAssertedRange[newGroup] = this.assertedRangeOf(newGroup)
-      .disjunct(this.groupToAssertedRange[oldGroup] ?? objectRange);
+      .meet(this.groupToAssertedRange[oldGroup] ?? objectRange);
     delete this.groupToAssertedRange[oldGroup];
   }
 

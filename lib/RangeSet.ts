@@ -4,15 +4,15 @@ import type * as RDF from '@rdfjs/types';
  * The term types a position or a variable may hold, ordered by set inclusion.
  * @example
  * const subjectRange = new RangeSet(['BlankNode', 'NamedNode']);
- * subjectRange.disjunct(objectRange); // RangeSet(['BlankNode', 'NamedNode'])
+ * subjectRange.meet(objectRange); // RangeSet(['BlankNode', 'NamedNode'])
  */
 export class RangeSet extends Set<RDF.Term['termType']> {
   /**
-   * The meet of this range and another: the term types both admit.
+   * The term types this range and another both admit.
    * @param other - The range to meet with
    * @returns a new range holding their intersection
    */
-  public disjunct(other: RangeSet): RangeSet {
+  public meet(other: RangeSet): RangeSet {
     return new RangeSet([ ...other.values() ].filter(x => this.has(x)));
   }
 }

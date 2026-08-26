@@ -65,7 +65,7 @@ export class VRanges extends Map<string, RangeSet> {
    * @param range - The term types it also has to satisfy
    */
   public narrow(name: string, range: RangeSet): void {
-    this.set(name, (this.get(name) ?? objectRange).disjunct(range));
+    this.set(name, (this.get(name) ?? objectRange).meet(range));
   }
 
   /**

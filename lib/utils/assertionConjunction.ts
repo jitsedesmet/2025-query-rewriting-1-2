@@ -1221,10 +1221,10 @@ export class AssertionConjunction {
 function admitsRange(clusters: AssertionClusterSet, group: number, range: RangeSet): boolean {
   const pin = clusters.pinOf(group);
   if (pin === undefined) {
-    return clusters.rangeOf(group).disjunct(range).size > 0;
+    return clusters.rangeOf(group).meet(range).size > 0;
   }
   const type = pin.kind === 'term' ? pin.term.termType : 'Quad';
-  return clusters.rangeOf(group).disjunct(range).size > 0 && range.has(type);
+  return clusters.rangeOf(group).meet(range).size > 0 && range.has(type);
 }
 
 /**

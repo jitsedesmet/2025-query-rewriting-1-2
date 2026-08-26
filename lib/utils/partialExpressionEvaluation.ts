@@ -172,7 +172,7 @@ function decidedByAccess(
       return undefined;
     }
     // `⊆` answers it `true`, an empty meet answers it `false`, and anything between leaves it standing.
-    if (rangeOfAccess.size === rangeOfAccess.disjunct(rangeOfTermType(termTypeAssertion)).size) {
+    if (rangeOfAccess.size === rangeOfAccess.meet(rangeOfTermType(termTypeAssertion)).size) {
       return createBooleanExpression(c, true);
     }
     return rangeOfAccess.has(termTypeAssertion) ? undefined : createBooleanExpression(c, false);

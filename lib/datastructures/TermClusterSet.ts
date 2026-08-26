@@ -248,7 +248,7 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
    */
   public narrowRange(group: number, range: RangeSet): boolean {
     const resolved = this.resolveGroup(group);
-    const narrowed = this.rangeOf(resolved).disjunct(range);
+    const narrowed = this.rangeOf(resolved).meet(range);
     this.groupToRange[resolved] = narrowed;
     return narrowed.size > 0 && this.rangeAdmits(resolved, this.groupToPin[resolved]);
   }

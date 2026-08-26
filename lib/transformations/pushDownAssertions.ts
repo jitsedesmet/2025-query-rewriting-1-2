@@ -596,7 +596,12 @@ function pushIntoGraph(
     // `?g` travels on into the pattern, in the *weak* form: `P` need not bind it at all, and the join
     // with `{?g ↦ c}` is what would have dropped the solutions binding it to anything else.
     const graphIndependentAssertions = assertions.split(name => name !== graphVar).inside;
-    graphIndependentAssertions.assertTerm(graphVar, assertedGraphName.term, false);
+    // The split kept back every conjunct reading `?g`, so nothing in there constrains it and the pin lands
+    // on a group of its own. A contradiction would leave the conjunction in the unreadable state a failed
+    // narrowing documents, and this pushes it into the pattern, so it is raised rather than ignored.
+    if (!graphIndependentAssertions.assertTerm(graphVar, assertedGraphName.term, false)) {
+      throw new Error(`Unreachable: ?${graphVar} is not read by the conjunction it is pinned in`);
+    }
     const selected = AF.createGraph(
       assertionFilter(c, graph.input, graphIndependentAssertions),
       assertedGraphName.term,

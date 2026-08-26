@@ -281,6 +281,7 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
    * @param newGroup - The group surviving
    */
   protected override migrateGroupData(oldGroup: number, newGroup: number): void {
+    super.migrateGroupData(oldGroup, newGroup);
     this.groupToExpressions[newGroup].push(...this.groupToExpressions[oldGroup]);
     delete this.groupToExpressions[oldGroup];
   }

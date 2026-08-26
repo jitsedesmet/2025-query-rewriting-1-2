@@ -209,7 +209,8 @@ export class ClusterSet<T> {
 
   /**
    * Moves everything the disappearing group carried besides its values onto the surviving one. Subclasses
-   * that give a group more state migrate it here.
+   * that give a group more state migrate it here, calling `super` first so that whatever a class further up
+   * carries over is already in place.
    * @param _oldGroup - The group disappearing
    * @param _newGroup - The group surviving
    */

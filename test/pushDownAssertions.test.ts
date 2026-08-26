@@ -500,6 +500,59 @@ GROUP BY ?x`,
   });
 
   describe('the weak form', () => {
+    it('is discharged by the left hand side where the right can never bind the variable', ({ expect }) => {
+      // `σ_W(A₁ ⟕ A₂) ≡ σ_W(σ_W(A₁) ⟕ A₂)` keeps W on top because `A₂` may bind `?y` to something else
+      // and the merged solution is the one W discards. Where `A₂` has no `?y` to bind, every solution
+      // takes it from `A₁` alone, so pushing it there settles it and nothing is restated above.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          { { ?s :p ?y } UNION { ?s :r ?d } }
+          OPTIONAL { ?s :q ?w }
+          FILTER(!bound(?y) || sameTerm(?y, :c))
+        }`,
+        `SELECT ?d ?s ?w ?y WHERE {
+  {
+    ?s <ex://p> <ex://c> .
+    BIND( <ex://c> AS ?y )
+  }
+  UNION {
+    ?s <ex://r> ?d .
+  }
+  OPTIONAL {
+    ?s <ex://q> ?w .
+  }
+}`,
+      );
+    });
+
+    it('stays above the left join whose right hand side can bind the variable', ({ expect }) => {
+      // The same query with `?y` on the right of the OPTIONAL: a `μ₂` binding it to another term makes a
+      // merged solution W discards, and pruning `A₂` would instead let the unmatched `μ₁` through the
+      // anti-join half. So the LHS takes it and it is restated above as well.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          { { ?s :p ?y } UNION { ?s :r ?d } }
+          OPTIONAL { ?s :q ?y }
+          FILTER(!bound(?y) || sameTerm(?y, :c))
+        }`,
+        `SELECT ?d ?s ?y WHERE {
+  {
+    ?s <ex://p> <ex://c> .
+    BIND( <ex://c> AS ?y )
+  }
+  UNION {
+    ?s <ex://r> ?d .
+  }
+  OPTIONAL {
+    ?s <ex://q> ?y .
+  }
+  FILTER ( ( ! BOUND( ?y ) || SAMETERM( ?y , <ex://c> ) ) )
+}`,
+      );
+    });
+
     it('demotes into the join operand the strong form may not enter', ({ expect }) => {
       // L fails for the union: ?x is not certain in it, and it is possible in the subquery. Left at
       // that, the union keeps both of its branches. Demoted, the assertion reaches them, becomes strong
@@ -2960,6 +3013,17 @@ GROUP BY ?x?y`,
         { SELECT ?s ?y WHERE { ?s :p ?y } }
         { SELECT ?o WHERE { ?t :says ?o } }
         FILTER(sameTerm(subject(?o), ?s))
+      }`, 2);
+    });
+
+    it('keeps the rows the weak form selects once the left hand side has settled it', async({ expect }) => {
+      // The right hand side of the OPTIONAL has no `?y` to bind, so the condition is discharged by the
+      // left and the rewritten plan states it nowhere: both rows have to survive that - the one binding
+      // `?y` to `:shared`, and the one leaving it unbound.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        { { ?s :p ?y } UNION { ?s :r ?d } }
+        OPTIONAL { ?s :q ?w }
+        FILTER(!bound(?y) || sameTerm(?y, :shared))
       }`, 2);
     });
 

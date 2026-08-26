@@ -733,29 +733,23 @@ function pushIntoGraph(
   // clique over `?g`, or a BlankNode graph name - travels into the pattern except for what mentions `?g`,
   // which stays above. Since `?g ∈ cVars(Graph)`, the weak and
   // bound forms cannot be what is asserted here: normalisation has already promoted or dropped them.
-  const inside: AssertionConjunct[] = [];
-  const kept: AssertionConjunct[] = [];
-  for (const conjunct of assertions.unaryConjuncts()) {
-    if (conjunct.access.name === graphVar) {
-      kept.push(conjunct);
-    } else {
-      inside.push(conjunct);
-    }
-  }
-  // A group is split by its *edges*: the sub-group over the aliases that do not read `?g` goes into `P`
-  // whole, even when its anchor is `?g` and no edge of that star could travel as it stands.
-  // `?g ≡ ?s ≡ ?t` pushes `?s ≡ ?t` down and keeps a single edge back to `?g` here, which is
-  // what spans the group again. The pattern *connects* what it takes: a condition not mentioning `?g`
-  // moves through `⋃ᵢ (⟦P⟧_uᵢ ⋈ {?g ↦ uᵢ})` untouched, so it still holds of every solution up here.
-  for (const aliases of assertions.aliasGroups()) {
-    const placed = splitClique(aliases, [ aliases.filter(alias => alias.name !== graphVar) ], [ true ]);
-    inside.push(...placed.intoTarget[0]);
-    kept.push(...placed.kept);
-  }
+  //
+  // The pattern is the one target, licensed for every variable but `?g` and *connecting* what it takes:
+  // a condition not mentioning `?g` moves through `⋃ᵢ (⟦P⟧_uᵢ ⋈ {?g ↦ uᵢ})` untouched, so it still holds
+  // of every solution up here. It may bind `?g` whatever it is told, the GRAPH binding it in every
+  // solution, so a conjunct about `?g` stays - and a group is split by its *edges*, so the sub-group over
+  // the aliases that do not read `?g` goes down whole even when its anchor is `?g`: `?g ≡ ?s ≡ ?t` pushes
+  // `?s ≡ ?t` and keeps one edge back to `?g` here, which is what spans the group again.
+  const placed = placeOverTargets(assertions, [{
+    licensed: name => name !== graphVar,
+    admitsWeakened: name => name !== graphVar,
+    mayBind: () => true,
+    connects: true,
+  }]);
   return keep(assertionFilter(
     c,
-    AF.createGraph(assertionFilter(c, graph.input, AssertionConjunction.of(inside)), graphName),
-    AssertionConjunction.of(kept),
+    AF.createGraph(assertionFilter(c, graph.input, AssertionConjunction.of(placed.intoTarget[0])), graphName),
+    AssertionConjunction.of(placed.kept),
   ));
 }
 
@@ -783,9 +777,10 @@ function pushIntoGraph(
  * binds `?x` when *either* half does, so an operand leaving it unbound may still be part of a solution
  * that binds it. Unlicensed, it stays on top.
  *
- * An *edge* is placed by {@link splitClique} instead, on the same licence read over both of the accesses
- * it equates. Since an edge needs a single operand binding both of them, what the operands are is part of
- * the licence: the BGPs among them are merged into one first ({@link mergeBGPsOfJoin}).
+ * All of which is what {@link placeOverTargets} does with an operand that answers its four questions this
+ * way; an *edge* is split over the same targets by {@link splitClique}. Since an edge needs a single
+ * operand binding both of its accesses, what the operands are is part of the licence: the BGPs among them
+ * are merged into one first ({@link mergeBGPsOfJoin}).
  */
 function pushIntoJoin(
   c: TransformContext,
@@ -802,56 +797,22 @@ function pushIntoJoin(
   // Read before any rewriting: every rewrite preserves pVars and never shrinks cVars, so these licences
   // stay valid while the operands are rewritten.
   const operands = join.input.map(operand => cpVars(operand));
-  function licensed(index: number, name: string): boolean {
-    return operands[index].cVars.has(name) || operands.every((other, otherIndex) =>
-      otherIndex === index || other.vRanges.neverBinds(name));
-  }
-
-  const operandAssertions: AssertionConjunct[][] = join.input.map(() => []);
-  const kept: AssertionConjunct[] = [];
-  // For every assertion about a single access, find out where it can go.
-  for (const conjunct of assertions.unaryConjuncts()) {
-    const [ name ] = variablesReadByConjunct(conjunct);
-    const { assertion } = conjunct;
-    let placedStrongly = false;
-    const assertionImpliesBound = impliesBound(assertion);
-    for (const [ index ] of join.input.entries()) {
-      if (assertionImpliesBound && licensed(index, name)) {
-        operandAssertions[index].push(conjunct);
-        placedStrongly = true;
-      } else if (operands[index].vRanges.canBind(name)) {
-        const demoted = asWeakenedConjunct(conjunct);
-        // Bound assertion knows no weak form and cannot be pushed
-        if (demoted !== undefined) {
-          operandAssertions[index].push(demoted);
-        }
-      }
-    }
-    // The weak and unbound forms are always consumed by the join; the two that imply `bound(?x)` only
-    // when some operand took them in.
-    if (assertionImpliesBound && !placedStrongly) {
-      kept.push(conjunct);
-    }
-  }
-  // Every operand pushing a sub-group of its own also *connects* it: the equality between two accesses it
-  // binds certainly is what join compatibility already enforces on the output.
-  for (const aliases of assertions.aliasGroups()) {
-    const placed = splitClique(
-      aliases,
-      join.input.map((_, index) => aliases.filter(alias => licensed(index, alias.name))),
-      join.input.map(() => true),
-    );
-    for (const [ index, pushed ] of placed.intoTarget.entries()) {
-      operandAssertions[index].push(...pushed);
-    }
-    kept.push(...placed.kept);
-  }
+  // An operand takes what it certainly binds, or what nothing else can bind; it takes the weakened form
+  // of anything else it can bind, which the join consumes; and it *connects* what it takes, join
+  // compatibility being what enforces an equality between two accesses it binds on the output.
+  const placed = placeOverTargets(assertions, operands.map((operand, index) => ({
+    licensed: name => operand.cVars.has(name) ||
+      operands.every((other, otherIndex) => otherIndex === index || other.vRanges.neverBinds(name)),
+    admitsWeakened: name => operand.vRanges.canBind(name),
+    mayBind: name => operand.vRanges.canBind(name),
+    connects: true,
+  })));
 
   return keep(assertionFilter(
     c,
     c.AF.createJoin(join.input.map((operand, index) =>
-      assertionFilter(c, operand, AssertionConjunction.of(operandAssertions[index]))), false),
-    AssertionConjunction.of(kept),
+      assertionFilter(c, operand, AssertionConjunction.of(placed.intoTarget[index]))), false),
+    AssertionConjunction.of(placed.kept),
   ));
 }
 
@@ -903,6 +864,10 @@ function mergeBGPsOfJoin(c: TransformContext, join: Algebra.Join): Algebra.Opera
  *
  * B⟨?x⟩ has no weak form to fall back on either, so an unlicensed one simply stays on top: `A₂` may be
  * what binds `?x`, so a `μ₁` leaving it unbound cannot be dropped from `A₁`. Neither has a clique edge.
+ *
+ * The one thing the right hand side settles by *not* being told: where it can never bind `?x` at all, a
+ * weak conjunct about `?x` cannot be violated by anything it contributes, so the left hand side taking it
+ * is enough and nothing is restated above ({@link placeOverTargets}).
  */
 function pushIntoLeftJoin(
   c: TransformContext,
@@ -921,48 +886,29 @@ function pushIntoLeftJoin(
   }
 
   const rightVars = cpVars(right);
-  function licensedLeft(name: string): boolean {
-    return leftVars.cVars.has(name) || rightVars.vRanges.neverBinds(name);
-  }
-  function licensedRight(name: string): boolean {
-    return leftVars.cVars.has(name) && rightVars.cVars.has(name);
-  }
-  const intoLeft: AssertionConjunct[] = [];
-  const intoRight: AssertionConjunct[] = [];
-  const kept: AssertionConjunct[] = [];
-  for (const conjunct of assertions.unaryConjuncts()) {
-    const [ name ] = variablesReadByConjunct(conjunct);
-    const { assertion } = conjunct;
-    if (impliesBound(assertion) && licensedLeft(name)) {
-      intoLeft.push(conjunct);
-      if (licensedRight(name)) {
-        intoRight.push(conjunct);
-      }
-    } else {
-      // Not licensed as itself, but the weaker forms always are on the left - except B⟨?x⟩, which has none.
-      // It stays here as well, since the right hand side can still introduce a binding that violates it.
-      const demoted = leftVars.vRanges.canBind(name) ? asWeakenedConjunct(conjunct) : undefined;
-      if (demoted !== undefined) {
-        intoLeft.push(demoted);
-      }
-      kept.push(conjunct);
-    }
-  }
-  // Only what goes into the LHS *connects* the group back up: the RHS push is a replication of what the
-  // LHS already enforces, and the anti-join half of a left join enforces nothing between the two sides.
-  for (const aliases of assertions.aliasGroups()) {
-    const placed = splitClique(
-      aliases,
-      [
-        aliases.filter(alias => licensedLeft(alias.name)),
-        aliases.filter(alias => licensedRight(alias.name)),
-      ],
-      [ true, false ],
-    );
-    intoLeft.push(...placed.intoTarget[0]);
-    intoRight.push(...placed.intoTarget[1]);
-    kept.push(...placed.kept);
-  }
+  // (FLPush) on the left, and `?x ∈ cVars(A₁) ∩ cVars(A₂)` on the right - which implies the left's
+  // licence, so the replication only ever happens beside a push the LHS already took.
+  //
+  // Only the left takes a weakened form, and only the left *connects* what it takes: the RHS push is a
+  // replication of what the LHS enforces, and the anti-join half enforces nothing between the sides.
+  // The right may still *bind* what it was not told, which is what keeps a weak conjunct above the left
+  // join where a join consumes it.
+  const placed = placeOverTargets(assertions, [
+    {
+      licensed: name => leftVars.cVars.has(name) || rightVars.vRanges.neverBinds(name),
+      admitsWeakened: name => leftVars.vRanges.canBind(name),
+      mayBind: name => leftVars.vRanges.canBind(name),
+      connects: true,
+    },
+    {
+      licensed: name => leftVars.cVars.has(name) && rightVars.cVars.has(name),
+      admitsWeakened: () => false,
+      mayBind: name => rightVars.vRanges.canBind(name),
+      connects: false,
+    },
+  ]);
+  const [ intoLeft, intoRight ] = placed.intoTarget;
+  const kept = placed.kept;
 
   const leftAssertions = AssertionConjunction.of(intoLeft);
   // Every candidate μ₁ binds the variables strongly asserted in intoLeft to their term once those are
@@ -987,6 +933,94 @@ function pushIntoLeftJoin(
     ),
     AssertionConjunction.of(kept),
   ));
+}
+
+/**
+ * One place a conjunction can be pushed into: an operand of a join, a side of a left join, the pattern
+ * of a GRAPH. Four questions, which is the whole of what those rules differ in.
+ */
+interface PushTarget {
+  /**
+   * (FJPush)'s side condition, read per variable: `?x ∈ cVars(Aᵢ) ∨ ∀ j ≠ i . Aⱼ never binds ?x`, or
+   * whatever the operation's own version of it is. Under it the value `?x` takes in a solution of the
+   * operation is the one this target gave it, so a condition over licensed variables evaluates the same
+   * here as it does above.
+   */
+  licensed: (name: string) => boolean;
+  /** Whether a conjunct this target is not licensed for may still enter it in the weakened form. */
+  admitsWeakened: (name: string) => boolean;
+  /**
+   * Whether a solution of this target can bind the variable, and so can be what violates a conjunct it
+   * was not given. A target that never binds `?x` needs no copy of one about `?x`: it cannot break it.
+   */
+  mayBind: (name: string) => boolean;
+  /**
+   * Whether what this target takes it also *enforces* on the output of the operation, so that it need
+   * not be restated above it. False for the right hand side of a left join, whose anti-join half keeps
+   * a `μ₁` that no `μ₂` matched and so enforces nothing the right hand side was told.
+   */
+  connects: boolean;
+}
+
+/**
+ * Places a conjunction over the targets of an operation: each takes what it is licensed for, the
+ * weakened form of what it is not, and the sub-group of the aliases it can read - and what no target
+ * both took and enforces is restated above the operation.
+ *
+ * One routine for the join, the left join and the GRAPH, because what those rules differ in is entirely
+ * the four questions a {@link PushTarget} answers. Their licences are (FJPush), (FLPush) and the join
+ * with `{?g ↦ uᵢ}` of §18.5 respectively, and each is stated where its targets are built.
+ *
+ * A conjunct is discharged - not restated above - in the two ways the identities give:
+ *
+ * - one implying `bnd(?x)` by a target that took it **and** connects it: the value it constrains is the
+ *   one that target gave the output, so the operation already enforces what the conjunct says;
+ * - a weak or unbound one by every target that may bind `?x` having taken it, which is
+ *   `σ_W(A₁ ⋈ A₂) ≡ σ_W(A₁) ⋈ σ_W(A₂)` read over the targets a solution can come from. That is why the
+ *   weak form travels through a join for free and stays above a left join: the right hand side may bind
+ *   `?x` and may not be told.
+ *
+ * B⟨?x⟩ has no weak form at all - weakening it is `¬b ∨ b` - so it is placed where it is licensed and
+ * kept where it is not, which falls out of {@link asWeakenedConjunct} handing back nothing for it.
+ */
+function placeOverTargets(assertions: AssertionConjunction, targets: PushTarget[]): {
+  intoTarget: AssertionConjunct[][];
+  kept: AssertionConjunct[];
+} {
+  const intoTarget: AssertionConjunct[][] = targets.map(() => []);
+  const kept: AssertionConjunct[] = [];
+  for (const conjunct of assertions.unaryConjuncts()) {
+    const [ name ] = variablesReadByConjunct(conjunct);
+    const impliesItIsBound = impliesBound(conjunct.assertion);
+    const weakened = asWeakenedConjunct(conjunct);
+    let enforced = false;
+    let toldEveryBinder = true;
+    for (const [ index, target ] of targets.entries()) {
+      if (impliesItIsBound && target.licensed(name)) {
+        intoTarget[index].push(conjunct);
+        enforced ||= target.connects;
+      } else if (weakened !== undefined && target.admitsWeakened(name)) {
+        intoTarget[index].push(weakened);
+      } else {
+        toldEveryBinder &&= !target.mayBind(name);
+      }
+    }
+    if (!(impliesItIsBound ? enforced : toldEveryBinder)) {
+      kept.push(conjunct);
+    }
+  }
+  for (const aliases of assertions.aliasGroups()) {
+    const placed = splitClique(
+      aliases,
+      targets.map(target => aliases.filter(alias => target.licensed(alias.name))),
+      targets.map(target => target.connects),
+    );
+    for (const [ index, pushed ] of placed.intoTarget.entries()) {
+      intoTarget[index].push(...pushed);
+    }
+    kept.push(...placed.kept);
+  }
+  return { intoTarget, kept };
 }
 
 /**

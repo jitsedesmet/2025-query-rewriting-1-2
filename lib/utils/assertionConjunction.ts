@@ -31,7 +31,7 @@ import {
   variablesReadByConjunct,
   hasTarget,
   impliesBound,
-  isAccessTarget,
+  targetIsAccess,
   isBareAccess,
   isTripleConstruction,
   normalisedTarget,
@@ -700,7 +700,7 @@ export class AssertionConjunction {
       return triplePositions.every(position => this.readableAgainst(source[position]));
     }
     const read = normalisedTarget(source);
-    return !isAccessTarget(read) || this.assertUnify(read, read);
+    return !targetIsAccess(read) || this.assertUnify(read, read);
   }
 
   /** Conjoins everything `other` says with what this conjunction already says. */
@@ -727,14 +727,14 @@ export class AssertionConjunction {
         return this.assertTermType(access, assertion.termType, assertion.strong);
       }
       case 'strong': {
-        return isAccessTarget(assertion.term) ?
+        return targetIsAccess(assertion.term) ?
           this.assertUnify(access, assertion.term) :
           this.assertPin(access, assertion.term, true);
       }
       case 'weak': {
         // A weak *edge* is not a state this can be in (weak ⇔ pinned group), and neither the recognisers
         // nor {@link asWeakenedConjunct} ever produce one, so the target of a weak assertion is a term.
-        if (isAccessTarget(assertion.term)) {
+        if (targetIsAccess(assertion.term)) {
           return true;
         }
         return this.assertPin(access, assertion.term, false);
@@ -1296,7 +1296,7 @@ export class AssertionConjunction {
     if (assertion.subType !== 'strong') {
       return false;
     }
-    const target = isAccessTarget(assertion.term) ?
+    const target = targetIsAccess(assertion.term) ?
       this.patternValueOf(assertion.term, values) :
       assertion.term;
     // The same term written twice, or the same variable - which in a pattern is the equality itself.
@@ -1370,7 +1370,7 @@ function wrapAccess(access: Access, position: TriplePosition): Access {
  * place by reading a single one - see {@link AssertionConjunction.aliasGroups}.
  */
 function isEdgeConjunct(conjunct: AssertionConjunct): boolean {
-  return hasTarget(conjunct.assertion) && isAccessTarget(conjunct.assertion.term);
+  return hasTarget(conjunct.assertion) && targetIsAccess(conjunct.assertion.term);
 }
 
 /**

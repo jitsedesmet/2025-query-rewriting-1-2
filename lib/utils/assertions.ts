@@ -120,7 +120,7 @@ export function rangeOfTermType(termType: AssertableTermType): RangeSet {
 export type AssertionTarget = Access | RDF.Term;
 
 /** Whether the target is an access rather than a term - the two are told apart by their shape. */
-export function isAccessTarget(target: AssertionTarget): target is Access {
+export function targetIsAccess(target: AssertionTarget): target is Access {
   return 'positions' in target;
 }
 
@@ -209,7 +209,7 @@ export function assertWeak(term: AssertionTarget): WeakAssertion {
  * variable spelled as a term would answer no while being exactly one.
  */
 export function normalisedTarget(target: AssertionTarget): AssertionTarget {
-  return !isAccessTarget(target) && target.termType === 'Variable' ? access(target.value) : target;
+  return !targetIsAccess(target) && target.termType === 'Variable' ? access(target.value) : target;
 }
 
 /** Creates T⟨?x : τ⟩, or its weak form `!bound(?x) || is<τ>(?x)`. */
@@ -320,7 +320,9 @@ export type TransferSource = AssertionTarget | TripleConstruction;
 
 /** The three positions a triple term construction builds its value out of. */
 export interface TripleConstruction {
+  // TODO: can only be assertionTarget?
   subject: TransferSource;
+  // TODO: can only be assertionTarget?
   predicate: TransferSource;
   object: TransferSource;
 }
@@ -342,9 +344,9 @@ export function asTransferSource(expression: Algebra.Expression): TransferSource
   if (expression.subType === Algebra.ExpressionTypes.TERM) {
     return transferSourceOfTerm(expression.term);
   }
-  const read = asAccess(expression);
-  if (read !== undefined) {
-    return read;
+  const access = asAccess(expression);
+  if (access !== undefined) {
+    return access;
   }
   if (expression.subType === Algebra.ExpressionTypes.OPERATOR && expression.operator === 'triple' &&
     expression.args.length === 3) {
@@ -385,7 +387,7 @@ export function variablesOfTransferSource(source: TransferSource): Set<string> {
   if (isTripleConstruction(source)) {
     return unionSets(triplePositions.map(position => variablesOfTransferSource(source[position])));
   }
-  return isAccessTarget(source) ? new Set([ source.name ]) : termVars(source);
+  return targetIsAccess(source) ? new Set([ source.name ]) : termVars(source);
 }
 
 /**
@@ -501,7 +503,7 @@ export function asWeakAssertion(expression: Algebra.Expression): AssertionConjun
         if (strong?.length === 1) {
           const [{ access, assertion }] = strong;
           // Weak assertions, unlike strong, can only reference a single variable
-          if (access.name === unbound && !isAccessTarget(assertion.term)) {
+          if (access.name === unbound && !targetIsAccess(assertion.term)) {
             return [{ access, assertion: assertWeak(assertion.term) }];
           }
         }
@@ -566,7 +568,7 @@ export function accessAsExpression(c: TransformContext, access: Access): Algebra
 
 /** The expression one side of an assertion stands for. */
 function targetAsExpression(c: TransformContext, target: AssertionTarget): Algebra.Expression {
-  if (isAccessTarget(target)) {
+  if (targetIsAccess(target)) {
     return accessAsExpression(c, target);
   }
   return c.AF.createTermExpression(target);
@@ -644,7 +646,7 @@ export interface AssertionConjunct {
  */
 export function variablesReadByConjunct(conjunct: AssertionConjunct): string[] {
   const { access, assertion } = conjunct;
-  if (hasTarget(assertion) && isAccessTarget(assertion.term) && assertion.term.name !== access.name) {
+  if (hasTarget(assertion) && targetIsAccess(assertion.term) && assertion.term.name !== access.name) {
     return [ access.name, assertion.term.name ];
   }
   return [ access.name ];
@@ -670,7 +672,7 @@ export function asWeakenedConjunct(conjunct: AssertionConjunct): AssertionConjun
       return assertion.strong ? { access, assertion: assertTermType(assertion.termType, false) } : conjunct;
     }
     case 'strong': {
-      return isAccessTarget(assertion.term) ? undefined : { access, assertion: assertWeak(assertion.term) };
+      return targetIsAccess(assertion.term) ? undefined : { access, assertion: assertWeak(assertion.term) };
     }
     default: {
       return conjunct;

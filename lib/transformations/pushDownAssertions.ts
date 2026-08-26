@@ -18,7 +18,7 @@ import {
   compareAccesses,
   variablesReadByConjunct,
   impliesBound,
-  isAccessTarget,
+  targetIsAccess,
   isAssertableTerm,
   isBareAccess,
   substituteInPattern,
@@ -607,7 +607,7 @@ function pushIntoExtend(
     ));
   }
 
-  if (assertionOfTarget?.subType === 'strong' && !isAccessTarget(assertionOfTarget.term) &&
+  if (assertionOfTarget?.subType === 'strong' && !targetIsAccess(assertionOfTarget.term) &&
     isAssertableTerm(assertionOfTarget.term)) {
     // BIND(expr as ?x) -- ?x is strongly asserted and pinned to a assertable term.
     // We know we have a strong target assertion, against a ground term, and a compound expression.
@@ -687,7 +687,7 @@ function pushIntoGraph(
   }
   const assertedGraphName = assertions.get(graphVar);
 
-  if (assertedGraphName?.subType === 'strong' && !isAccessTarget(assertedGraphName.term) &&
+  if (assertedGraphName?.subType === 'strong' && !targetIsAccess(assertedGraphName.term) &&
     isAssertableTerm(assertedGraphName.term) &&
     // A term outside `?g`'s range has already emptied the plan in `normalisedFor`, so what can still be
     // asserted here is a graph name: a NamedNode, or the BlankNode a dataset may equally name a graph by.

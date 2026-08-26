@@ -17,6 +17,7 @@ import {
   assertTermType,
   compareAccesses,
   variablesReadByConjunct,
+  hasTarget,
   impliesBound,
   targetIsAccess,
   isAssertableTerm,
@@ -397,6 +398,8 @@ function rewritePattern(
  * once, and a row Θ survives is a row that satisfies it - which is what sets this apart from the
  * pattern rules, a pattern stating what it can match where a row *is* the answer. Row-level filtering keeps
  * duplicate rows duplicated, so multiplicities are preserved.
+ *
+ * The clone that costs is taken only for the rows {@link agreesWithPins} could not already rule out.
  * @param c - The transformation context
  * @param values - The VALUES to prune
  * @param assertions - The conjunction to prune it by
@@ -410,8 +413,9 @@ function pruneValues(c: TransformContext, values: Algebra.Values, assertions: As
   const isRebuilt = (name: string): boolean =>
     substitution.has(name) || assertions.get(name)?.subType === 'unbound';
   const newBindings: Algebra.Values['bindings'] = [];
+  const pins = termPinsOn(assertions, values.variables);
   for (const binding of values.bindings) {
-    if (rowSatisfies(assertions, values.variables, binding)) {
+    if (agreesWithPins(pins, binding) && rowSatisfies(assertions, values.variables, binding)) {
       newBindings.push(Object.fromEntries(
         Object.entries(binding).filter(([ name ]) => !isRebuilt(name)),
       ));
@@ -428,6 +432,65 @@ function pruneValues(c: TransformContext, values: Algebra.Values, assertions: As
     c.AF.createBgp([]) :
     c.AF.createValues(remainingVars, newBindings);
   return bindAssertedTerms(c, pruned, substitution);
+}
+
+/** A column of a VALUES and the term Θ pins it to. */
+interface ColumnPin {
+  /** The name of the column */
+  name: string;
+  /** The term every value of it equals */
+  term: RDF.Term;
+}
+
+/**
+ * The term each column of a VALUES is pinned to, for the columns Θ pins to one.
+ *
+ * Taken once per VALUES so that {@link agreesWithPins} can turn away the rows that disagree with a pin
+ * without paying for the clone {@link rowSatisfies} takes. The weak form counts: a row binding the column
+ * to a term satisfies the `bound` half of `¬bnd(?x) ∨ ?x ≡ c`, which leaves the pin to answer for.
+ *
+ * Only a *term* pin is read. A group pinned to a shape, or one that is merely equated with another column,
+ * is left to the full check - the pre-filter has to be exact about what it turns away, not complete.
+ * @param assertions - The conjunction to read the pins off
+ * @param variables - The columns of the VALUES
+ * @returns the pinned columns and the term each is pinned to
+ */
+function termPinsOn(
+  assertions: AssertionConjunction,
+  variables: readonly RDF.Variable[],
+): ColumnPin[] {
+  const pins: ColumnPin[] = [];
+  for (const variable of variables) {
+    const assertion = assertions.get(variable.value);
+    if (assertion !== undefined && hasTarget(assertion) && !targetIsAccess(assertion.term)) {
+      pins.push({ name: variable.value, term: assertion.term });
+    }
+  }
+  return pins;
+}
+
+/**
+ * Whether a row could satisfy Θ as far as its {@link termPinsOn | term pins} go, which is the cheap half of
+ * {@link rowSatisfies}.
+ *
+ * **Sound because a pin is the same equality either way round.** Asserting the term a row holds onto a group
+ * already pinned to a term meets the two pins, and that meet is `term.equals` and nothing else, so a row
+ * disagreeing with a pin is a row the full check has to reject - whichever column it reaches first. Nothing
+ * a row asserts can move a group off a term pin either: a merge keeps the pin it met, or fails. A row this
+ * lets through is still checked in full, so being generous costs only the check it was going to pay for
+ * anyway - an unbound column, a column Θ says nothing about, and a shape all go that way.
+ * @param pins - The term pins of the columns
+ * @param binding - The row to check
+ * @returns whether the row agrees with every pin it holds a term for
+ */
+function agreesWithPins(
+  pins: readonly ColumnPin[],
+  binding: Algebra.Values['bindings'][number],
+): boolean {
+  return pins.every(({ name, term }) => {
+    const value = binding[name];
+    return value === undefined || term.equals(value);
+  });
 }
 
 /**

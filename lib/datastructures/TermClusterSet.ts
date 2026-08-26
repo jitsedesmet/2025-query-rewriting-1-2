@@ -60,9 +60,10 @@ export interface PinMeet<Term> {
  * The two users of this differ in what a pin conflict means, which is why {@link setPin} reports one
  * rather than raising it. For the unfolding ({@link ClusterSolver}) a group asked to be two terms at once
  * is a broken mapping, and it throws; for an assertion conjunction it is an ordinary contradiction, and it
- * becomes the empty operation. They also differ in the terms they allow - the solver narrows to a
- * {@link RawBasicTerm} by the range of the triple position - hence the second type parameter, and in what
- * meeting two pins comes to, hence {@link meetPins}.
+ * becomes the empty operation. They also differ in the terms they allow - a pin of the solver holds a
+ * {@link RawBasicTerm}, every triple term of a mapping head being decomposed into a shape before it
+ * reaches one - hence the second type parameter, and in what meeting two pins comes to, hence
+ * {@link meetPins}.
  *
  * **Ranges** live here rather than only in the solver, because the same question is asked on both sides:
  * a group in a subject position holds no Literal and no triple term, which is what makes the nesting of

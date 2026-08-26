@@ -170,8 +170,10 @@ function collectMappingHeadBindsAndFilters({ clusterSolver, mappingHeadVars, AF 
     }
     handledGroups.add(group);
 
-    const groupTerm = clusterSolver.termOf(group);
-    const groupMappingVars = clusterSolver.groupToValues[group].filter(val => !val.value.startsWith('uq'));
+    // A shape reads back as the triple term it stands for, so a mapping head writing one is restricted
+    // here the way a head writing an IRI is.
+    const groupTerm = clusterSolver.resolvedTermOf(group);
+    const groupMappingVars = clusterSolver.mappingVarsOf(group);
 
     // Handle term restrictions first!
     if (groupTerm) {

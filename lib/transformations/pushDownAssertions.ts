@@ -422,6 +422,15 @@ function substituteIntoPath(c: TransformContext, path: Algebra.Path, assertions:
  * is what keeps the pass a fixpoint over its own output, since a condition reading through the re-bound
  * variable is one the next run pushes through the re-binding and writes this way anyway.
  *
+ * **Here and nowhere higher**, which is the whole of why this is a substitution over a condition rather
+ * than a rewrite the pass could do wherever it writes one. `?o_s` is bound by the pattern being built
+ * here and by nothing else, and whether any pattern writes it is decided *at the leaf*, after the
+ * conjunction has been normalised against it: a shape no position of which says anything is left as
+ * `isTRIPLE(?o)` and coins nothing, a VALUES discharges the same conjunction by pruning rows, and a
+ * barrier or a weak position never writes one at all. A rewrite made on the way *down* - where
+ * {@link swapWith} passes the conditions it keeps above an operation - would be naming a variable that
+ * the branch below may never bind, and a sibling branch almost certainly will not.
+ *
  * That also decides where it goes. A condition mentioning none of the re-bound variables holds of the
  * pattern alone, so it sits directly on it, *below* the re-binding - which is where the next run would
  * put it, and which lets the re-binding stay the last thing the plan does. One that still mentions one -

@@ -2055,6 +2055,20 @@ GROUP BY ?x?y`,
       );
     });
 
+    it('reads a chain as deep as the pattern wrote it, in the one run', ({ expect }) => {
+      // Below a shape that is written, every nested one is written with it, so both steps of the chain
+      // resolve: `OBJECT(OBJECT(?o))` is the variable the inner shape put in its object position. The
+      // condition never mentions an accessor again, and it takes one run of the pass to get there.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(subject(?o), :a) && isIRI(object(object(?o)))) }',
+        `SELECT ( <<( <ex://a> ?o_p <<( ?o_o_s ?o_o_p ?o_o_o )>> )>> AS ?o ) ?p ?s WHERE {
+  ?s ?p <<( <ex://a> ?o_p <<( ?o_o_s ?o_o_p ?o_o_o )>> )>> .
+  FILTER ( ISIRI( ?o_o_o ) )
+}`,
+      );
+    });
+
     it('drops the kind of a position the term written there already decides', ({ expect }) => {
       // The other side of the test above: `isIRI` says which kind of term the subject is, and the
       // pattern writes *which* term it is - a NamedNode, which is the kind. A term decides its own kind,

@@ -426,12 +426,12 @@ export class AssertionConjunction {
    * values, as a substitution over the condition it writes rather than over Θ itself. Θ keeps saying
    * `OBJECT(?o)` where the plan will say `?o_o`, and the two meet only when the condition is written.
    *
-   * Not because a coined name may never reach Θ - it does, one step later and by the ordinary route: the
-   * condition written here is read back by the pass on its way past, and `?o_o` enters Θ from it like
-   * any other variable of the plan, checked against the very pattern that binds it. That is the rule
-   * D6 is really about, and writing the name down rather than injecting it is what keeps to it: **a name
-   * enters Θ only from a condition read against the operation it is about**, never from a rewrite that
-   * knows what it is *going* to write.
+   * Not because a coined name may never reach Θ - it does, later in this same traversal and by the
+   * ordinary route: the condition written here is read back as the pass carries on past it, and `?o_o`
+   * enters Θ from it like any other variable of the plan, checked against the very pattern that binds
+   * it. That is the rule D6 is really about, and writing the name down rather than injecting it is what
+   * keeps to it: **a name enters Θ only from a condition read against the operation it is about**, never
+   * from a rewrite that knows what it is *going* to write.
    *
    * The substitution has to be over the condition for two reasons of its own, either of which would sink
    * a Θ built over the coined names:

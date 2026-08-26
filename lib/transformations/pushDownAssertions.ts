@@ -711,14 +711,16 @@ function pushIntoJoin(
  * @returns the merged join, or `undefined` when fewer than two operands are BGPs
  */
 function mergeBGPsOfJoin(c: TransformContext, join: Algebra.Join): Algebra.Operation | undefined {
-  let indexOfFirst = -1;
+  // An index into `notBgps`: how many non-BGP operands the first BGP was preceded by, so the merged BGP
+  // goes back where the first of them stood and the operand order the join had is kept.
+  let insertionPoint = -1;
   const bgps: Algebra.Bgp[] = [];
   const notBgps: Algebra.Operation[] = [];
-  for (const [ index, branch ] of join.input.entries()) {
+  for (const branch of join.input) {
     if (branch.type === 'bgp') {
       bgps.push(branch);
-      if (indexOfFirst === -1) {
-        indexOfFirst = index;
+      if (insertionPoint === -1) {
+        insertionPoint = notBgps.length;
       }
     } else {
       notBgps.push(branch);
@@ -731,7 +733,7 @@ function mergeBGPsOfJoin(c: TransformContext, join: Algebra.Join): Algebra.Opera
   if (notBgps.length === 0) {
     return merged;
   }
-  return c.AF.createJoin([ ...notBgps.slice(0, indexOfFirst), merged, ...notBgps.slice(indexOfFirst) ]);
+  return c.AF.createJoin([ ...notBgps.slice(0, insertionPoint), merged, ...notBgps.slice(insertionPoint) ], true);
 }
 
 /**

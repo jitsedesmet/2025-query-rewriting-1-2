@@ -24,11 +24,11 @@ export type PinChildren = Readonly<Record<TriplePosition, number>>;
 /**
  * The constraint a group carries: every value in it equals what the pin says.
  *
- * A `term` pin *is* the value. A `triple` pin is a **shape** - the value is a triple term, and each of
- * its three positions is a group in its own right - so it fixes a value only once all three positions
- * are decided, and constrains it partially until then. Holding group ids rather than terms is what makes
- * that possible: a position nobody named is an *anonymous* group, which unifies and carries a pin and a
- * range like any other while contributing nothing to the members of the set.
+ * A `term` pin *is* the value. A `triple` pin is a **shape** - the value is a triple term, and each of its
+ * three positions is a group in its own right - so it fixes a value only once all three are decided, and
+ * constrains it partially until then. Holding group ids rather than terms is what makes a position nobody
+ * named an *anonymous* group: it unifies and carries a pin and a range like any other, while contributing
+ * nothing to the members of the set.
  */
 export type Pin<Term> = TriplePin | { kind: 'term'; term: Term };
 
@@ -39,22 +39,16 @@ export type TriplePin = { kind: 'triple' } & PinChildren;
  * One thing that has to hold of the groups, and does not yet: two of them hold the same value, or one of
  * them carries a pin.
  *
- * Establishing either may establish further ones - merging two groups meets their pins, and meeting two
- * pins merges the groups their positions name - so they are collected rather than applied on the spot,
- * and {@link TermClusterSet.unifyGroups} drains the collection through a work list. Recursing instead
+ * Collected rather than applied on the spot, since establishing either may establish further ones - merging
+ * two groups meets their pins, and meeting two pins merges the groups their positions name - and recursing
  * would re-enter a merge halfway through the one running.
  */
 export type GroupConstraint<Term> =
   { kind: 'pin'; group: number; pin: Pin<Term> } | { kind: 'unify'; left: number; right: number };
 
 /**
- * What comes of meeting the two pins a group is asked to carry at once: the pin it is left with, plus
- * what meeting them *entailed* about other groups. A meet that no value satisfies is reported as `false`
- * instead - the contradiction.
- *
- * Two shapes entail that their positions are pairwise equal; a ground triple term meeting a shape
- * entails what each position of that shape is. Which is the same pair of things the work list already
- * handles, so it is those it is written in.
+ * What comes of meeting the two pins a group is asked to carry at once: the pin it is left with, plus what
+ * meeting them *entailed* about other groups. A meet no value satisfies is reported as `false` instead.
  */
 export interface PinMeet<Term> {
   /** The pin the group keeps - the more informative of the two. */
@@ -64,9 +58,7 @@ export interface PinMeet<Term> {
 }
 
 /**
- * The meet of two shapes on one group, which both users of the lattice answer the same way: one value
- * spelt twice, so its positions are pairwise one value too. That is syntactic unification, and it is what
- * makes everything known about `SUBJECT(?o)` known about `SUBJECT(?x)` as soon as the two are unified.
+ * The meet of two shapes on one group: one value spelt twice, so its positions are pairwise one value too.
  * @param left - One of the two shapes, and the one the group keeps
  * @param right - The other
  * @returns the pin the group keeps and the unifications the meet entailed
@@ -79,34 +71,31 @@ export function meetShapes<Term>(left: TriplePin, right: TriplePin): PinMeet<Ter
 }
 
 /**
- * A {@link ClusterSet} whose groups may be *pinned*: every value in the group equals what the pin says -
- * a term, or the shape of a triple term whose positions are groups in their own right.
+ * A {@link ClusterSet} whose groups may be *pinned*: every value in the group equals what the pin says - a
+ * term, or the shape of a triple term whose positions are groups in their own right.
  *
- * The two users of this differ in what a pin conflict means, which is why {@link setPin} reports one
- * rather than raising it. For the unfolding ({@link ClusterSolver}) a group asked to be two terms at once
- * is a broken mapping, and it throws; for an assertion conjunction it is an ordinary contradiction, and it
- * becomes the empty operation. They also differ in the terms they allow - a pin of the solver holds a
- * {@link RawBasicTerm}, every triple term of a mapping head being decomposed into a shape before it
- * reaches one - hence the second type parameter, and in what meeting two pins comes to, hence
+ * Its two users differ in what a pin conflict means, which is why {@link setPin} reports one rather than
+ * raising it: for the unfolding ({@link ClusterSolver}) a group asked to be two terms at once is a broken
+ * mapping, for an assertion conjunction it is an ordinary contradiction. They also differ in the terms a
+ * pin may hold, hence the second type parameter, and in what meeting two pins comes to, hence
  * {@link meetPins}.
  *
- * **Ranges** live here rather than only in the solver, because the same question is asked on both sides:
- * a group in a subject position holds no Literal and no triple term, which is what makes the nesting of
- * shapes run down the `object` chain and no further, and what decides a pin the position cannot hold
- * before anything downstream has to type-check it.
+ * **Ranges** live here rather than only in the solver, since the same question is asked on both sides: a
+ * group in a subject position holds no Literal and no triple term, which is what confines the nesting of
+ * shapes to the `object` chain.
  *
  * A pin makes the child DAG a real graph, and two invariants keep it well founded:
  *
- * - **occurs check**: a group may not reach itself through the pins, since `?o ≡ <<( ?o … )>>` has no
- *   solution and resolving such a group to a term would not terminate. Checked over the whole graph after
- *   a unification settles, since a merge closes a cycle just as a pin does.
+ * - **occurs check**: a group may not reach itself through the pins, `?o ≡ <<( ?o ... )>>` having no
+ *   solution. Checked over the whole graph after a unification settles, since a merge closes a cycle just
+ *   as a pin does.
  * - **liveness**: a group that is the child of a live pin survives {@link remove} however few members it
  *   has left, or the pin pointing at it would dangle.
  */
 export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> extends ClusterSet<T> {
   /** Maps group ID to what the group is pinned to (if anything) - read through {@link pinOf}. */
   protected groupToPin: Record<number, Pin<Term> | undefined>;
-  /** Maps group ID to the term types its value may have, needed for groups that are e.g. the subject of a TripleTerm */
+  /** Maps group ID to the term types its value may have - read through {@link rangeOf}. */
   protected groupToRange: Record<number, RangeSet>;
   /**
    * A history of oldGroups (keys) that got merged into newGroups (values).
@@ -115,9 +104,9 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
   protected groupMergeHistory: Record<number, number>;
 
   /**
-   * @param toId how to transform the object to a string (key) representation
-   * @param meetPins a callback that merges/ meets two pins,
-   *   returns false if the two pins merging forms a contradiction.
+   * @param toId - How to transform a value into its string key
+   * @param meetPins - Meets the two pins a group is asked to carry at once, reporting `false` when no value
+   * satisfies both
    */
   public constructor(
     toId: (value: T) => string,
@@ -148,7 +137,11 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
     copy.groupMergeHistory = { ...this.groupMergeHistory };
   }
 
-  /** The group a merged-away id has become - the identity for one that is still its own group. */
+  /**
+   * Dereferences a group id through the merge history.
+   * @param group - The id to resolve
+   * @returns the group it has become, or itself when it is still its own group
+   */
   public resolveGroup(group: number): number {
     let resolved = group;
     while (this.groupMergeHistory[resolved] !== undefined) {
@@ -157,18 +150,30 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
     return resolved;
   }
 
-  /** What the group is pinned to, or `undefined` when nothing fixes its value. */
+  /**
+   * The pin of a group.
+   * @param group - The group to look up
+   * @returns what it is pinned to, or `undefined` when nothing fixes its value
+   */
   public pinOf(group: number): Pin<Term> | undefined {
     return this.groupToPin[this.resolveGroup(group)];
   }
 
-  /** The term the group is pinned to, or `undefined` when nothing pins it, or a shape does instead. */
+  /**
+   * The term a group is pinned to.
+   * @param group - The group to look up
+   * @returns the term, or `undefined` when nothing pins it, or a shape does instead
+   */
   public termOf(group: number): Term | undefined {
     const pin = this.pinOf(group);
     return pin?.kind === 'term' ? pin.term : undefined;
   }
 
-  /** The positions of the shape the group is pinned to, or `undefined` when it is not pinned to one. */
+  /**
+   * The positions of the shape a group is pinned to.
+   * @param group - The group to look up
+   * @returns the group per position, or `undefined` when it is not pinned to a shape
+   */
   public childrenOf(group: number): PinChildren | undefined {
     const pin = this.pinOf(group);
     if (pin?.kind !== 'triple') {
@@ -181,28 +186,42 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
     };
   }
 
-  /** The term types the group's value may have. */
+  /**
+   * The term types a group's value may have.
+   * @param group - The group to look up
+   * @returns its range, the top of the lattice when nothing narrowed it
+   */
   public rangeOf(group: number): RangeSet {
     return this.groupToRange[this.resolveGroup(group)] ?? objectRange;
   }
 
   /**
-   * Pins a term onto a group, or reports that the group already carries something incompatible.
-   * @returns `false` when the two cannot both hold, leaving the set in a state no caller may read.
+   * Pins a term onto a group.
+   * @param group - The group to pin
+   * @param term - The term every value of it equals
+   * @returns `false` when the group already carries something incompatible, which leaves the set in a state
+   * no caller may read
    */
   public setTerm(group: number, term: Term): boolean {
     return this.setPin(group, { kind: 'term', term });
   }
 
   /**
-   * Pins a group, meeting the pin with whatever the group already carries and draining everything that
-   * meet decides ({@link PinMeet}).
-   * @returns `false` on a contradiction, after which the set holds no meaningful state.
+   * Pins a group, meeting the pin with whatever the group already carries and draining everything that meet
+   * decides ({@link PinMeet}).
+   * @param group - The group to pin
+   * @param pin - What every value of it equals
+   * @returns `false` on a contradiction, after which the set holds no meaningful state
    */
   private setPin(group: number, pin: Pin<Term>): boolean {
     return this.resolveAllConstraints([{ kind: 'pin', group, pin }]);
   }
 
+  /**
+   * Gives a group the shape of a triple term, creating an anonymous group per position where it has none.
+   * @param group - The group to shape
+   * @returns the group per position, or `false` when the group cannot hold a triple term
+   */
   public assertTriplePin(group: number): PinChildren | false {
     const resolved = this.resolveGroup(group);
     const known = this.childrenOf(resolved);
@@ -222,8 +241,10 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
   }
 
   /**
-   * Narrows what terms the group's value may have.
-   * @returns `false` when nothing is left for it to be, or when its pin is not one of those terms.
+   * Narrows what terms a group's value may have.
+   * @param group - The group to narrow
+   * @param range - The term types to narrow it to
+   * @returns `false` when nothing is left for it to be, or when its pin is not one of those terms
    */
   public narrowRange(group: number, range: RangeSet): boolean {
     const resolved = this.resolveGroup(group);
@@ -234,7 +255,9 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
 
   /**
    * Unifies two groups by id - the merge {@link mergeGroups} is, for the groups no value names.
-   * @returns `false` when the two cannot hold the same value.
+   * @param left - One group
+   * @param right - The other
+   * @returns `false` when the two cannot hold the same value
    */
   public unifyGroups(left: number, right: number): boolean {
     return this.resolveAllConstraints([{ kind: 'unify', left, right }]);
@@ -242,8 +265,11 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
 
   /**
    * Merges two groups, carrying over everything the disappearing one held.
-   * @returns `conflict` when the two could not hold the same value, which leaves the set in a state no
-   * caller may read - what to do about that is up to the two callers.
+   * @param from - One of the values whose group to merge
+   * @param to - The other
+   * @returns the ids involved and whether the two could not hold the same value, which leaves the set in a
+   * state no caller may read - what to do about that is up to the two subclasses; `undefined` when both
+   * values were already in one group
    */
   public override mergeGroups(from: T, to: T): { oldGroup: number; newGroup: number; conflict: boolean } | undefined {
     const fromGroup = this.getGroup(from);
@@ -258,8 +284,8 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
 
   /**
    * Runs a work list of merges and pins to exhaustion.
-   *
-   * @return false in case of a contradiction
+   * @param work - The constraints to establish, which establishing them adds to
+   * @returns `false` on a contradiction
    */
   private resolveAllConstraints(work: GroupConstraint<Term>[]): boolean {
     while (work.length > 0) {
@@ -277,7 +303,10 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
 
   /**
    * Merges two live groups, queueing whatever meeting their pins decides.
-   * @return false on a contradiction
+   * @param left - One group
+   * @param right - The other
+   * @param work - The work list to queue onto
+   * @returns `false` on a contradiction
    */
   private unite(left: number, right: number, work: GroupConstraint<Term>[]): boolean {
     const merged = this.mergeGroupIds(left, right);
@@ -298,7 +327,13 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
     return oldPin === undefined || this.place(newGroup, oldPin, work);
   }
 
-  /** Puts a pin on a group, meeting it with the one already there and queueing what that decides. */
+  /**
+   * Puts a pin on a group, meeting it with the one already there and queueing what that decides.
+   * @param group - The group to pin
+   * @param pin - The pin to place
+   * @param work - The work list to queue onto
+   * @returns `false` on a contradiction
+   */
   private place(group: number, pin: Pin<Term>, work: GroupConstraint<Term>[]): boolean {
     const currentPin = this.groupToPin[group];
     let keptPin = pin;
@@ -318,7 +353,12 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
     );
   }
 
-  /** Whether the pin - if there is one - is a term the range still admits. */
+  /**
+   * Whether the pin - if there is one - is a term the group's range still admits.
+   * @param group - The group whose range to read
+   * @param pin - The pin to check
+   * @returns whether the two agree
+   */
   private rangeAdmits(group: number, pin: Pin<Term> | undefined): boolean {
     if (pin === undefined) {
       return true;
@@ -327,9 +367,10 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
   }
 
   /**
-   * Whether any group is its own descendant, which no value satisfies: a triple term is strictly larger
-   * than each of its components, so `?o ≡ <<( ?o … )>>` is unsatisfiable - and resolving such a group to
-   * a term would not terminate.
+   * Whether any group is its own descendant, which no value satisfies: a triple term is strictly larger than
+   * each of its components, so `?o ≡ <<( ?o ... )>>` is unsatisfiable - and resolving such a group to a term
+   * would not terminate.
+   * @returns whether the pins close a cycle
    */
   private hasCycle(): boolean {
     // Done, for example because you already descended top level, and did not find any cycle, can shortcut and stop.
@@ -352,28 +393,41 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
     return Object.keys(this.groupToValues).some(group => descendHasCycle(Number(group)));
   }
 
-  /** A pinned group still constrains its last remaining member, so it survives {@link remove}. */
+  /**
+   * A pinned group still constrains its last remaining member, so it survives {@link remove}.
+   * @param group - The group to check
+   * @returns whether it is pinned
+   */
   protected override carriesInformation(group: number): boolean {
     return this.groupToPin[group] !== undefined;
   }
 
   /**
    * A group a live pin points at survives however few members it has: it is a *position* of a shape, and
-   * dropping it would leave the shape naming a group that is no longer there. The sharpest trap in the
-   * lattice, since the group nobody named is exactly the one {@link remove} would otherwise take away.
+   * dropping it would leave that shape naming a group that is no longer there.
+   * @param group - The group to check
+   * @returns whether it is worth keeping
    */
   protected override isLive(group: number): boolean {
     return super.isLive(group) || this.isPinChild(group);
   }
 
-  /** Whether some group's shape holds this one in one of its positions. */
+  /**
+   * Whether some group's shape holds this one in one of its positions.
+   * @param group - The group to look for
+   * @returns whether anything points at it
+   */
   private isPinChild(group: number): boolean {
     const resolved = this.resolveGroup(group);
     return Object.keys(this.groupToPin)
       .some(owner => childGroupsOf(this.childrenOf(Number(owner))).includes(resolved));
   }
 
-  /** An anonymous group for one position of a shape, holding what that position admits and no more. */
+  /**
+   * Creates an anonymous group for one position of a shape, holding what that position admits and no more.
+   * @param position - The position it stands for
+   * @returns the new group
+   */
   private createPositionGroup(position: TriplePosition): number {
     const group = this.createEmptyGroup();
     this.groupToRange[group] = rangeOfPosition(position);
@@ -394,7 +448,11 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
   }
 }
 
-/** The three positions of a shape as a list, for the rules that ask something of every one of them. */
+/**
+ * The three positions of a shape as a list, for the rules that ask something of every one of them.
+ * @param children - The positions of a shape, or `undefined` for a group without one
+ * @returns the groups, empty for a group without a shape
+ */
 export function childGroupsOf(children: PinChildren | undefined): number[] {
   return children === undefined ? [] : [ children.subject, children.predicate, children.object ];
 }

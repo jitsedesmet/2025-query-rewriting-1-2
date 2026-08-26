@@ -134,6 +134,15 @@ export class AssertionConjunction {
    * the stamp it was taken at unreachable. See {@link readingsPerGroup} for why that is the whole of it.
    */
   private readings: { revision: number; value: ReadonlyMap<number, readonly Access[]> } | undefined;
+  /**
+   * The groups {@link namedMembers} was asked about, with the
+   * {@link datastructures/ClusterSet!ClusterSet.revision | revision} of {@link clusters} they were read at.
+   *
+   * Filled in group by group rather than in one walk, most of the callers wanting a single group. It goes
+   * stale the way {@link readings} does, and for the same reason: the members of a group are a function of
+   * `clusters` alone, and no two states of any two sets share a stamp.
+   */
+  private members: { revision: number; value: Map<number, readonly string[]> } | undefined;
 
   public constructor() {
     this.clusters = new AssertionClusterSet();
@@ -1058,12 +1067,29 @@ export class AssertionConjunction {
   }
 
   /**
-   * The variables in a group.
+   * The variables in a group, memoised per state of {@link clusters}.
+   *
+   * Sorting is what makes a group's representative the same one every time, and so what keeps the pass
+   * idempotent - but hardly anything asks about a group once. {@link get} takes a representative per
+   * variable it is asked about, {@link rebuildingSubstitution} one per group it rebuilds, and
+   * {@link walkReadingsPerGroup} two per group, so a pushdown over a filter of a few hundred conditions
+   * sorts some thousands of times over, under an eighth of which reads a group this has not already got.
    * @param group - The group to read
-   * @returns them lexicographically, the first being the group's representative
+   * @returns them lexicographically, the first being the group's representative; handed out read-only, the
+   * memo being shared
    */
-  private namedMembers(group: number): string[] {
-    return [ ...this.clusters.valuesOf(group) ].sort((left, right) => left.localeCompare(right));
+  private namedMembers(group: number): readonly string[] {
+    const revision = this.clusters.revision;
+    if (this.members?.revision !== revision) {
+      this.members = { revision, value: new Map() };
+    }
+    const known = this.members.value.get(group);
+    if (known !== undefined) {
+      return known;
+    }
+    const sorted = [ ...this.clusters.valuesOf(group) ].sort((left, right) => left.localeCompare(right));
+    this.members.value.set(group, sorted);
+    return sorted;
   }
 
   /**

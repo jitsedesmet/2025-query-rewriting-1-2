@@ -318,11 +318,23 @@ function asAssertionTarget(expression: Algebra.Expression): AssertionTarget | un
  */
 export type TransferSource = AssertionTarget | TripleConstruction;
 
-/** The three positions a triple term construction builds its value out of. */
+/**
+ * The three positions a triple term construction builds its value out of.
+ *
+ * All three are a {@link TransferSource}, although only the object of a triple term can *hold* another
+ * one: this says what the BIND wrote, not what a value can be, and `TRIPLE(TRIPLE(?a, ?b, ?c), ?p, ?o)`
+ * is a perfectly writable expression. Reading it as the construction it is, is what **decides** it - the
+ * transfer opens a shape on the subject position, the positional range refuses it exactly as it refuses
+ * a Literal there, and the operation is empty. Which is the right answer rather than a lucky one: such a
+ * construction raises, so the target is unbound in every solution, and a transfer is only ever made
+ * where Θ implies it is bound.
+ *
+ * Narrowing subject and predicate to an {@link AssertionTarget} would hand that expression back as
+ * "nothing Θ can name", and the assertion would sit above the EXTEND saying nothing - a lost emptiness
+ * proof, for a type that would still not be the one the values have.
+ */
 export interface TripleConstruction {
-  // TODO: can only be assertionTarget?
   subject: TransferSource;
-  // TODO: can only be assertionTarget?
   predicate: TransferSource;
   object: TransferSource;
 }

@@ -2108,6 +2108,28 @@ GROUP BY ?x?y`,
       );
     });
 
+    it('empties the plan for a triple term built into a position no triple term has one in', ({ expect }) => {
+      // The construction is read as one wherever it is written, and that is what decides it: the
+      // transfer opens a shape on the subject position of `?t`, whose range refuses a triple term the
+      // way it refuses a Literal. Right rather than lucky - `TRIPLE(TRIPLE(…), …)` raises, so `?t` is
+      // unbound in every solution, and the assertion the transfer was made for implies it is bound.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          ?s ?p ?o
+          BIND(TRIPLE(TRIPLE(?s, ?p, ?o), ?p, ?o) AS ?t)
+          FILTER(sameTerm(subject(?t), :a))
+        }`,
+        `SELECT ?o ?p ?s ?t WHERE {
+  {
+    ?s ?p ?o .
+    BIND( TRIPLE( TRIPLE( ?s , ?p , ?o ) , ?p , ?o ) AS ?t )
+  }
+  FILTER ( FALSE )
+}`,
+      );
+    });
+
     it('transfers onto the access a BIND reads, which then shapes the variable it reads through', ({ expect }) => {
       // `BIND(SUBJECT(?o) AS ?x)` under A⟨?x ≡ ?s⟩ leaves `SUBJECT(?o) ≡ ?s` below, which is a shape on
       // `?o` and materialises into the pattern - where the assertion had nowhere to go before, `?x`
@@ -2949,6 +2971,17 @@ GROUP BY ?x?y`,
         BIND(<<( ?s :p ?y )>> AS ?t)
         FILTER(sameTerm(subject(?t), :a))
       }`, 1);
+    });
+
+    it('returns nothing for a triple term built into a position no triple term has one in', async({ expect }) => {
+      // The engine's half of the rule the transfer reads off the ranges: the construction raises, so
+      // `?t` is never bound and the condition never holds. The rewritten plan says so structurally,
+      // and both answers are empty.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :p ?y
+        BIND(TRIPLE(TRIPLE(?s, :p, ?y), :p, ?y) AS ?t)
+        FILTER(isTRIPLE(?t))
+      }`, 0);
     });
 
     it('keeps the rows a shape transferred onto an accessor selects', async({ expect }) => {

@@ -442,7 +442,7 @@ written back in accessor form, so it does not round-trip verbatim — that is ac
 
 ## Tests
 
-Extend the four layers that now exist; keep every current test green (**376 passing, 1 skipped** after
+Extend the four layers that now exist; keep every current test green (**378 passing, 1 skipped** after
 step 5, from the 359 step 4 left, the 344 steps 0 to 3 left and the 261 the first two left).
 
 * `test/termClusterSet.test.ts` (new in step 2) — the pin lattice on its own: pins, shapes, the

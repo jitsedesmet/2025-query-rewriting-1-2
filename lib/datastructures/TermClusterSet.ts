@@ -8,6 +8,16 @@ export type TriplePosition = 'subject' | 'predicate' | 'object';
 /** The three positions, in the order a triple term writes them. */
 export const triplePositions: readonly TriplePosition[] = [ 'subject', 'predicate', 'object' ];
 
+/**
+ * Whether a name is one of the three positions - which is also whether an operator is the accessor that
+ * reads it, the two being spelt the same.
+ * @param name - The name to check
+ * @returns whether it is a {@link TriplePosition}
+ */
+export function isTriplePosition(name: string): name is TriplePosition {
+  return (<readonly string[]> triplePositions).includes(name);
+}
+
 /** The groups a triple pin holds its three components in, one per position. */
 export type PinChildren = Readonly<Record<TriplePosition, number>>;
 
@@ -51,6 +61,21 @@ export interface PinMeet<Term> {
   pin: Pin<Term>;
   /** What meeting the two entailed, for the work list to establish in turn. */
   entailed: GroupConstraint<Term>[];
+}
+
+/**
+ * The meet of two shapes on one group, which both users of the lattice answer the same way: one value
+ * spelt twice, so its positions are pairwise one value too. That is syntactic unification, and it is what
+ * makes everything known about `SUBJECT(?o)` known about `SUBJECT(?x)` as soon as the two are unified.
+ * @param left - One of the two shapes, and the one the group keeps
+ * @param right - The other
+ * @returns the pin the group keeps and the unifications the meet entailed
+ */
+export function meetShapes<Term>(left: TriplePin, right: TriplePin): PinMeet<Term> {
+  return {
+    pin: left,
+    entailed: triplePositions.map(position => ({ kind: 'unify', left: left[position], right: right[position] })),
+  };
 }
 
 /**

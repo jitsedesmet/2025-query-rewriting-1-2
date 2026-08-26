@@ -2,7 +2,8 @@ import type * as RDF from '@rdfjs/types';
 import type { Algebra as Alg } from '@traqula/algebra-transformations-1-2';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { ClusterSolver } from '../ClusterSolver.js';
-import { objectRange, predicateRange, subjectRange } from '../RangeSet.js';
+import { isTriplePosition, triplePositions } from '../datastructures/TermClusterSet.js';
+import { rangeOfPosition } from '../RangeSet.js';
 import type { TransformContext } from '../transformContext.js';
 import type { Mapping, MappingHead } from '../types.js';
 import { isRdfQuad, isRdfVar } from '../utils/typeGuards.js';
@@ -27,12 +28,38 @@ import { isRdfQuad, isRdfVar } from '../utils/typeGuards.js';
  */
 
 /**
- * Extracts subject, predicate, object from a mapping head or quad.
- * @param head - The mapping head or quad
- * @returns Array of [subject, predicate, object]
+ * Registers what the pattern says about a triple term the mapping head names with a plain variable.
+ *
+ * Nothing unifies structurally here: the head holds the value in one variable, so what the pattern says
+ * about a *position* of that value is said about the accessor reading it - `SUBJECT(?y)`, and
+ * `SUBJECT(OBJECT(?y))` for a triple term nested inside one. Which side is the value and which the shape
+ * is what separates this from the head writing the triple term itself, where the two are unified
+ * position by position instead.
+ * @param c transformation context
+ * @param tPVars set of variables in the triple pattern, added to as they are found
+ * @param quad the triple term the pattern writes
+ * @param expression the expression reading the value that triple term has to match
  */
-function headSPO(head: MappingHead): (MappingHead['subject'] | MappingHead['predicate'] | MappingHead['object'])[] {
-  return [ head.subject, head.predicate, head.object ];
+function registerPatternQuadAgainstExpression(
+  c: TransformContext,
+  tPVars: Record<string, RDF.Variable>,
+  quad: RDF.BaseQuad,
+  expression: Alg.Expression,
+): void {
+  for (const position of triplePositions) {
+    const patternTerm = quad[position];
+    // The accessor reading a position is spelt like the position itself.
+    const positionExpression = c.AF.createOperatorExpression(position, [ expression ]);
+    if (isRdfQuad(patternTerm)) {
+      registerPatternQuadAgainstExpression(c, tPVars, patternTerm, positionExpression);
+    } else {
+      if (isRdfVar(patternTerm)) {
+        tPVars[patternTerm.value] = patternTerm;
+        patternTerm.range = rangeOfPosition(position);
+      }
+      c.clusterSolver.register(positionExpression, patternTerm);
+    }
+  }
 }
 
 /**
@@ -51,39 +78,18 @@ function iterateMappingHead(
   head: MappingHead,
   pattern: Alg.Pattern | RDF.BaseQuad,
 ): void {
-  // Static array that allows us to access the range using the position index.
-  const varRangesInPos = <const> [ subjectRange, predicateRange, objectRange ];
-  const spoPattern = [ pattern.subject, pattern.predicate, pattern.object ];
-  for (const [ headIdx, headTerm ] of headSPO(head).entries()) {
-    const patternTerm = spoPattern[headIdx];
-    const variablePosRange = varRangesInPos[headIdx];
+  for (const position of triplePositions) {
+    const headTerm = head[position];
+    const patternTerm = pattern[position];
+    // The position a term sits in is the range a variable written there can take.
+    const variablePosRange = rangeOfPosition(position);
     if (isRdfQuad(headTerm) && isRdfQuad(patternTerm)) {
       // Recursion in triple term
       iterateMappingHead(c, mHVars, tPVars, headTerm, patternTerm);
     } else if (isRdfQuad(patternTerm) && isRdfVar(headTerm)) {
-      // If pattern is a quad, head must be a var. Otherwise, it was a quad, or a static term (which fails unification)
-
-      // We now know the varalues of the var should be FILTERed to aacount for the patternTerm restrictions;
-      //   or get the values of the patternTerm contained variables. -> start recursing the patternTerm.
-
-      function registerRestrictionsAndExpressionAssignments(quad: RDF.Quad, expression: Alg.Expression): void {
-        const spoQuad = [ quad.subject, quad.predicate, quad.object ];
-        const positionalOperators = [ 'subject', 'predicate', 'object' ];
-        for (const [ patternIdx, patternTerm ] of spoQuad.entries()) {
-          const variablePosRange = varRangesInPos[patternIdx];
-          const curHeadExpression = c.AF.createOperatorExpression(positionalOperators[patternIdx], [ expression ]);
-          if (isRdfQuad(patternTerm)) {
-            registerRestrictionsAndExpressionAssignments(patternTerm, curHeadExpression);
-          } else {
-            if (isRdfVar(patternTerm)) {
-              tPVars[patternTerm.value] = patternTerm;
-              patternTerm.range = variablePosRange;
-            }
-            c.clusterSolver.register(curHeadExpression, patternTerm);
-          }
-        }
-      }
-      registerRestrictionsAndExpressionAssignments(patternTerm, c.AF.createTermExpression(headTerm));
+      // The pattern writes a triple term where the head writes a variable: anything else the head could
+      // write there - a triple term, a term of its own - was taken by a branch above, or fails to unify.
+      registerPatternQuadAgainstExpression(c, tPVars, patternTerm, c.AF.createTermExpression(headTerm));
     } else {
       // If the head term is a Quad and the TP is a var, no issue, we perform the EXTEND to create the Triple Term
       // Register var and range it according to position (metadata for cluster algo). Done for triple pattern and head
@@ -292,10 +298,7 @@ function bindPatternTerms({ operation, AF, DF, triplePatternBinds }: {
  * @returns The conditions to assert, innermost argument first
  */
 function bindEvaluationGuards(c: TransformContext, expression: Alg.Expression): Alg.Expression[] {
-  if (
-    expression.subType !== Algebra.ExpressionTypes.OPERATOR ||
-    ![ 'subject', 'predicate', 'object' ].includes(expression.operator)
-  ) {
+  if (expression.subType !== Algebra.ExpressionTypes.OPERATOR || !isTriplePosition(expression.operator)) {
     return [];
   }
   const [ argument ] = expression.args;

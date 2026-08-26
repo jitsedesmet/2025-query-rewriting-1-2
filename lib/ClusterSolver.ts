@@ -1,11 +1,11 @@
 import type * as RDF from '@rdfjs/types';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { Pin, PinMeet } from './datastructures/TermClusterSet.js';
-import { TermClusterSet, triplePositions } from './datastructures/TermClusterSet.js';
+import { meetShapes, TermClusterSet, triplePositions } from './datastructures/TermClusterSet.js';
 import { objectRange, RangeSet } from './RangeSet.js';
 import type { RangedVar } from './utils/RangedVar.js';
 import { DF } from './utils/rdfDatatypes.js';
-import { isRdfTerm, isRdfVar } from './utils/typeGuards.js';
+import { isRdfQuad, isRdfTerm, isRdfVar } from './utils/typeGuards.js';
 
 /**
  * A raw term that is either a concrete term (not a variable) or a ranged variable.
@@ -23,24 +23,12 @@ export type RawTerm = Exclude<RDF.Term, RDF.Variable> | RangedVar;
 export type RawBasicTerm = Exclude<RawTerm, RDF.BaseQuad>;
 
 /**
- * Whether a raw term is a triple term.
- *
- * Spelt out here rather than taken from {@link isRdfQuad}, whose `RDF.Quad` narrows nothing away in the
- * *negative* branch: an `RDF.BaseQuad` - which is what `RDF.Term` holds, and what a triple term of a
- * mapping head is typed as - is not assignable to `RDF.Quad`, so excluding the latter leaves it standing.
- * @param term - The term to check
- * @returns whether the term is a triple term, narrowing to {@link RawBasicTerm} where it is not
- */
-function isTripleTerm(term: RawTerm): term is RDF.BaseQuad {
-  return term.termType === 'Quad';
-}
-
-/**
  * The meet of the two pins one group of the unfolding is asked to carry at once.
  *
- * Two terms are the term equality they always were. Two shapes unify position by position, which is all
- * a mapping head ever asks of a pattern that binds a triple term: `?t rdf:reifies <<( ?s ?p ?o )>>`
- * meeting a second triple term says that `?s` is its subject, not that two spellings of one value differ.
+ * Two terms are the term equality they always were. Two shapes unify position by position
+ * ({@link meetShapes}), which is all a mapping head ever asks of a pattern that binds a triple term:
+ * `?t rdf:reifies <<( ?s ?p ?o )>>` meeting a second triple term says that `?s` is its subject, not that
+ * two spellings of one value differ.
  *
  * A shape meeting a term is a contradiction outright, no term being a triple term here: a pin holds a
  * {@link RawBasicTerm}, since {@link ClusterSolver.assertTerm} decomposes a triple term into a shape
@@ -51,13 +39,7 @@ function isTripleTerm(term: RawTerm): term is RDF.BaseQuad {
  */
 function meetSolverPins(left: Pin<RawBasicTerm>, right: Pin<RawBasicTerm>): PinMeet<RawBasicTerm> | false {
   if (left.kind === 'triple' || right.kind === 'triple') {
-    return left.kind === 'triple' && right.kind === 'triple' ?
-        {
-          pin: left,
-          entailed: triplePositions.map(position =>
-            ({ kind: 'unify', left: left[position], right: right[position] })),
-        } :
-      false;
+    return left.kind === 'triple' && right.kind === 'triple' ? meetShapes(left, right) : false;
   }
   return left.term.equals(right.term) ? { pin: left, entailed: []} : false;
 }
@@ -88,14 +70,13 @@ function meetSolverPins(left: Pin<RawBasicTerm>, right: Pin<RawBasicTerm>): PinM
  * // The solver determines: ?t = ?x = ?s, ?y = ?p, ?z = ?o
  */
 export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
-  /** Maps group ID to the expression that they need to satisfy */
-  public groupToExpressions: Record<number, Algebra.Expression[]>;
+  /** Maps group ID to the expressions its value has to satisfy - read through {@link getExpressions}. */
+  protected groupToExpressions: Record<number, Algebra.Expression[]>;
   /**
    * Static expression validations where no variable group is involved.
    * These occur when an expression must equal a concrete term.
    */
   protected staticExpressionValidation: { expression: Algebra.Expression; term: RawTerm }[];
-  /** Counter for generating unique group IDs */
 
   public constructor() {
     super(variable => variable.value, meetSolverPins);
@@ -123,7 +104,7 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
     const group = this.getGroup(variable);
     if (range !== undefined && group !== undefined && !this.narrowRange(group, range)) {
       const groupTerm = this.resolvedTermOf(group);
-      throw new Error(`The range of the current group no longer matches the term type ${groupTerm?.termType} of term: ${JSON.stringify(groupTerm?.termType)}`);
+      throw new Error(`The range [${[ ...range.values() ].join(', ')}] of ${JSON.stringify(variable.value)} leaves nothing for its group, fixed to ${JSON.stringify(groupTerm)}`);
     }
   }
 
@@ -168,13 +149,9 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
       }
     } else {
       // Neither `from` nor `to` is a var. First condition would have checked this in case `from` is a term.
-      // Check term types match:
       const expression = <Exclude<typeof from, RDF.Term>> from;
-      // TODO; statically check if the expression is even satisfiable.
-      // if (expression.subType !== to.termType) {
-      //   throw new Error(`Cannot match template of type ${template.subType} with term of type ${to.termType}.
-      //   Matching ${JSON.stringify(expression)} with ${JSON.stringify(to)}`);
-      // }
+      // TODO: decide statically whether the expression can produce this term at all, rather than leaving
+      //   every such pair to the `sameTerm` the rewriting emits.
       this.staticExpressionValidation.push({
         expression,
         term: to,
@@ -208,21 +185,16 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
     return group;
   }
 
+  /**
+   * Registers an expression the group's value has to equal.
+   *
+   * TODO: narrow the group by what the expression can produce - the term type an operator returns is a
+   * range like any other, and one that no longer meets the group's is a contradiction the rewriting
+   * currently leaves to evaluation.
+   * @param group - The group ID
+   * @param expression - The expression every value of the group equals
+   */
   protected registerExpressionToGroup(group: number, expression: Algebra.Expression): void {
-    // TODO: is it expression satisfiable?
-    // const curTerm = this.groupToTerm[group];
-    // if (curTerm && curTerm.termType !== template.subType) {
-    //   throw new Error(`Cannot match Template ${JSON.stringify(template)} with term ${JSON.stringify(curTerm)}`);
-    // }
-    // const groupRange = this.groupToRange[group];
-    // Const newRange = groupRange.disjunct(new RangeSet([ template.subType ]));
-    // if (newRange.size === 0) {
-    //   throw new Error(`Cannot assign template ${JSON.stringify(template)}
-    //   to a group with range [${[ ...groupRange.values() ].join(', ')}]`);
-    // }
-    // Narrow the groupRange
-    // this.groupToRange[group] = newRange;
-
     this.groupToExpressions[group].push(expression);
   }
 
@@ -262,7 +234,7 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
    * @returns `false` on a contradiction, after which the solver holds no meaningful state
    */
   private assertTerm(group: number, term: RawTerm): boolean {
-    if (!isTripleTerm(term)) {
+    if (!isRdfQuad(term)) {
       return this.setTerm(group, term);
     }
     // A triple term states no graph, so a quad that names one is not a value any group can take.
@@ -369,8 +341,7 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
     const varGroup = this.getGroup(from);
     return {
       term: this.resolvedTermOf(varGroup),
-      vars: this.groupToValues[varGroup]
-        .filter(x => !x.equals(from)),
+      vars: this.valuesOf(varGroup).filter(value => !value.equals(from)),
       group: varGroup,
     };
   }

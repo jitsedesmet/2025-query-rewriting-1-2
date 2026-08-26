@@ -9,6 +9,7 @@ import { AstFactory, AstTransformer } from '@traqula/rules-sparql-1-2';
 import { DataFactory } from 'rdf-data-factory';
 import { AlgebraTemplateFactory } from './AlgebraTemplateFactory.js';
 import { ClusterSolver } from './ClusterSolver.js';
+import { VAR_PREFIX_MAPPING, VAR_PREFIX_MERGED_HEAD } from './consts.js';
 import { MyGenerator } from './generator/generator.js';
 import type { Mapping, MappingHead } from './types.js';
 import { withCpVars } from './utils/certainlyBoundVars.js';
@@ -178,7 +179,8 @@ export function createPartialContext(): Omit<TransformContext, 'mapping'> {
 export function transformContextFromConstructs(mappers: readonly string[]): TransformContext {
   const c = createPartialContext();
 
-  const manyMappings: Mapping[] = mappers.map(contr => prefixVarsInOperation(c, constructToMapper(c, contr), 'mi_'));
+  const manyMappings: Mapping[] = mappers
+    .map(contr => prefixVarsInOperation(c, constructToMapper(c, contr), VAR_PREFIX_MAPPING));
   if (manyMappings.length === 1) {
     // Console.log(manyMappings[0].head);
     // console.log(c.generator.generate(toAst(manyMappings[0].body), c));
@@ -187,7 +189,7 @@ export function transformContextFromConstructs(mappers: readonly string[]): Tran
       mapping: manyMappings[0],
     };
   }
-  const vars = [ c.DF.variable('m_s'), c.DF.variable('m_p'), c.DF.variable('m_o') ];
+  const vars = [ 's', 'p', 'o' ].map(position => c.DF.variable(`${VAR_PREFIX_MERGED_HEAD}${position}`));
   const [ varS, varP, varO ] = vars;
 
   const mappedBodies = manyMappings.map((mapping) => {

@@ -1,6 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import { toAst } from '@traqula/algebra-sparql-1-2';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
+import { VAR_PREFIX_USER_QUERY } from './consts.js';
 import { rewriteSinglePattern } from './transformations/index.js';
 import type { TransformContext } from './transformContext.js';
 import { prefixVarsInOperation, parseQuery } from './transformContext.js';
@@ -61,7 +62,7 @@ export function queryTransform(
   if (innerAlgebra.type === 'project') {
     transformedAlgebra = innerAlgebra.input;
   }
-  transformedAlgebra = prefixVarsInOperation(c, transformedAlgebra, 'uq_');
+  transformedAlgebra = prefixVarsInOperation(c, transformedAlgebra, VAR_PREFIX_USER_QUERY);
   for (const transformation of transformations) {
     transformedAlgebra = transformation(c, transformedAlgebra);
   }
@@ -70,7 +71,8 @@ export function queryTransform(
     // Because of the variable renaming, when we group,
     // we need to group as part of a subquery and then rename afterwards.
     if (hasGroupInTopLevelChain(transformedAlgebra)) {
-      const uqVariables = innerAlgebra.variables.map(v => c.DF.variable(`uq_${v.value}`));
+      const uqVariables = innerAlgebra.variables
+        .map(v => c.DF.variable(`${VAR_PREFIX_USER_QUERY}${v.value}`));
       transformedAlgebra = c.AF.createProject(transformedAlgebra, uqVariables);
     }
 
@@ -79,7 +81,7 @@ export function queryTransform(
       transformedAlgebra = c.AF.createExtend(
         transformedAlgebra,
         variable,
-        c.AF.createTermExpression(c.DF.variable(`uq_${variable.value}`)),
+        c.AF.createTermExpression(c.DF.variable(`${VAR_PREFIX_USER_QUERY}${variable.value}`)),
       );
     }
     transformedAlgebra = c.AF.createProject(transformedAlgebra, innerAlgebra.variables);
@@ -116,7 +118,7 @@ function rewritePatternWithUniqueScope(
   const rewritten = rewriteSinglePattern(c, pattern, c.mapping);
   const renames: Record<string, RDF.Variable> = {};
   for (const name of collectVariableNames(c.astTransformer, rewritten)) {
-    if (!name.startsWith('uq_')) {
+    if (!name.startsWith(VAR_PREFIX_USER_QUERY)) {
       renames[name] = c.DF.variable(`p${patternIndex}_${name}`);
     }
   }

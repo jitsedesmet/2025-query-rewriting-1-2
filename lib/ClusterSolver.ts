@@ -1,5 +1,6 @@
 import type * as RDF from '@rdfjs/types';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
+import { VAR_PREFIX_USER_QUERY } from './consts.js';
 import type { Pin, PinMeet } from './datastructures/TermClusterSet.js';
 import { meetShapes, TermClusterSet, triplePositions } from './datastructures/TermClusterSet.js';
 import { objectRange, RangeSet } from './RangeSet.js';
@@ -32,6 +33,19 @@ function meetSolverPins(left: Pin<RawBasicTerm>, right: Pin<RawBasicTerm>): PinM
     return left.kind === 'triple' && right.kind === 'triple' ? meetShapes(left, right) : false;
   }
   return left.term.equals(right.term) ? { pin: left, entailed: []} : false;
+}
+
+/**
+ * Whether the variable came from the user query, as against from the mapping being unfolded into it.
+ *
+ * The user query is renamed under {@link VAR_PREFIX_USER_QUERY} before any rewriting happens, so carrying
+ * that prefix is what the two sides are told apart by - the whole prefix, a variable named `?uqx` being a
+ * mapping variable like any other.
+ * @param variable - The variable to classify
+ * @returns whether it is a user query variable
+ */
+function isUserQueryVar(variable: RangedVar): boolean {
+  return variable.value.startsWith(VAR_PREFIX_USER_QUERY);
 }
 
 /**
@@ -257,7 +271,7 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
    * rewrite names the group by
    */
   public mappingVarsOf(group: number): readonly RangedVar[] {
-    return this.valuesOf(this.resolveGroup(group)).filter(value => !value.value.startsWith('uq'));
+    return this.valuesOf(this.resolveGroup(group)).filter(value => !isUserQueryVar(value));
   }
 
   /**
@@ -289,13 +303,17 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
   }
 
   /**
-   * Sorts the variables within each cluster for consistent output, which puts the mapping variables (`mi_`)
-   * before the user query variables (`uq_`).
+   * Sorts the variables within each cluster, mapping variables first and by name within each of the two.
+   *
+   * The mapping variables coming first is what {@link resolvedTermOf} and the rewriting read a cluster by:
+   * the first variable of a cluster is the one the subselect really projects, so a user query variable
+   * landing there would name a variable nothing binds. It is ordered on `isUserQueryVar` rather than
+   * left to the names, which only happen to sort that way while the prefixes both start where they do.
    */
   public sortClusters(): void {
     for (const groupVars of Object.values(this.groupToValues)) {
       groupVars.sort((a, b) =>
-        // Make sure 'm' (mapping) vars are before 'uq' (user query) vars
+        (isUserQueryVar(a) ? 1 : 0) - (isUserQueryVar(b) ? 1 : 0) ||
         a.value.localeCompare(b.value));
     }
   }

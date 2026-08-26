@@ -66,10 +66,7 @@ function substitute(
   const { AF } = c;
   switch (expression.subType) {
     case Algebra.ExpressionTypes.TERM: {
-      const term = expression.term;
-      const assertedValue = term.termType === 'Variable' ?
-        assertions.resolve({ name: term.value, positions: []}) :
-        undefined;
+      const assertedValue = substitutedTerm(expression.term, assertions);
       return assertedValue === undefined ? expression : AF.createTermExpression(assertedValue);
     }
     case Algebra.ExpressionTypes.OPERATOR: {
@@ -107,6 +104,46 @@ function substitute(
     default:
       return expression;
   }
+}
+
+/**
+ * Substitutes Θ into the term of a term expression, `undefined` where it decides nothing about it.
+ *
+ * A variable is the term it is fixed to, or the variable that reads its group most directly - the
+ * substitution this pass is. A **triple term written out** is that one level down, over each of its
+ * components: `<<( ?s ?p ?o )>>` under A⟨?s ≡ :a⟩ is `<<( :a ?p ?o )>>`, which is the same value by the
+ * same argument that lets `?s` be replaced anywhere else, Θ proving the two equal wherever it holds.
+ *
+ * That is not cosmetic where the construction is a `BIND`: the pattern below it has had `:a` substituted
+ * into it and hands `?s` back through a re-binding of its own, so a construction still reading `?s` makes
+ * one projected expression read what another projected expression binds - legal, and not every parser is
+ * happy about it. Nothing is lost by writing what the pass already knows.
+ *
+ * No position is checked, deliberately: a component the position cannot hold makes the *construction*
+ * raise, leaving its target unbound, which is exactly what the variable it replaces would have done.
+ * Only a pattern refuses such a term outright ({@link substituteInTerm}), because a pattern that cannot
+ * match is an emptiness rather than an error.
+ */
+function substitutedTerm(term: RDF.Term, assertions: AssertionView): RDF.Term | undefined {
+  if (term.termType === 'Variable') {
+    return assertions.resolve({ name: term.value, positions: []});
+  }
+  if (term.termType !== 'Quad') {
+    return undefined;
+  }
+  const subject = substitutedTerm(term.subject, assertions);
+  const predicate = substitutedTerm(term.predicate, assertions);
+  const object = substitutedTerm(term.object, assertions);
+  const graph = substitutedTerm(term.graph, assertions);
+  if (subject === undefined && predicate === undefined && object === undefined && graph === undefined) {
+    return undefined;
+  }
+  return DF.quad(
+    <RDF.Quad_Subject> (subject ?? term.subject),
+    <RDF.Quad_Predicate> (predicate ?? term.predicate),
+    <RDF.Quad_Object> (object ?? term.object),
+    <RDF.Quad_Graph> (graph ?? term.graph),
+  );
 }
 
 /**

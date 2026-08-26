@@ -1390,6 +1390,8 @@ GROUP BY ?x?y`,
         'SELECT * WHERE { ?s ?p ?o FILTER(isTRIPLE(?o)) }',
         'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(?o, <<( :a :b :c )>>)) }',
         'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(?o, TRIPLE(?s, ?p, ?s))) }',
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(?o, <<( ?s ?p ?s )>>)) }',
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(?o, TRIPLE(?s, ?p, <<( ?s ?p ?s )>>))) }',
         'SELECT * WHERE { ?s ?p ?o OPTIONAL { ?o :q ?z } FILTER(isTRIPLE(?z)) }',
         'SELECT * WHERE { ?s ?p ?o FILTER(isLITERAL(?o)) }',
         'SELECT * WHERE { ?s ?p ?o FILTER(isIRI(object(?o))) }',
@@ -2117,6 +2119,30 @@ GROUP BY ?x?y`,
       );
     });
 
+    it('reads a construction the same whichever way it is written', ({ expect }) => {
+      // `TRIPLE(?s, ?p, :c)` is an operator and `<<( ?s ?p :c )>>` parses to a term holding a quad. They
+      // are the one fact, so a condition may no more care which was typed than a BIND does.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(?o, <<( ?s ?p :c )>>)) }',
+        `SELECT ( <<( ?s ?p <ex://c> )>> AS ?o ) ?p ?s WHERE {
+  ?s ?p <<( ?s ?p <ex://c> )>> .
+}`,
+      );
+    });
+
+    it('reads a construction holding a construction as deep as it is written', ({ expect }) => {
+      // A conjunct is about an access and an access is a chain, so the inner one is `?o.object.subject`
+      // and the two levels materialise together.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s ?p ?o FILTER(sameTerm(?o, TRIPLE(:a, ?p, <<( ?s ?p :c )>>))) }',
+        `SELECT ( <<( <ex://a> ?p <<( ?s ?p <ex://c> )>> )>> AS ?o ) ?p ?s WHERE {
+  ?s ?p <<( <ex://a> ?p <<( ?s ?p <ex://c> )>> )>> .
+}`,
+      );
+    });
+
     it('empties the plan where the position a shape lands in holds no triple term', ({ expect }) => {
       // No triple has a triple term as its subject, which the *group* range decides before anything
       // downstream has to type-check a term.
@@ -2165,14 +2191,12 @@ GROUP BY ?x?y`,
       // The shape is taken apart by the construction that carries it: what Θ said about the subject of
       // `?t` is what it says about the variable the BIND writes there, so it reaches the pattern binding
       // that variable as an ordinary term assertion - and the construction above keeps building the same
-      // value out of it.
+      // value, with `:a` written into it rather than the `?s` it is proven equal to. `?s` is still
+      // re-bound beside it, which is what keeps `pVars` exact, but nothing reads it any more.
       expectTransform(
         expect,
         'SELECT * WHERE { ?s ?p ?o BIND(<<( ?s ?p ?o )>> AS ?t) FILTER(sameTerm(subject(?t), :a)) }',
-        // TODO: would it require much changes to still keep what we already know? SO we would have
-        //  ( <<( <ex://a> ?p ?o )>> AS ?t ) Not all parsers will accept the `?s`
-        //  being used again in the binding of a project.
-        `SELECT ?o ?p ( <ex://a> AS ?s ) ( <<( ?s ?p ?o )>> AS ?t ) WHERE {
+        `SELECT ?o ?p ( <ex://a> AS ?s ) ( <<( <ex://a> ?p ?o )>> AS ?t ) WHERE {
   <ex://a> ?p ?o .
 }`,
       );
@@ -2964,6 +2988,28 @@ GROUP BY ?x?y`,
         ?s :nests ?o
         FILTER(sameTerm(subject(object(?o)), :b))
       }`, 1);
+    });
+
+    it('keeps the rows a construction holding a construction selects', async({ expect }) => {
+      // `:e` nests a triple term where `:f` holds an IRI, so reading the inner positions errors on `:f`
+      // and the row drops - which the plan the two levels materialise into has to reproduce. `?t` is
+      // bound by a pattern of its own, so the inner subject is a position the join has to agree on.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :nests ?o .
+        ?t :says ?any
+        FILTER(sameTerm(?o, TRIPLE(:a, :p, <<( ?t :q :c )>>)))
+      }`, 1);
+    });
+
+    it('returns nothing for a construction over components nothing binds', async({ expect }) => {
+      // The trap the emptiness rule catches: `?a`, `?b` and `?c` occur in the condition alone, so the
+      // original errors on every row - and a rewrite that wrote them into the pattern would *bind* them,
+      // answering rows where there are none and putting three variables into scope besides. (FBndII)
+      // empties the plan instead, off a member that can never bind.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        ?s :nests ?o
+        FILTER(sameTerm(?o, TRIPLE(:a, :p, <<( ?a ?b ?c )>>)))
+      }`, 0);
     });
 
     it('keeps the rows an `=` over a chain selects', async({ expect }) => {

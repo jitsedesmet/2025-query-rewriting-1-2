@@ -443,24 +443,37 @@ function asStrongAssertion(expression: Algebra.Expression):
   return undefined;
 }
 
-/** `sameTerm(a, <<( x y z )>>)` read as one conjunct per position of the shape `a` has to have. */
+/**
+ * `sameTerm(a, <<( x y z )>>)` read as one conjunct per position of the shape `a` has to have.
+ *
+ * Read through {@link asTransferSource}, so the two ways of writing a construction are the one fact -
+ * `TRIPLE(?s, ?p, ?o)` is an operator and `<<( ?s ?p ?o )>>` parses to a term holding a quad, and a
+ * condition should no more care which was typed than a BIND does. A construction *holding* one goes as
+ * deep as it is written, since a conjunct is about an access and an access is a chain.
+ *
+ * A ground triple term is not one of these: it is a value, and the assertion is the ordinary pin to it.
+ * Neither is a construction one position of which Θ cannot name - that would be a conjunct lost and a
+ * conjunction no longer saying what the condition said, so the whole condition stays a residual instead
+ * ({@link constructionOf}).
+ */
 function decomposedConstruction(read: Algebra.Expression, built: Algebra.Expression):
     (AssertionConjunct & { assertion: StrongAssertion })[] | undefined {
   const root = asAccess(read);
-  if (root !== undefined && built.subType === Algebra.ExpressionTypes.OPERATOR &&
-    built.operator === 'triple' && built.args.length === 3) {
-    const targets = built.args.map(arg => asAssertionTarget(arg));
-    if (targets.includes(undefined)) {
-      // One position this cannot name is one conjunct that would be lost, and a conjunction that no longer
-      // says what the condition said - so the whole condition stays a residual instead.
-      return undefined;
-    }
-    return triplePositions.map((position, index) => ({
-      access: { name: root.name, positions: [ ...root.positions, position ]},
-      assertion: assertStrong(targets[index]!),
-    }));
+  const source = asTransferSource(built);
+  if (root === undefined || source === undefined || !isTripleConstruction(source)) {
+    return undefined;
   }
-  return undefined;
+  return decomposedSource(root, source);
+}
+
+/** The conjuncts a construction states about the access it is equated to, a position at a time. */
+function decomposedSource(read: Access, source: TransferSource):
+(AssertionConjunct & { assertion: StrongAssertion })[] {
+  if (!isTripleConstruction(source)) {
+    return [{ access: read, assertion: assertStrong(source) }];
+  }
+  return triplePositions.flatMap(position =>
+    decomposedSource({ name: read.name, positions: [ ...read.positions, position ]}, source[position]));
 }
 
 /**

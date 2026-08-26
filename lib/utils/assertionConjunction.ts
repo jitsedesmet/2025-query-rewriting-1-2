@@ -119,15 +119,22 @@ export class AssertionConjunction {
   }
 
   /**
-   * The conjunction of the assertions of `conjuncts`, which never contradict when they come from one Θ.
+   * The conjunction of the assertions of `conjuncts`, which never contradict when every one of them is
+   * entailed by one satisfiable Θ - a subset of its {@link conjuncts}, or the weakened and entailed forms
+   * the pushdown derives from them, which are implied by what they came from and so satisfiable with it.
    * @param conjuncts - The conjuncts to conjoin
    * @returns the conjunction they make
+   * @throws when the conjuncts do contradict, since a caller handing over conjuncts of two different Θ has
+   * no meaningful conjunction to be given back
    */
   public static of(conjuncts: Iterable<AssertionConjunct>): AssertionConjunction {
     const result = new AssertionConjunction();
     for (const { access, assertion } of conjuncts) {
-      // A subset of a satisfiable conjunction is satisfiable, so this cannot fail for such a subset.
-      result.assert(access, assertion);
+      if (!result.assert(access, assertion)) {
+        throw new Error(
+          `Unreachable: conjuncts entailed by one Θ contradict, at ${assertion.subType} of ${accessId(access)}`,
+        );
+      }
     }
     return result;
   }

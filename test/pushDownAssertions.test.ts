@@ -2169,6 +2169,9 @@ GROUP BY ?x?y`,
       expectTransform(
         expect,
         'SELECT * WHERE { ?s ?p ?o BIND(<<( ?s ?p ?o )>> AS ?t) FILTER(sameTerm(subject(?t), :a)) }',
+        // TODO: would it require much changes to still keep what we already know? SO we would have
+        //  ( <<( <ex://a> ?p ?o )>> AS ?t ) Not all parsers will accept the `?s`
+        //  being used again in the binding of a project.
         `SELECT ?o ?p ( <ex://a> AS ?s ) ( <<( ?s ?p ?o )>> AS ?t ) WHERE {
   <ex://a> ?p ?o .
 }`,

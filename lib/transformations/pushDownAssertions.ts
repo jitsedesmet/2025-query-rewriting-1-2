@@ -30,7 +30,6 @@ import type { CPMeta } from '../utils/certainlyBoundVars.js';
 import { withCpVars, withoutCpVars } from '../utils/certainlyBoundVars.js';
 import { booleanConstantOf, sameTermExpression } from '../utils/expressionHelpers.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
-import type { AssertionView } from '../utils/partialExpressionEvaluation.js';
 import { substituteInExpression } from '../utils/partialExpressionEvaluation.js';
 import { unionSets } from '../utils/setUtils.js';
 import type { DerivedVarNamer } from '../utils.js';
@@ -254,12 +253,10 @@ function swapWith(
     // VALUES pays by pruning rows, and a row *is* a solution mapping rather than a pattern to match, so
     // it settles everything Θ says at once and leaves nothing over ({@link pruneValues}).
     case Algebra.Types.BGP: {
-      const toWrite = assertions.intoPattern(namer);
-      return keep(completePatternRewrite(c, substituteIntoPatterns(c, op, toWrite.substitution), toWrite));
+      return keep(rewritePattern(c, assertions, namer, substitution => substituteIntoPatterns(c, op, substitution)));
     }
     case Algebra.Types.PATH: {
-      const written = assertions.intoPattern(namer);
-      return keep(completePatternRewrite(c, substituteIntoPath(c, op, written.substitution), written));
+      return keep(rewritePattern(c, assertions, namer, substitution => substituteIntoPath(c, op, substitution)));
     }
     // The one leaf where all of the forms do real work, since a VALUES column may be UNDEF.
     case Algebra.Types.VALUES: {
@@ -411,16 +408,19 @@ function substituteIntoPath(c: TransformContext, path: Algebra.Path, assertions:
 }
 
 /**
- * Puts back around a materialised pattern what the two halves of {@link AssertionConjunction.intoPattern}
- * leave to do: the re-binding of every variable the substitution took out of it, and the condition for
- * what the pattern does not state.
+ * Rewrites a pattern under Θ: the substitution written into it, the re-binding of every variable that
+ * took out of it, and a condition for what a pattern cannot state.
+ *
+ * The three come from the one call ({@link AssertionConjunction.intoPattern}) because they are one
+ * decision; `substituteInto` is the only thing a BGP and a property path differ in, each checking the
+ * positions its own kind of pattern can hold.
  *
  * The condition is written **against the values the pattern holds** rather than against the accesses Θ
  * reads them by: `isIRI(OBJECT(?o))` over `?s ?p <<( :a ?o_p ?o_o )>>` is `isIRI(?o_o)`, which asks the
- * same of the same value while reading a variable the pattern binds rather than an accessor over one the
- * re-binding above it does. Cheaper for an engine - a plain variable it can push into the scan - and it
- * is what keeps the pass a fixpoint over its own output, since a condition reading through the re-bound
- * variable is one the next run pushes through the re-binding and writes this way anyway.
+ * same of the same value while reading a variable the pattern binds rather than an accessor over one
+ * only the re-binding above it does. Cheaper for an engine - a plain variable it can push into the scan
+ * - and it is what keeps the pass a fixpoint over its own output, since a condition reading through the
+ * re-bound variable is one the next run would push through the re-binding and write this way anyway.
  *
  * **Here and nowhere higher**, which is the whole of why this is a substitution over a condition rather
  * than a rewrite the pass could do wherever it writes one. `?o_s` is bound by the pattern being built
@@ -431,11 +431,12 @@ function substituteIntoPath(c: TransformContext, path: Algebra.Path, assertions:
  * {@link swapWith} passes the conditions it keeps above an operation - would be naming a variable that
  * the branch below may never bind, and a sibling branch almost certainly will not.
  *
- * That also decides where it goes. A condition mentioning none of the re-bound variables holds of the
- * pattern alone, so it sits directly on it, *below* the re-binding - which is where the next run would
- * put it, and which lets the re-binding stay the last thing the plan does. One that still mentions one -
- * a weak member, which is never written into a pattern and so never resolved to a value - has to stay
- * above the re-binding that gives that variable its value again.
+ * **Always on the pattern, below the re-binding**, which needs an argument rather than a check: a name
+ * the substitution re-binds cannot reach the condition at all. Every strong member's access resolves to
+ * the value written for it, `bound(?x)` of one folds to `true` off the same conjunction, and the forms
+ * that are never written - weak and unbound - are never re-bound either. So the condition reads what the
+ * pattern itself binds, and belongs where that is: as deep as it goes, with the re-binding left as the
+ * last thing the plan does.
  *
  * The filter carries no conjunction of its own, deliberately: what it says is about the values the
  * pattern wrote, where Θ is about the accesses, and the two are no longer the same statement. What reads
@@ -444,33 +445,24 @@ function substituteIntoPath(c: TransformContext, path: Algebra.Path, assertions:
  * operation it is about (D6, and {@link AssertionConjunction.intoPattern} on why it is written rather
  * than injected).
  */
-// TODO: this functions feels weird. It would make more sense to have a function that simply does the
-//  rewrite instead of having a function 'complete a partially done job'
-function completePatternRewrite(
+function rewritePattern(
   c: TransformContext,
-  pattern: Algebra.Operation,
-  written: { substitution: Assertions; residual: AssertionConjunction; asWritten: AssertionView },
+  assertions: AssertionConjunction,
+  namer: DerivedVarNamer,
+  substituteInto: (substitution: Assertions) => Algebra.Operation,
 ): Algebra.Operation {
-  const { substitution, residual, asWritten } = written;
-  if (residual.size === 0) {
-    return bindAssertedTerms(c, pattern, substitution);
-  }
-  // The condition is read where it is placed, so nothing is proven bound for it beyond what Θ proves.
-  // TODO: should we not decide the cVars for 'pattern' instead?
-  const condition = substituteInExpression(c, residual.toExpression(c), asWritten, new Set());
-  if (booleanConstantOf(condition) === true) {
-    // A conjunct the values decide - `bound(?x)` of a variable the pattern writes, say - leaves nothing
-    // to ask. `false` is not the mirror of this and keeps its filter: that is the empty operation, which
-    // {@link transformFilterFalse} normalises away afterwards.
-    return bindAssertedTerms(c, pattern, substitution);
-  }
-  // TODO: currently this is all or nothing. Either a filter or an extend. Is it not possible to have
-  //  a more granular approach? What can be a bind, should be a bind, the rest it be a filter? Or is this the case?
-  const readsReBound = [ ...collectVariableNames(c.astTransformer, condition) ]
-    .some(name => substitution.has(name));
-  return readsReBound ?
-    c.AF.createFilter(bindAssertedTerms(c, pattern, substitution), condition) :
-    bindAssertedTerms(c, c.AF.createFilter(pattern, condition), substitution);
+  const { substitution, residual, asWritten } = assertions.intoPattern(namer);
+  const pattern = substituteInto(substitution);
+  // Read against what the pattern now binds, which is what decides `sameTerm(?x, ?x)` for it. The
+  // re-binding only ever adds to that, so this holds wherever the condition ends up.
+  const condition = residual.size === 0 ?
+    undefined :
+    substituteInExpression(c, residual.toExpression(c), asWritten, cpVars(pattern).cVars);
+  // A conjunct the values decide - `bound(?x)` of a variable the pattern writes, say - leaves nothing to
+  // ask. `false` is not the mirror of this and keeps its filter: that is the empty operation, which
+  // {@link transformFilterFalse} normalises away afterwards.
+  const settled = condition === undefined || booleanConstantOf(condition) === true;
+  return bindAssertedTerms(c, settled ? pattern : c.AF.createFilter(pattern, condition), substitution);
 }
 
 /**

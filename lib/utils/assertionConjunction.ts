@@ -444,9 +444,13 @@ export class AssertionConjunction {
       substitution: this.strongMembersReplacedBy(group => values.get(group)),
       residual: AssertionConjunction.of(this.conjuncts()
         .filter(conjunct => !this.enforcedByPattern(conjunct, values))),
+      // TODO: why do we need this? I thought we concluded that coining the variables indeed break cVars/ pVars
+      //  and thus we need not wory about what we coined exactly?
+      //  D6 can happen while passing an expression because we already know at the time of passing the expression
+      //  what variable can and will be coined to represent e.g. subject(?o)
       // No `typeRange`: the kinds of term are what the residual is *about* here, and what the pattern
       // decided about one has already taken the conjunct out of the residual.
-      asWritten: { resolve: read => this.patternValueOf(read, values), bound: this.boundImpliedBy() },
+      asWritten: { resolve: access => this.patternValueOf(access, values), bound: this.boundImpliedBy() },
     };
   }
 
@@ -616,7 +620,7 @@ export class AssertionConjunction {
     const result = this.clone();
     const wasBound = result.bound.delete(name);
     result.unbound.delete(name);
-    if (wasBound && !result.readableAgainst(replacement)) {
+    if (wasBound && !result.assertReadingYieldValue(replacement)) {
       return undefined;
     }
     if (result.clusters.groupOf(name) === undefined) {
@@ -624,7 +628,7 @@ export class AssertionConjunction {
     }
     // The replacement takes over before `name` leaves, so that a group nothing else names does not go
     // away between the two - with it, the shape it carries and the anonymous groups that shape holds.
-    if (!result.restatedAgainst(access(name), replacement)) {
+    if (!result.assertRestatedOn(access(name), replacement)) {
       return undefined;
     }
     result.removeMember(name);
@@ -638,14 +642,14 @@ export class AssertionConjunction {
    * different from the two kinds of value: what it hands down is a statement per position, and a
    * position that is a construction of its own hands down three more.
    */
-  private restatedAgainst(read: Access, source: TransferSource): boolean {
+  private assertRestatedOn(access: Access, source: TransferSource): boolean {
     if (isTripleConstruction(source)) {
       return triplePositions.every(position =>
-        this.restatedAgainst(wrapAccess(read, position), source[position]));
+        this.assertRestatedOn(wrapAccess(access, position), source[position]));
     }
     // A⟨read ≡ source⟩ is what a value carrying another's is, so it is asserted as one - which also
     // spells a variable the single way Θ holds one, as the access reading it.
-    return this.assert(read, assertStrong(source));
+    return this.assert(access, assertStrong(source));
   }
 
   /**
@@ -657,12 +661,12 @@ export class AssertionConjunction {
    * that yields a value is one every position of which does, since it raises where a component is
    * unbound.
    */
-  private readableAgainst(source: TransferSource): boolean {
+  private assertReadingYieldValue(source: TransferSource): boolean {
     if (isTripleConstruction(source)) {
-      return triplePositions.every(position => this.readableAgainst(source[position]));
+      return triplePositions.every(position => this.assertReadingYieldValue(source[position]));
     }
-    const read = normalisedTarget(source);
-    return !targetIsAccess(read) || this.assertUnify(read, read);
+    const access = normalisedTarget(source);
+    return !targetIsAccess(access) || this.assertUnify(access, access);
   }
 
   /**
@@ -754,7 +758,10 @@ export class AssertionConjunction {
   ): boolean {
     function apply(target: AssertionConjunction): boolean {
       const group = target.assertAccessAndResolve(access);
-      return group !== false && narrow(target.clusters, group);
+      if (group === false) {
+        return false;
+      }
+      return narrow(target.clusters, group);
     }
     return strong ? this.assertStrongly(access.name, apply) : this.assertWeakly(access.name, apply);
   }

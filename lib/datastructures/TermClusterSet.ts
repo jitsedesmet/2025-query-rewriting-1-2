@@ -8,6 +8,16 @@ export type TriplePosition = 'subject' | 'predicate' | 'object';
 /** The three positions, in the order a triple term writes them. */
 export const triplePositions: readonly TriplePosition[] = [ 'subject', 'predicate', 'object' ];
 
+/**
+ * Whether a name is one of the three positions - which is also whether an operator is the accessor that
+ * reads it, the two being spelt the same.
+ * @param name - The name to check
+ * @returns whether it is a {@link TriplePosition}
+ */
+export function isTriplePosition(name: string): name is TriplePosition {
+  return (<readonly string[]> triplePositions).includes(name);
+}
+
 /** The groups a triple pin holds its three components in, one per position. */
 export type PinChildren = Readonly<Record<TriplePosition, number>>;
 
@@ -54,15 +64,31 @@ export interface PinMeet<Term> {
 }
 
 /**
+ * The meet of two shapes on one group, which both users of the lattice answer the same way: one value
+ * spelt twice, so its positions are pairwise one value too. That is syntactic unification, and it is what
+ * makes everything known about `SUBJECT(?o)` known about `SUBJECT(?x)` as soon as the two are unified.
+ * @param left - One of the two shapes, and the one the group keeps
+ * @param right - The other
+ * @returns the pin the group keeps and the unifications the meet entailed
+ */
+export function meetShapes<Term>(left: TriplePin, right: TriplePin): PinMeet<Term> {
+  return {
+    pin: left,
+    entailed: triplePositions.map(position => ({ kind: 'unify', left: left[position], right: right[position] })),
+  };
+}
+
+/**
  * A {@link ClusterSet} whose groups may be *pinned*: every value in the group equals what the pin says -
  * a term, or the shape of a triple term whose positions are groups in their own right.
  *
  * The two users of this differ in what a pin conflict means, which is why {@link setPin} reports one
  * rather than raising it. For the unfolding ({@link ClusterSolver}) a group asked to be two terms at once
  * is a broken mapping, and it throws; for an assertion conjunction it is an ordinary contradiction, and it
- * becomes the empty operation. They also differ in the terms they allow - the solver narrows to a
- * {@link RawBasicTerm} by the range of the triple position - hence the second type parameter, and in what
- * meeting two pins comes to, hence {@link meetPins}.
+ * becomes the empty operation. They also differ in the terms they allow - a pin of the solver holds a
+ * {@link RawBasicTerm}, every triple term of a mapping head being decomposed into a shape before it
+ * reaches one - hence the second type parameter, and in what meeting two pins comes to, hence
+ * {@link meetPins}.
  *
  * **Ranges** live here rather than only in the solver, because the same question is asked on both sides:
  * a group in a subject position holds no Literal and no triple term, which is what makes the nesting of

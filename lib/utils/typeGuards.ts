@@ -7,8 +7,15 @@ export function isRdfTerm(obj: object): obj is RDF.Term {
   return 'termType' in obj && typeof obj.termType === 'string';
 }
 
-/** Whether an object is an RDF Quad (triple term). */
-export function isRdfQuad(obj: object): obj is RDF.Quad {
+/**
+ * Whether an object is an RDF Quad (triple term).
+ *
+ * Narrowing to `RDF.BaseQuad` rather than `RDF.Quad` is what the check really says - a `termType` tells
+ * nothing about the terms the positions hold - and it is the narrowing that *works*: `RDF.BaseQuad` is
+ * not assignable to `RDF.Quad`, so a guard promising the latter leaves the former standing in the
+ * negative branch, where "not a triple term" is exactly what the caller is after.
+ */
+export function isRdfQuad(obj: object): obj is RDF.BaseQuad {
   return isRdfTerm(obj) && obj.termType === 'Quad';
 }
 

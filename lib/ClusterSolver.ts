@@ -1,19 +1,48 @@
 import type * as RDF from '@rdfjs/types';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
-import { TermClusterSet } from './datastructures/TermClusterSet.js';
+import type { Pin, PinMeet } from './datastructures/TermClusterSet.js';
+import { meetShapes, TermClusterSet, triplePositions } from './datastructures/TermClusterSet.js';
 import { objectRange, RangeSet } from './RangeSet.js';
 import type { RangedVar } from './utils/RangedVar.js';
-import { isRdfTerm, isRdfVar } from './utils/typeGuards.js';
+import { DF } from './utils/rdfDatatypes.js';
+import { isRdfQuad, isRdfTerm, isRdfVar } from './utils/typeGuards.js';
 
 /**
  * A raw term that is either a concrete term (not a variable) or a ranged variable.
  */
-type RawTerm = Exclude<RDF.Term, RDF.Variable> | RangedVar;
+export type RawTerm = Exclude<RDF.Term, RDF.Variable> | RangedVar;
 
 /**
- * A basic raw term (not a quad/triple term).
+ * A basic raw term, i.e. one that is not a triple term.
+ *
+ * A triple term never reaches a *pin*: it is not a value the way an IRI is but a **shape**, whose three
+ * positions are groups in their own right, and {@link ClusterSolver.assertTerm} takes it apart into one.
+ * So the exclusion here is not the solver refusing triple terms - it is where they live, which is one
+ * level up, on {@link TermClusterSet}'s lattice rather than in the leaves of it.
  */
-export type RawBasicTerm = Exclude<RawTerm, RDF.Quad>;
+export type RawBasicTerm = Exclude<RawTerm, RDF.BaseQuad>;
+
+/**
+ * The meet of the two pins one group of the unfolding is asked to carry at once.
+ *
+ * Two terms are the term equality they always were. Two shapes unify position by position
+ * ({@link meetShapes}), which is all a mapping head ever asks of a pattern that binds a triple term:
+ * `?t rdf:reifies <<( ?s ?p ?o )>>` meeting a second triple term says that `?s` is its subject, not that
+ * two spellings of one value differ.
+ *
+ * A shape meeting a term is a contradiction outright, no term being a triple term here: a pin holds a
+ * {@link RawBasicTerm}, since {@link ClusterSolver.assertTerm} decomposes a triple term into a shape
+ * rather than pinning it.
+ * @param left - One of the two pins
+ * @param right - The other
+ * @returns what the group is left with plus what the meet entailed, or `false` on a contradiction
+ */
+function meetSolverPins(left: Pin<RawBasicTerm>, right: Pin<RawBasicTerm>): PinMeet<RawBasicTerm> | false {
+  if (left.kind === 'triple' || right.kind === 'triple') {
+    return left.kind === 'triple' && right.kind === 'triple' ? meetShapes(left, right) : false;
+  }
+  return left.term.equals(right.term) ? { pin: left, entailed: []} : false;
+}
 
 /**
  * Solver for determining variable equality clusters during query rewriting.
@@ -30,8 +59,10 @@ export type RawBasicTerm = Exclude<RawTerm, RDF.Quad>;
  *
  * ## DAG Structure:
  * Since triple terms can contain variables, and those variables might be equated
- * to other triple terms, the structure forms a DAG. Triple terms are always
- * resolved last to ensure dependencies are handled correctly.
+ * to other triple terms, the structure forms a DAG: a triple term the mapping head writes is not a value
+ * a group is pinned to but a **shape** whose three positions are groups in their own right
+ * ({@link assertTerm}), which {@link resolvedTermOf} reads a term back off. The occurs check of
+ * {@link TermClusterSet} is what keeps that DAG well founded.
  *
  * @example
  * // Given mapping head: ?t rdf:reifies <<( ?s ?p ?o )>>
@@ -39,21 +70,16 @@ export type RawBasicTerm = Exclude<RawTerm, RDF.Quad>;
  * // The solver determines: ?t = ?x = ?s, ?y = ?p, ?z = ?o
  */
 export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
-  /** Maps group ID to the expression that they need to satisfy */
-  public groupToExpressions: Record<number, Algebra.Expression[]>;
+  /** Maps group ID to the expressions its value has to satisfy - read through {@link getExpressions}. */
+  protected groupToExpressions: Record<number, Algebra.Expression[]>;
   /**
    * Static expression validations where no variable group is involved.
    * These occur when an expression must equal a concrete term.
    */
-  protected staticExpressionValidation: { expression: Algebra.Expression; term: RawBasicTerm }[];
-  /** Counter for generating unique group IDs */
+  protected staticExpressionValidation: { expression: Algebra.Expression; term: RawTerm }[];
 
   public constructor() {
-    // The unfolding never builds a shape: a mapping head equates terms and variables, and the one place a
-    // triple term could be decomposed is the TODO of {@link getStaticExpressionValidation}. So the meet is
-    // the term equality it always was, and any other pair is a broken mapping.
-    super(variable => variable.value, (a, b) =>
-      a.kind === 'term' && b.kind === 'term' && a.term.equals(b.term) ? { pin: a, entailed: []} : false);
+    super(variable => variable.value, meetSolverPins);
     this.clear();
   }
 
@@ -77,8 +103,8 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
     const range = variable.range;
     const group = this.getGroup(variable);
     if (range !== undefined && group !== undefined && !this.narrowRange(group, range)) {
-      const groupTerm = this.termOf(group);
-      throw new Error(`The range of the current group no longer matches the term type ${groupTerm?.termType} of term: ${JSON.stringify(groupTerm?.termType)}`);
+      const groupTerm = this.resolvedTermOf(group);
+      throw new Error(`The range [${[ ...range.values() ].join(', ')}] of ${JSON.stringify(variable.value)} leaves nothing for its group, fixed to ${JSON.stringify(groupTerm)}`);
     }
   }
 
@@ -99,7 +125,8 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
    */
   public register(from: RDF.Term | Algebra.Expression, to: RDF.Term): void {
     if (isRdfTerm(from) && !isRdfVar(from) && isRdfTerm(to) && !isRdfVar(to)) {
-      // Two terms, neither are vars
+      // Two terms, neither are vars. Two *triple* terms never reach here - the unfolding recurses into a
+      // pair of them rather than registering it - so what the equality compares is a pair of values.
       if (from.equals(to)) {
         return;
       }
@@ -122,13 +149,9 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
       }
     } else {
       // Neither `from` nor `to` is a var. First condition would have checked this in case `from` is a term.
-      // Check term types match:
       const expression = <Exclude<typeof from, RDF.Term>> from;
-      // TODO; statically check if the expression is even satisfiable.
-      // if (expression.subType !== to.termType) {
-      //   throw new Error(`Cannot match template of type ${template.subType} with term of type ${to.termType}.
-      //   Matching ${JSON.stringify(expression)} with ${JSON.stringify(to)}`);
-      // }
+      // TODO: decide statically whether the expression can produce this term at all, rather than leaving
+      //   every such pair to the `sameTerm` the rewriting emits.
       this.staticExpressionValidation.push({
         expression,
         term: to,
@@ -162,43 +185,113 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
     return group;
   }
 
+  /**
+   * Registers an expression the group's value has to equal.
+   *
+   * TODO: narrow the group by what the expression can produce - the term type an operator returns is a
+   * range like any other, and one that no longer meets the group's is a contradiction the rewriting
+   * currently leaves to evaluation.
+   * @param group - The group ID
+   * @param expression - The expression every value of the group equals
+   */
   protected registerExpressionToGroup(group: number, expression: Algebra.Expression): void {
-    // TODO: is it expression satisfiable?
-    // const curTerm = this.groupToTerm[group];
-    // if (curTerm && curTerm.termType !== template.subType) {
-    //   throw new Error(`Cannot match Template ${JSON.stringify(template)} with term ${JSON.stringify(curTerm)}`);
-    // }
-    // const groupRange = this.groupToRange[group];
-    // Const newRange = groupRange.disjunct(new RangeSet([ template.subType ]));
-    // if (newRange.size === 0) {
-    //   throw new Error(`Cannot assign template ${JSON.stringify(template)}
-    //   to a group with range [${[ ...groupRange.values() ].join(', ')}]`);
-    // }
-    // Narrow the groupRange
-    // this.groupToRange[group] = newRange;
-
     this.groupToExpressions[group].push(expression);
   }
 
   /**
-   * Registers a concrete term binding to a group: the throwing wrapper around {@link setTerm} that the
+   * Registers a concrete term binding to a group: the throwing wrapper around {@link assertTerm} that the
    * unfolding needs, since a mapping head asking one group to be two terms at once is a broken mapping
    * rather than an ordinary contradiction.
    * @param group - The group ID
-   * @param term - The term to bind
+   * @param term - The term to bind, a triple term included
    * @throws Error if term conflicts with existing binding or range
    */
-  protected registerTermToGroup(group: number, term: RawBasicTerm): void {
-    const curTerm = this.termOf(group);
-    // TODO: validate in the case of triple term by also registering that some variables present might be the same.
-    if (curTerm && !curTerm.equals(term)) {
-      throw new Error(`Cannot match Term ${JSON.stringify(curTerm)} with term ${JSON.stringify(term)}`);
+  protected registerTermToGroup(group: number, term: RawTerm): void {
+    // Read before asserting: a failed assertion leaves the set in a state no caller may read - narrowed
+    // ranges and all - so what the message reports is the state the caller handed over.
+    const curTerm = this.resolvedTermOf(group);
+    const curRange = this.rangeOf(group);
+    if (!this.assertTerm(group, term)) {
+      throw new Error(curTerm === undefined ?
+        `Cannot assign Term ${JSON.stringify(term)} to a group with range [${[ ...curRange.values() ].join(', ')}]` :
+        `Cannot match Term ${JSON.stringify(curTerm)} with term ${JSON.stringify(term)}`);
     }
-    const groupRange = this.rangeOf(group);
-    if (!groupRange.has(term.termType)) {
-      throw new Error(`Cannot assign Term ${JSON.stringify(term)} to a group with range [${[ ...groupRange.values() ].join(', ')}]`);
+  }
+
+  /**
+   * Asserts that every value of the group equals the term.
+   *
+   * A triple term is not pinned but **decomposed**: the group takes the shape of one, and each position
+   * is asserted onto the group that position is. That is the same unification the rest of the mapping
+   * head goes through, and it is what the head `?t rdf:reifies <<( ?s ?p ?o )>>` needs of a pattern that
+   * binds a triple term - `?s` is the *subject of the value*, so whatever else reaches that position
+   * reaches `?s`. Three things come with it that pinning the term whole could not do: a second triple
+   * term on the group unifies with the first rather than being reported unequal (two spellings of one
+   * value are not two values); every position is held to the range it can have, so a Literal subject is
+   * refused where a Literal object is not; and the occurs check refuses `?y ≡ <<( … ?y )>>`.
+   * @param group - The group to assert on
+   * @param term - The term every value of the group equals
+   * @returns `false` on a contradiction, after which the solver holds no meaningful state
+   */
+  private assertTerm(group: number, term: RawTerm): boolean {
+    if (!isRdfQuad(term)) {
+      return this.setTerm(group, term);
     }
-    this.setTerm(group, term);
+    // A triple term states no graph, so a quad that names one is not a value any group can take.
+    if (term.graph.termType !== 'DefaultGraph') {
+      return false;
+    }
+    const children = this.assertTriplePin(group);
+    if (children === false) {
+      return false;
+    }
+    return triplePositions.every((position) => {
+      const component = term[position];
+      // Merging a position may merge further groups, so every step reads the ids through the set again -
+      // which `unifyGroups` and `setTerm` both do for the group they are handed.
+      return isRdfVar(component) ?
+        this.unifyGroups(children[position], this.getGroup(component)) :
+        this.assertTerm(children[position], component);
+    });
+  }
+
+  /**
+   * The term every value of the group equals, reading a *shape* back as the triple term it stands for.
+   *
+   * Every position is whatever fixes it, or else the mapping variable naming it - the same variable the
+   * mapping body binds, which is what lets the `BIND(<<( ?mi_s ?mi_p ?mi_o )>> AS ?uq_o)` this feeds name
+   * values the subselect really projects. A position fixed to a term is written as that term, so a head
+   * triple term one of whose positions the pattern decided comes back with the decision in it.
+   * @param group - The group to look up
+   * @returns the term, or `undefined` when nothing fixes the group, or when a position of its shape is
+   * fixed by nothing and named by nothing
+   */
+  public resolvedTermOf(group: number): RawTerm | undefined {
+    const pin = this.pinOf(group);
+    if (pin?.kind !== 'triple') {
+      return pin?.term;
+    }
+    // Terminates on the occurs check: a group reaching itself through the pins is a contradiction, and
+    // the constraint solving refuses to settle in such a state.
+    const children = this.childrenOf(group)!;
+    const [ subject, predicate, object ] = triplePositions.map(position =>
+      this.resolvedTermOf(children[position]) ?? this.mappingVarsOf(children[position])[0]);
+    if (subject === undefined || predicate === undefined || object === undefined) {
+      return undefined;
+    }
+    // Every position was held to the range it admits while the shape was built, so this really is a
+    // triple term - which the types of a data factory have no way of knowing.
+    return DF.quad(<RDF.Quad_Subject> subject, <RDF.Quad_Predicate> predicate, <RDF.Quad_Object> object);
+  }
+
+  /**
+   * The variables of the *mapping* in a group, as against the user query variables the rewriting binds
+   * from them. Ordered by {@link sortClusters}, so the first is the one every rewrite names the group by.
+   * @param group - The group to look up
+   * @returns the mapping variables of the group, mapping body first
+   */
+  public mappingVarsOf(group: number): readonly RangedVar[] {
+    return this.valuesOf(this.resolveGroup(group)).filter(value => !value.value.startsWith('uq'));
   }
 
   /**
@@ -244,12 +337,11 @@ export class ClusterSolver extends TermClusterSet<RangedVar, RawBasicTerm> {
    *   - `vars`: Other variables in the same cluster
    *   - `group`: The cluster's group ID
    */
-  public getCluster(from: RDF.Variable): { term: RawBasicTerm | undefined ; vars: RDF.Variable[]; group: number } {
+  public getCluster(from: RDF.Variable): { term: RawTerm | undefined ; vars: RDF.Variable[]; group: number } {
     const varGroup = this.getGroup(from);
     return {
-      term: this.termOf(varGroup),
-      vars: this.groupToValues[varGroup]
-        .filter(x => !x.equals(from)),
+      term: this.resolvedTermOf(varGroup),
+      vars: this.valuesOf(varGroup).filter(value => !value.equals(from)),
       group: varGroup,
     };
   }

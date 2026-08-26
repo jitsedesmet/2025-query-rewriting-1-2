@@ -4,7 +4,8 @@
  *  https://claude.ai/share/8db9c2e2-918f-42ed-af83-e5564a6f80a3
  */
 export class ClusterSet<T> {
-  public groupToValues: Record<number, T[]>;
+  /** Maps group ID to the values in it - read through {@link valuesOf} and {@link groupEntries}. */
+  protected groupToValues: Record<number, T[]>;
   /** Maps a value to the group it is in - read through {@link groupOf}. */
   protected valueToGroup: Record<string, number | undefined>;
 

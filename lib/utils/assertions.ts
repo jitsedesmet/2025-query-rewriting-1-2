@@ -1,7 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { TriplePosition } from '../datastructures/TermClusterSet.js';
-import { triplePositions } from '../datastructures/TermClusterSet.js';
+import { isTriplePosition, triplePositions } from '../datastructures/TermClusterSet.js';
 import { RangeSet } from '../RangeSet.js';
 import type { TransformContext } from '../transformContext.js';
 import { termVars } from './certainlyBoundVars.js';
@@ -286,8 +286,8 @@ export function asAccess(expression: Algebra.Expression, acc: TriplePosition[] =
       undefined;
   }
   if (expression.subType === Algebra.ExpressionTypes.OPERATOR && expression.args.length === 1 &&
-      triplePositions.includes(<TriplePosition> expression.operator)) {
-    acc.push(<TriplePosition> expression.operator);
+      isTriplePosition(expression.operator)) {
+    acc.push(expression.operator);
     return asAccess(expression.args[0], acc);
   }
   return undefined;

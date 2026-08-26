@@ -2,7 +2,7 @@ import type * as RDF from '@rdfjs/types';
 import { objectRange } from '../RangeSet.js';
 import type { RangeSet } from '../RangeSet.js';
 import type { Pin, PinMeet, TriplePin } from './TermClusterSet.js';
-import { TermClusterSet, triplePositions } from './TermClusterSet.js';
+import { meetShapes, TermClusterSet, triplePositions } from './TermClusterSet.js';
 
 /**
  * The {@link TermClusterSet} an {@link AssertionConjunction} is built on: groups of RDF terms, meeting
@@ -104,9 +104,8 @@ export class AssertionClusterSet extends TermClusterSet<string, RDF.Term> {
 /**
  * The meet of two pins on one group of an assertion conjunction.
  *
- * Two terms are the equality they always were. Two shapes decompose: `?o ≡ <<( a b c )>>` and
- * `?o ≡ <<( d e f )>>` say `a ≡ d`, `b ≡ e`, `c ≡ f`, which is syntactic unification and is what makes
- * everything known about `SUBJECT(?o)` known about `SUBJECT(?x)` as soon as the two are unified.
+ * Two terms are the equality they always were, and two shapes are the pairwise unification
+ * {@link meetShapes} is.
  *
  * A ground triple term meeting a shape decomposes the same way ({@link decomposedAgainst}). Anything else
  * - a term that is not a triple term, or one carrying a graph no triple term can have - is a
@@ -114,14 +113,7 @@ export class AssertionClusterSet extends TermClusterSet<string, RDF.Term> {
  */
 function meetTermPins(left: Pin<RDF.Term>, right: Pin<RDF.Term>): PinMeet<RDF.Term> | false {
   if (left.kind === 'triple') {
-    if (right.kind === 'triple') {
-      return {
-        pin: left,
-        entailed: triplePositions.map(position =>
-          ({ kind: 'unify', left: left[position], right: right[position] })),
-      };
-    }
-    return decomposedAgainst(left, right.term);
+    return right.kind === 'triple' ? meetShapes(left, right) : decomposedAgainst(left, right.term);
   }
   if (right.kind === 'triple') {
     return decomposedAgainst(right, left.term);

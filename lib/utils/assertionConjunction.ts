@@ -59,6 +59,22 @@ import { DF } from './rdfDatatypes.js';
  */
 
 /**
+ * One walk of {@link AssertionConjunction.conjuncts | conjuncts} over Θ: the readings every group has, and
+ * what the groups it already wrote out contribute.
+ *
+ * The two travel together because the second is a function of the first, of the pins and of the strengths -
+ * so the memo lives for exactly one walk, rather than being stamped on the cluster set's revision the way
+ * `readingsPerGroup` is. A strength alone can change without the clusters being written
+ * (`assertBound` completing a weak member), which that stamp would not catch.
+ */
+interface Decomposition {
+  /** The readings of every group, from `readingsPerGroup`. */
+  readonly accessesPerGroup: ReadonlyMap<number, readonly Access[]>;
+  /** What each group written out so far contributes, filled in as the walk reaches it. */
+  readonly conjunctsPerGroup: Map<number, readonly AssertionConjunct[]>;
+}
+
+/**
  * A set of assertions Θ, in the states an assertion about an access can be in:
  *
  * | state                                | means                                                      |
@@ -246,15 +262,15 @@ export class AssertionConjunction {
    * of the pass absorbs what it finds instead of stacking it
    */
   public conjuncts(): AssertionConjunct[] {
-    const accessesPerGroup = this.readingsPerGroup();
+    const walk: Decomposition = { accessesPerGroup: this.readingsPerGroup(), conjunctsPerGroup: new Map() };
     const result: AssertionConjunct[] = [];
     const emitted = new Set<number>();
 
     const emit = (group: number): void => {
       const resolved = this.clusters.resolveGroup(group);
-      if (!emitted.has(resolved) && accessesPerGroup.has(resolved)) {
+      if (!emitted.has(resolved) && walk.accessesPerGroup.has(resolved)) {
         emitted.add(resolved);
-        result.push(...this.groupConjuncts(resolved, accessesPerGroup));
+        result.push(...this.groupConjuncts(resolved, walk));
         for (const child of childGroupsOf(this.clusters.childrenOf(resolved))) {
           emit(child);
         }
@@ -851,13 +867,39 @@ export class AssertionConjunction {
   }
 
   /**
-   * The conjuncts one group of Θ contributes, given how the whole of it can be read.
+   * The conjuncts one group of Θ contributes, given how the whole of it can be read, remembered on the walk
+   * that asked for them.
+   *
+   * Without the memo the walk is exponential in the depth of the shape: writing a group out asks whether its
+   * positions speak up ({@link shapeIsWitnessed}), which writes each of them out *and* asks the same of
+   * their own positions, so every group below is written once per ancestor and once again per ancestor's
+   * question. `FILTER(sameTerm(OBJECT(OBJECT(...(?z))), ?w))` nests as deep as it is written, which made a
+   * fourteen-deep chain a million calls.
    * @param group - The group to write out
-   * @param accessesPerGroup - The readings of every group, from {@link readingsPerGroup}
+   * @param walk - The decomposition being written, whose memo this fills in
+   * @returns its conjuncts, shared with whoever asks again on the same walk and so not to be written to
+   */
+  private groupConjuncts(group: number, walk: Decomposition): readonly AssertionConjunct[] {
+    const known = walk.conjunctsPerGroup.get(group);
+    if (known !== undefined) {
+      return known;
+    }
+    const written = this.writeOutGroup(group, walk);
+    walk.conjunctsPerGroup.set(group, written);
+    return written;
+  }
+
+  /**
+   * The walk {@link groupConjuncts} memoises, run once per group and decomposition.
+   *
+   * A shape holds no cycles ({@link datastructures/TermClusterSet!TermClusterSet}), so a group is never
+   * asked for while it is being written, and the memo is filled in with a finished list.
+   * @param group - The group to write out
+   * @param walk - The decomposition being written
    * @returns its conjuncts
    */
-  private groupConjuncts(group: number, accessesPerGroup: ReadonlyMap<number, readonly Access[]>): AssertionConjunct[] {
-    const accesses = accessesPerGroup.get(group)!;
+  private writeOutGroup(group: number, walk: Decomposition): AssertionConjunct[] {
+    const accesses = walk.accessesPerGroup.get(group)!;
     const pin = this.clusters.pinOf(group);
     const result: AssertionConjunct[] = [];
     if (pin?.kind === 'term') {
@@ -871,7 +913,7 @@ export class AssertionConjunction {
     for (const access of rest) {
       result.push({ access, assertion: assertStrong(representative) });
     }
-    const termType = this.termTypeToState(group, accessesPerGroup);
+    const termType = this.termTypeToState(group, walk);
     if (termType !== undefined) {
       result.push({ access: representative, assertion: assertTermType(termType, this.isStrong(representative)) });
     } else if (result.length === 0 && isBareAccess(representative) && this.clusters.childrenOf(group) === undefined) {
@@ -887,19 +929,16 @@ export class AssertionConjunction {
    * The kind of term the group has to be *told* to be: only what is not already entailed by the rest of what
    * the group writes out, since restating it would stop the pass being idempotent.
    * @param group - The group to look at
-   * @param accessesPerGroup - The readings of every group, from {@link readingsPerGroup}
+   * @param walk - The decomposition being written
    * @returns the term type, or `undefined` when nothing has to be told
    */
-  private termTypeToState(
-    group: number,
-    accessesPerGroup: ReadonlyMap<number, readonly Access[]>,
-  ): AssertableTermType | undefined {
+  private termTypeToState(group: number, walk: Decomposition): AssertableTermType | undefined {
     if (this.clusters.pinOf(group)?.kind === 'term') {
       return undefined;
     }
     if (this.clusters.childrenOf(group) !== undefined) {
       // I have kids, so I should assert that if they don't speak up
-      return this.shapeIsWitnessed(group, accessesPerGroup) ? undefined : 'Quad';
+      return this.shapeIsWitnessed(group, walk) ? undefined : 'Quad';
     }
     const asserted = this.clusters.assertedRangeOf(group);
     return asserted.size === 1 ? assertableTermTypes.find(termType => asserted.has(termType)) : undefined;
@@ -909,33 +948,33 @@ export class AssertionConjunction {
    * Whether a position of the shape says something of its own, in which case T⟨representative : Quad⟩ need
    * not be stated - reading a position already entails that what it is read through is a triple term.
    * @param group - The shaped group to ask about
-   * @param accessesPerGroup - The readings of every group, from {@link readingsPerGroup}
+   * @param walk - The decomposition being written
    * @returns whether some position speaks up
    */
-  private shapeIsWitnessed(group: number, accessesPerGroup: ReadonlyMap<number, readonly Access[]>): boolean {
+  private shapeIsWitnessed(group: number, walk: Decomposition): boolean {
     const childGroups = childGroupsOf(this.clusters.childrenOf(group));
     // Any of my kids write something, or I am getting accessed.
     return childGroups.some((child) => {
-      const lengthOfAccessPath = (accessesPerGroup.get(child)?.length ?? 0);
-      return lengthOfAccessPath > 1 || this.writesAnything(child, accessesPerGroup);
+      const lengthOfAccessPath = (walk.accessesPerGroup.get(child)?.length ?? 0);
+      return lengthOfAccessPath > 1 || this.writesAnything(child, walk);
     });
   }
 
   /**
    * Whether the group, or anything the shape of it reaches, writes a conjunct of its own.
    * @param group - The group to ask about
-   * @param accessesPerGroup - The readings of every group, from {@link readingsPerGroup}
+   * @param walk - The decomposition being written
    * @returns whether the subtree writes anything - the whole subtree, since a position that says nothing
    * itself may hold one that does
    */
-  private writesAnything(group: number, accessesPerGroup: ReadonlyMap<number, readonly Access[]>): boolean {
+  private writesAnything(group: number, walk: Decomposition): boolean {
     // Either I write something
-    if (this.groupConjuncts(group, accessesPerGroup).length > 0) {
+    if (this.groupConjuncts(group, walk).length > 0) {
       return true;
     }
     // Or my children do (recursively)
     const childGroups = childGroupsOf(this.clusters.childrenOf(group));
-    return childGroups.some(child => this.writesAnything(child, accessesPerGroup));
+    return childGroups.some(child => this.writesAnything(child, walk));
   }
 
   /**

@@ -21,13 +21,12 @@ import {
   componentOf,
   assertableTermTypes,
   assertBound,
-  strongAssertionAsExpression,
   asAssertionConjuncts,
   assertStrong,
   assertTermType,
   assertUnbound,
   assertWeak,
-  boundAssertionAsExpression,
+  conjunctAsExpression,
   variablesReadByConjunct,
   hasTarget,
   impliesBound,
@@ -37,10 +36,6 @@ import {
   normalisedTarget,
   rangeOfTermType,
   sameAccessAs,
-  termTypeAssertionAsExpression,
-  unboundAssertionAsExpression,
-  weakAssertionAsExpression,
-  weakenedExpression,
 } from './assertions.js';
 import type { CPMeta } from './certainlyBoundVars.js';
 import { withCpVars } from './certainlyBoundVars.js';
@@ -723,14 +718,7 @@ export class AssertionConjunction {
    * only where `?o` is bound at all.
    */
   public assertPin(access: Access, term: RDF.Term, strong: boolean): boolean {
-    function apply(target: AssertionConjunction): boolean {
-      const group = target.assertAccessAndResolve(access);
-      if (group === false) {
-        return false;
-      }
-      return target.clusters.setTerm(group, term);
-    }
-    return strong ? this.assertStrongly(access.name, apply) : this.assertWeakly(access.name, apply);
+    return this.narrowing(access, strong, (clusters, group) => clusters.setTerm(group, term));
   }
 
   /**
@@ -743,12 +731,30 @@ export class AssertionConjunction {
    * to the same `{Quad}` - so the two never disagree.
    */
   public assertTermType(access: Access, termType: AssertableTermType, strong: boolean): boolean {
+    return this.narrowing(access, strong, (clusters, group) =>
+      clusters.assertTermTypeRange(group, rangeOfTermType(termType)));
+  }
+
+  /**
+   * Conjoins something that narrows the *group* an access names, which is what both of the forms above
+   * are: opening the shapes on the way to the access, and then narrowing what the group it names may be.
+   *
+   * The strength decides which of the two ways that is conjoined, and nothing else does: strongly, the
+   * root is known bound and the narrowing simply holds; weakly, it is `¬bnd(?x) ∨ φ`, and a `φ` the
+   * group cannot hold comes to U⟨?x⟩ rather than to a contradiction ({@link assertWeakly}).
+   *
+   * `narrow` is what to do to the group the access names, once every shape on the way to it is asserted.
+   * It takes the clusters of the conjunction it is applied to, which is a *copy* of this one wherever the
+   * weak form has to try the narrowing before committing to it.
+   */
+  private narrowing(
+    access: Access,
+    strong: boolean,
+    narrow: (clusters: AssertionClusterSet, group: number) => boolean,
+  ): boolean {
     function apply(target: AssertionConjunction): boolean {
       const group = target.assertAccessAndResolve(access);
-      if (group === false) {
-        return false;
-      }
-      return target.clusters.assertTermTypeRange(group, rangeOfTermType(termType));
+      return group !== false && narrow(target.clusters, group);
     }
     return strong ? this.assertStrongly(access.name, apply) : this.assertWeakly(access.name, apply);
   }
@@ -825,27 +831,7 @@ export class AssertionConjunction {
 
   /** The single condition the (non-empty) conjunction stands for, each conjunct in the form it carries. */
   public toExpression(c: TransformContext): Algebra.Expression {
-    // eslint-disable-next-line array-callback-return
-    return conjunctionOf(c, this.conjuncts().map(({ access, assertion }) => {
-      switch (assertion.subType) {
-        case 'unbound': {
-          return unboundAssertionAsExpression(c, access.name);
-        }
-        case 'bound': {
-          return boundAssertionAsExpression(c, access.name);
-        }
-        case 'strong': {
-          return strongAssertionAsExpression(c, access, assertion.term);
-        }
-        case 'weak': {
-          return weakAssertionAsExpression(c, access, assertion.term);
-        }
-        case 'termType': {
-          const typed = termTypeAssertionAsExpression(c, access, assertion.termType);
-          return assertion.strong ? typed : weakenedExpression(c, access.name, typed);
-        }
-      }
-    }));
+    return conjunctionOf(c, this.conjuncts().map(conjunct => conjunctAsExpression(c, conjunct)));
   }
 
   /**

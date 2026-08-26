@@ -587,7 +587,7 @@ function targetAsExpression(c: TransformContext, target: AssertionTarget): Algeb
 }
 
 /** Creates the strong assertion A⟨a ≡ c⟩: `sameTerm(a, c)`. */
-export function strongAssertionAsExpression(c: TransformContext, access: Access, target: AssertionTarget):
+function strongAssertionAsExpression(c: TransformContext, access: Access, target: AssertionTarget):
 Algebra.Expression {
   return c.AF.createOperatorExpression('sameterm', [
     accessAsExpression(c, access),
@@ -596,7 +596,7 @@ Algebra.Expression {
 }
 
 /** Creates T⟨a : τ⟩: the predicate that states `τ`, applied to `a`. */
-export function termTypeAssertionAsExpression(
+function termTypeAssertionAsExpression(
   c: TransformContext,
   access: Access,
   termType: AssertableTermType,
@@ -615,7 +615,7 @@ export function termTypeAssertionAsExpression(
  * identifies error with `false`, and `false || error` is still an error, so the row is dropped either
  * way - which is what the left disjunct then rescues.
  */
-export function weakenedExpression(c: TransformContext, name: string, strong: Algebra.Expression):
+function weakenedExpression(c: TransformContext, name: string, strong: Algebra.Expression):
 Algebra.Expression {
   return c.AF.createOperatorExpression('||', [ unboundAssertionAsExpression(c, name), strong ]);
 }
@@ -624,19 +624,53 @@ Algebra.Expression {
  * Creates the weak assertion W⟨a ≡ c⟩: `!bound(?x) || sameTerm(a, c)`.
  * Only works for simpleAccess. And single variable targets.
  */
-export function weakAssertionAsExpression(c: TransformContext, access: Access, target: AssertionTarget):
+function weakAssertionAsExpression(c: TransformContext, access: Access, target: AssertionTarget):
 Algebra.Expression {
   return weakenedExpression(c, access.name, strongAssertionAsExpression(c, access, target));
 }
 
 /** Creates the bound assertion B⟨?x⟩: `bound(?x)`. */
-export function boundAssertionAsExpression(c: TransformContext, name: string): Algebra.Expression {
+function boundAssertionAsExpression(c: TransformContext, name: string): Algebra.Expression {
   return c.AF.createOperatorExpression('bound', [ c.AF.createTermExpression(DF.variable(name)) ]);
 }
 
 /** Creates the unbound assertion U⟨?x⟩: `!bound(?x)`. */
-export function unboundAssertionAsExpression(c: TransformContext, name: string): Algebra.Expression {
+function unboundAssertionAsExpression(c: TransformContext, name: string): Algebra.Expression {
   return c.AF.createOperatorExpression('!', [ boundAssertionAsExpression(c, name) ]);
+}
+
+/**
+ * The condition one conjunct stands for - the inverse of {@link asAssertionConjuncts}, and next to it so
+ * that the two can be read against each other.
+ *
+ * Nothing new is ever serialised: every form is written back in the shape the recogniser above reads
+ * straight back into the same state, which is what a conjunction round-tripping through a condition
+ * means and what keeps a second run of the pass from stacking a second copy of what it derived.
+ *
+ * **Never as `sameTerm(?o, <<( … )>>)`** (S2): a shape is written one position at a time, by the
+ * conjuncts {@link AssertionConjunction.conjuncts} decomposes it into, since the positions nobody named
+ * have no variable that is bound where the condition sits.
+ */
+export function conjunctAsExpression(c: TransformContext, { access, assertion }: AssertionConjunct):
+Algebra.Expression {
+  switch (assertion.subType) {
+    case 'unbound': {
+      return unboundAssertionAsExpression(c, access.name);
+    }
+    case 'bound': {
+      return boundAssertionAsExpression(c, access.name);
+    }
+    case 'strong': {
+      return strongAssertionAsExpression(c, access, assertion.term);
+    }
+    case 'weak': {
+      return weakAssertionAsExpression(c, access, assertion.term);
+    }
+    case 'termType': {
+      const typed = termTypeAssertionAsExpression(c, access, assertion.termType);
+      return assertion.strong ? typed : weakenedExpression(c, access.name, typed);
+    }
+  }
 }
 
 /**

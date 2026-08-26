@@ -109,6 +109,15 @@ export class AssertionConjunction {
    * The variables in the order they were first mentioned, used to keep a pass idempotent.
    */
   private order: Set<string>;
+  /**
+   * The last {@link readingsPerGroup} taken, with the {@link datastructures/ClusterSet!ClusterSet.revision |
+   * revision} of {@link clusters} it was taken at.
+   *
+   * Nothing invalidates it: the decomposition is a function of `clusters` alone, and a stamp is unique to
+   * one state of one set, so a write - or {@link adopt} putting a different set here altogether - leaves
+   * the stamp it was taken at unreachable. See {@link readingsPerGroup} for why that is the whole of it.
+   */
+  private readings: { revision: number; value: ReadonlyMap<number, readonly Access[]> } | undefined;
 
   public constructor() {
     this.clusters = new AssertionClusterSet();
@@ -287,8 +296,8 @@ export class AssertionConjunction {
    * A group pinned to a term is not one of them: every reading of it is that term, which already states it.
    * @returns the readings per group, each list representative first
    */
-  public equatedReadings(): Access[][] {
-    const result: Access[][] = [];
+  public equatedReadings(): (readonly Access[])[] {
+    const result: (readonly Access[])[] = [];
     for (const [ group, readings ] of this.readingsPerGroup()) {
       if (this.clusters.pinOf(group)?.kind !== 'term' && readings.length > 1) {
         result.push(readings);
@@ -847,7 +856,7 @@ export class AssertionConjunction {
    * @param accessesPerGroup - The readings of every group, from {@link readingsPerGroup}
    * @returns its conjuncts
    */
-  private groupConjuncts(group: number, accessesPerGroup: Map<number, Access[]>): AssertionConjunct[] {
+  private groupConjuncts(group: number, accessesPerGroup: ReadonlyMap<number, readonly Access[]>): AssertionConjunct[] {
     const accesses = accessesPerGroup.get(group)!;
     const pin = this.clusters.pinOf(group);
     const result: AssertionConjunct[] = [];
@@ -881,7 +890,10 @@ export class AssertionConjunction {
    * @param accessesPerGroup - The readings of every group, from {@link readingsPerGroup}
    * @returns the term type, or `undefined` when nothing has to be told
    */
-  private termTypeToState(group: number, accessesPerGroup: Map<number, Access[]>): AssertableTermType | undefined {
+  private termTypeToState(
+    group: number,
+    accessesPerGroup: ReadonlyMap<number, readonly Access[]>,
+  ): AssertableTermType | undefined {
     if (this.clusters.pinOf(group)?.kind === 'term') {
       return undefined;
     }
@@ -900,7 +912,7 @@ export class AssertionConjunction {
    * @param accessesPerGroup - The readings of every group, from {@link readingsPerGroup}
    * @returns whether some position speaks up
    */
-  private shapeIsWitnessed(group: number, accessesPerGroup: Map<number, Access[]>): boolean {
+  private shapeIsWitnessed(group: number, accessesPerGroup: ReadonlyMap<number, readonly Access[]>): boolean {
     const childGroups = childGroupsOf(this.clusters.childrenOf(group));
     // Any of my kids write something, or I am getting accessed.
     return childGroups.some((child) => {
@@ -916,7 +928,7 @@ export class AssertionConjunction {
    * @returns whether the subtree writes anything - the whole subtree, since a position that says nothing
    * itself may hold one that does
    */
-  private writesAnything(group: number, accessesPerGroup: Map<number, Access[]>): boolean {
+  private writesAnything(group: number, accessesPerGroup: ReadonlyMap<number, readonly Access[]>): boolean {
     // Either I write something
     if (this.groupConjuncts(group, accessesPerGroup).length > 0) {
       return true;
@@ -934,10 +946,28 @@ export class AssertionConjunction {
    *   `[?s, SUBJECT(?o)]`, giving the edge `SUBJECT(?o) = ?s`. The other two positions are anonymous.
    * - `FILTER(sameTerm(SUBJECT(?o), :a))` - the subject position has one reading, so no edge; it writes
    *   `SUBJECT(?o) = :a` from that single reading.
+   * Memoised per state of {@link clusters}, which is the only thing the walk reads: an operation asks for the
+   * decomposition several times over ({@link conjuncts}, {@link equatedReadings}, {@link patternValues}), and
+   * the walk is a BFS over every group plus a sort per group. Handed out read-only, the memo being shared.
    * @returns the readings per group; a group nothing reaches is left out, being what is left of a shape a
    * variable was taken out of, which nothing may be written about
    */
-  private readingsPerGroup(): Map<number, Access[]> {
+  private readingsPerGroup(): ReadonlyMap<number, readonly Access[]> {
+    // Stamped before the walk rather than after it: a walk that wrote something - it does not, reading only
+    // the groups, their members and their shapes - would then leave a stamp the next call misses on, rather
+    // than one it wrongly trusts.
+    const revision = this.clusters.revision;
+    if (this.readings?.revision !== revision) {
+      this.readings = { revision, value: this.walkReadingsPerGroup() };
+    }
+    return this.readings.value;
+  }
+
+  /**
+   * The walk {@link readingsPerGroup} memoises, run once per state of {@link clusters}.
+   * @returns the readings per group, each list representative first
+   */
+  private walkReadingsPerGroup(): Map<number, Access[]> {
     // The shortest access pattern into a group
     const representatives = new Map<number, Access>();
     // Seed with every group that has a named member, including groups created for

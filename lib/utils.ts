@@ -133,11 +133,10 @@ export function collectVariableNames(astTransformer: TransformContext['astTransf
 /**
  * Extracts direct variable assignments from the EXTEND chain at the top of an operation, keeping only the
  * ones whose expression is a Literal or a NamedNode.
- * @param c - The transformation context
  * @param op - The operation to search
  * @returns a record mapping variable names to their assigned terms
  */
-export function directExtensions(c: TransformContext, op: Algebra.Operation): Record<string, RDF.Term> {
+export function directExtensions(op: Algebra.Operation): Record<string, RDF.Term> {
   const assignments: Record<string, RDF.Term> = {};
 
   const findAssignments = (op: Algebra.Operation): void => {
@@ -157,13 +156,11 @@ export function directExtensions(c: TransformContext, op: Algebra.Operation): Re
 /**
  * Removes the EXTEND operations binding the given variables from the top of an operation tree. Modifies the
  * tree in place.
- * @param c - The transformation context
  * @param op - The operation to modify
  * @param vars - Variable names whose extensions should be removed
  * @returns the modified operation
  */
 export function deleteVarExtensionsInPlace(
-  c: TransformContext,
   op: Algebra.Operation,
   vars: string[],
 ): Algebra.Operation {

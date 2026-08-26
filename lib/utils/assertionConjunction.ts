@@ -554,6 +554,7 @@ export class AssertionConjunction {
    * @param access - The access the assertion is about
    * @param assertion - What it asserts
    * @returns `false` on a contradiction
+   * @throws when the assertion is in a state Θ cannot hold - a weak edge, or a bare form about a position
    */
   public assert(access: Access, assertion: Assertion): boolean {
     switch (assertion.subType) {
@@ -572,10 +573,13 @@ export class AssertionConjunction {
           this.assertPin(access, assertion.term, true);
       }
       case 'weak': {
-        // A weak *edge* is not a state this can be in (weak ⇔ pinned group), and neither the recognisers
-        // nor {@link asWeakenedConjunct} ever produce one, so the target of a weak assertion is a term.
+        // A weak *edge* is not a state this can be in - weakening one is the unsound merge the form does
+        // not exist to make - and neither the recognisers nor {@link asWeakenedConjunct} ever produce one,
+        // so the target of a weak assertion is a term. Storing nothing while reporting success would drop
+        // the conjunct from Θ and from the residual alike, which adds solutions.
         if (targetIsAccess(assertion.term)) {
-          return true;
+          const target = accessId(assertion.term);
+          throw new Error(`Unreachable: weak is only ever asserted of a term, not of ${target}`);
         }
         return this.assertPin(access, assertion.term, false);
       }
@@ -770,9 +774,32 @@ export class AssertionConjunction {
     attempt.strength.set(root, 'weak');
     if (apply(attempt)) {
       this.adopt(attempt);
+      this.assertWeakMemberIsAlone(root);
       return true;
     }
     return this.assertUnbound(root);
+  }
+
+  /**
+   * Checks the invariant a weak member rests on: it is the only variable naming its group.
+   *
+   * {@link get} reports any other member of a group as a strong edge to its representative without reading
+   * {@link strength}, which is right only where no weak member has another member to point at. The single
+   * way into a group of several is {@link assertUnify}, which makes both of its sides strong, so a weak
+   * member is alone in its group - and a violation would state a weak edge as a strong one, adding
+   * solutions.
+   * @param root - The variable just made weak
+   * @throws when that variable shares its group with another
+   */
+  private assertWeakMemberIsAlone(root: string): void {
+    const group = this.clusters.groupOf(root);
+    if (group === undefined) {
+      return;
+    }
+    const members = this.namedMembers(group);
+    if (members.length > 1) {
+      throw new Error(`Unreachable: the weak ?${root} shares a group with ${members.join(', ')}`);
+    }
   }
 
   /**

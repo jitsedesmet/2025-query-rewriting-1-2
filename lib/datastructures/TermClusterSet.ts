@@ -87,8 +87,9 @@ export function meetShapes<Term>(left: TriplePin, right: TriplePin): PinMeet<Ter
  * A pin makes the child DAG a real graph, and two invariants keep it well founded:
  *
  * - **occurs check**: a group may not reach itself through the pins, `?o ≡ <<( ?o ... )>>` having no
- *   solution. Checked over the whole graph after a unification settles, since a merge closes a cycle just
- *   as a pin does.
+ *   solution. Checked once a whole work list settles rather than as each pin lands, since a merge closes a
+ *   cycle just as a pin does - and only from the groups that work list touched, the rest of the graph having
+ *   been acyclic before it ran ({@link hasCycle}).
  * - **liveness**: a group that is the child of a live pin survives {@link remove} however few members it
  *   has left, or the pin pointing at it would dangle.
  */
@@ -102,6 +103,12 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
    * Needed to dereference removed groups still used in a pin.
    */
   protected groupMergeHistory: Record<number, number>;
+  /**
+   * Whether the last work list to settle left the pins acyclic, which is what lets {@link hasCycle} start
+   * from the groups a run touched rather than from every group there is. Cleared by a run that gives up
+   * halfway, since the constraints it did establish may have closed a cycle nothing went on to check.
+   */
+  private acyclic: boolean;
 
   /**
    * @param toId - How to transform a value into its string key
@@ -121,6 +128,7 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
     this.groupToPin = {};
     this.groupToRange = {};
     this.groupMergeHistory = {};
+    this.acyclic = true;
   }
 
   public override clone(): TermClusterSet<T, Term> {
@@ -135,6 +143,7 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
     copy.groupToPin = { ...this.groupToPin };
     copy.groupToRange = { ...this.groupToRange };
     copy.groupMergeHistory = { ...this.groupMergeHistory };
+    copy.acyclic = this.acyclic;
   }
 
   /**
@@ -288,17 +297,33 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
    * @returns `false` on a contradiction
    */
   private resolveAllConstraints(work: GroupConstraint<Term>[]): boolean {
+    // The groups the run pins or merges, which is where a cycle it closed has to pass through.
+    const touched: number[] = [];
     while (work.length > 0) {
       const item = work.shift()!;
-      const staysValid = item.kind === 'unify' ?
-        this.unite(this.resolveGroup(item.left), this.resolveGroup(item.right), work) :
-        this.place(this.resolveGroup(item.group), item.pin, work);
+      let staysValid: boolean;
+      if (item.kind === 'unify') {
+        const left = this.resolveGroup(item.left);
+        const right = this.resolveGroup(item.right);
+        touched.push(left, right);
+        staysValid = this.unite(left, right, work);
+      } else {
+        const group = this.resolveGroup(item.group);
+        touched.push(group);
+        staysValid = this.place(group, item.pin, work);
+      }
       if (!staysValid) {
+        this.acyclic = false;
         return false;
       }
     }
     // A cycle is closed by a merge just as much as by a pin, so the check is over the settled graph.
-    return !this.hasCycle();
+    if (this.hasCycle(touched)) {
+      this.acyclic = false;
+      return false;
+    }
+    this.acyclic = true;
+    return true;
   }
 
   /**
@@ -370,9 +395,16 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
    * Whether any group is its own descendant, which no value satisfies: a triple term is strictly larger than
    * each of its components, so `?o ≡ <<( ?o ... )>>` is unsatisfiable - and resolving such a group to a term
    * would not terminate.
+   *
+   * Descending from `touched` alone is the whole graph's answer whenever the graph was acyclic before the run
+   * ({@link acyclic}): a cycle that holds none of the groups the run pinned or merged holds none of its new
+   * edges either - the pins of those groups are the only ones it changed, and a merge is the identification
+   * of two groups into one of them - so it was there to be found on the way in. Where that does not hold,
+   * every group is a root again.
+   * @param touched - The groups the run that is settling pinned or merged
    * @returns whether the pins close a cycle
    */
-  private hasCycle(): boolean {
+  private hasCycle(touched: readonly number[]): boolean {
     // Done, for example because you already descended top level, and did not find any cycle, can shortcut and stop.
     const done = new Set<number>();
     const onCurPath = new Set<number>();
@@ -390,7 +422,8 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
       done.add(resolved);
       return cyclic;
     };
-    return Object.keys(this.groupToValues).some(group => descendHasCycle(Number(group)));
+    const roots = this.acyclic ? touched : Object.keys(this.groupToValues).map(Number);
+    return roots.some(group => descendHasCycle(group));
   }
 
   /**

@@ -136,8 +136,9 @@ export class AssertionConjunction {
 
   /**
    * The conjunction of the assertions of `conjuncts`, which never contradict when every one of them is
-   * entailed by one satisfiable Θ - a subset of its {@link conjuncts}, or the weakened and entailed forms
-   * the pushdown derives from them, which are implied by what they came from and so satisfiable with it.
+   * entailed by one satisfiable Θ - a subset of its {@link AssertionConjunction.conjuncts | conjuncts}, or
+   * the weakened and entailed forms the pushdown derives from them, which are implied by what they came
+   * from and so satisfiable with it.
    * @param conjuncts - The conjuncts to conjoin
    * @returns the conjunction they make
    * @throws when the conjuncts do contradict, since a caller handing over conjuncts of two different Θ has

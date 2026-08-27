@@ -19,3 +19,4 @@ dist
 !test/statics/*.ttl
 .devcontainer/devcontainer.json
 *.pdf
+bench-*.json

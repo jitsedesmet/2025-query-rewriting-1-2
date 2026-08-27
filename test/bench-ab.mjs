@@ -110,24 +110,65 @@ try {
 }
 
 const names = [ ...results.base[0].keys() ];
-const width = Math.max(...names.map(name => name.length));
+
+/**
+ * A duration in milliseconds, at a width that reads for both a 0.05ms parse and a 40ms pushdown.
+ * @param ms - The duration
+ * @returns it, formatted
+ */
+function millis(ms) {
+  return ms < 1 ? ms.toFixed(4) : ms.toFixed(2);
+}
+
+/**
+ * The middle value of a list.
+ * @param values - The values, which this sorts a copy of
+ * @returns the median
+ */
+function medianOf(values) {
+  const sorted = [ ...values ].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle];
+}
+
+const rows = names.map((name) => {
+  const bases = results.base.map(round => round.get(name));
+  const heads = results.head.map(round => round.get(name));
+  const ratios = bases.map((base, round) => base / heads[round]);
+  return {
+    name,
+    base: medianOf(bases),
+    head: medianOf(heads),
+    won: `${ratios.filter(ratio => ratio > 1).length}/${rounds}`,
+    // The median of the paired ratios rather than their mean, geometric or otherwise: one round the
+    // machine spoiled would drag a mean far enough to disagree with the two columns beside it, which is
+    // how a summary stops being readable. Paired rather than the ratio of the two columns, since the
+    // pairing is what the alternating is for.
+    ratio: medianOf(ratios),
+    ratios,
+  };
+});
+
+const width = Math.max(...names.map(name => name.length), 'benchmark'.length);
+const header = `${'benchmark'.padEnd(width)}  ${'base ms'.padStart(8)}  ${'HEAD ms'.padStart(8)}  ` +
+  `${'HEAD won'.padStart(8)}  ${'ratio'.padStart(6)}  ratios per round (base/head)`;
 process.stdout.write(`\n${revision} (base) against HEAD, ${rounds} alternating rounds\n\n`);
-process.stdout.write(`${'benchmark'.padEnd(width)}  wins  geomean  ratios (base/head)\n`);
-process.stdout.write(`${'-'.repeat(width + 21 + rounds * 6)}\n`);
-for (const name of names) {
-  const ratios = results.base.map((base, round) => base.get(name) / results.head[round].get(name));
-  const wins = ratios.filter(ratio => ratio > 1).length;
-  // Geometric, since these are ratios: a round at 0.5 has to cancel one at 2.0 rather than one at 1.5.
-  const geomean = Math.exp(ratios.reduce((sum, ratio) => sum + Math.log(ratio), 0) / ratios.length);
-  const printed = ratios.map(ratio => ratio.toFixed(2).padStart(5)).join(' ');
+process.stdout.write(`${header}\n${'-'.repeat(header.length + rounds * 6 - 'ratios per round (base/head)'.length)}\n`);
+for (const row of rows) {
   process.stdout.write(
-    `${name.padEnd(width)}  ${String(wins).padStart(2)}/${rounds}  ${geomean.toFixed(3).padStart(7)}  ${printed}\n`,
+    `${row.name.padEnd(width)}  ${millis(row.base).padStart(8)}  ${millis(row.head).padStart(8)}  ` +
+    `${row.won.padStart(8)}  ${row.ratio.toFixed(3).padStart(6)}  ` +
+    `${row.ratios.map(ratio => ratio.toFixed(2).padStart(5)).join(' ')}\n`,
   );
 }
 process.stdout.write(`
+Milliseconds are the median across rounds of each run's own median, and \`ratio\` the median of the paired
+per-round ratios, so that one round the machine spoiled cannot move any of the three. Above 1.000 means
+HEAD is the faster of the two, and "HEAD won" counts the rounds in which it was.
+
 Read the parse benchmarks first: they are byte-identical on both sides, so whatever they report is this
 machine's noise, and nothing smaller is a result. Run \`yarn bench:ab HEAD ${rounds}\` for the null - HEAD
 against itself - to see what this many rounds produces from no difference at all. On the machine this was
 written on, ${rounds} rounds of the null reached 1/${rounds} wins and ratios down to 0.71, so a win count on its own
-decides nothing and a geomean inside about 5% of 1.000 is not a difference.
+decides nothing and a ratio inside about 5% of 1.000 is not a difference.
 `);

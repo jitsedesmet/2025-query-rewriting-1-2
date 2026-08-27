@@ -116,8 +116,10 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
   private pinChildToOwners: Record<number, Set<number>>;
   /**
    * Whether the last work list to settle left the pins acyclic, which is what lets {@link hasCycle} start
-   * from the groups a run touched rather than from every group there is. Cleared by a run that gives up
-   * halfway, since the constraints it did establish may have closed a cycle nothing went on to check.
+   * from the groups a run touched rather than from every group there is.
+   * Cleared by a run that gives up halfway,
+   * since the constraints it did establish may have closed a cycle nothing went on to check.
+   * false here means unknowns, it does not mean cycle.
    */
   private acyclic: boolean;
 
@@ -495,7 +497,10 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
   private registerPinChildren(owner: number, pin: Pin<Term> | undefined): void {
     for (const child of childGroupsOf(pin?.kind === 'triple' ? pin : undefined)) {
       const resolved = this.resolveGroup(child);
-      (this.pinChildToOwners[resolved] ??= new Set()).add(owner);
+      if (this.pinChildToOwners[resolved] === undefined) {
+        this.pinChildToOwners[resolved] = new Set();
+      }
+      this.pinChildToOwners[resolved].add(owner);
     }
   }
 
@@ -537,17 +542,16 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
   protected override migrateGroupData(oldGroup: number, newGroup: number): void {
     super.migrateGroupData(oldGroup, newGroup);
     const inherited = this.pinChildToOwners[oldGroup];
-    if (inherited === undefined) {
-      return;
-    }
-    delete this.pinChildToOwners[oldGroup];
-    const owners = this.pinChildToOwners[newGroup];
-    if (owners === undefined) {
-      this.pinChildToOwners[newGroup] = inherited;
-      return;
-    }
-    for (const owner of inherited) {
-      owners.add(owner);
+    if (inherited !== undefined) {
+      delete this.pinChildToOwners[oldGroup];
+      const owners = this.pinChildToOwners[newGroup];
+      if (owners === undefined) {
+        this.pinChildToOwners[newGroup] = inherited;
+      } else {
+        for (const owner of inherited) {
+          owners.add(owner);
+        }
+      }
     }
   }
 

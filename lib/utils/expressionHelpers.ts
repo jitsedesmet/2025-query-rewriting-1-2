@@ -64,8 +64,6 @@ export function createBooleanExpression(c: TransformContext, value: boolean): Al
  * Whether an expression evaluates to the same value in every solution: no variables, and no operator whose
  * value is not stable.
  *
- * TODO: when you have operations like `&&` or `||` you could shortcut potentially on if one branch is
- * static.
  * @param c - The transformation context
  * @param expression - The expression to check
  * @returns whether it is static

@@ -149,7 +149,7 @@ export class AssertionConjunction {
     for (const { access, assertion } of conjuncts) {
       if (!result.assert(access, assertion)) {
         throw new Error(
-          `Unreachable: conjuncts entailed by one Θ contradict, at ${assertion.subType} of ${accessId(access)}`,
+          `Conjuncts entailed by one Θ contradict, at ${assertion.subType} of ${accessId(access)}`,
         );
       }
     }
@@ -254,6 +254,7 @@ export class AssertionConjunction {
    * of the pass absorbs what it finds instead of stacking it
    */
   public conjuncts(): AssertionConjunct[] {
+    // ConjunctsPerGroup is used for memoization
     const walk: Decomposition = { accessesPerGroup: this.readingsPerGroup(), conjunctsPerGroup: new Map() };
     const result: AssertionConjunct[] = [];
     const emitted = new Set<number>();
@@ -872,6 +873,7 @@ export class AssertionConjunction {
    * @returns its conjuncts, shared with whoever asks again on the same walk and so not to be written to
    */
   private groupConjuncts(group: number, walk: Decomposition): readonly AssertionConjunct[] {
+    // Memoization
     const known = walk.conjunctsPerGroup.get(group);
     if (known !== undefined) {
       return known;
@@ -1509,15 +1511,15 @@ function substitutionGrew(before: Assertions, after: Assertions, assertions: Ass
         throw new Error(`Unreachable: ?${name} left the substitution without becoming unbound`);
       }
       grew = true;
-      continue;
-    }
-    kept += 1;
-    if (!now.equals(value)) {
-      if (!refinesTerm(value, now)) {
-        throw new Error(`Unreachable: what Θ substitutes for ?${name} changed rather than grew, ` +
-          `from ${value.termType} to ${now.termType}`);
+    } else {
+      kept += 1;
+      if (!now.equals(value)) {
+        if (!refinesTerm(value, now)) {
+          throw new Error(`Unreachable: what Θ substitutes for ?${name} changed rather than grew, ` +
+              `from ${value.termType} to ${now.termType}`);
+        }
+        grew = true;
       }
-      grew = true;
     }
   }
   return grew || after.size > kept;

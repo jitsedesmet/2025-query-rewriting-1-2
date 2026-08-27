@@ -279,6 +279,7 @@ function swapWith(
     // Congruence: these do not touch which variables a solution binds. For the projection,
     // dom(Θ) ⊆ variables holds, since pVars of a projection is what it projects.
     case Algebra.Types.PROJECT: {
+      // Can push since we know we are projected. (by pvars checks)
       return keep(AF.createProject(assertionFilter(c, op.input, assertions), op.variables));
     }
     case Algebra.Types.DISTINCT: {
@@ -415,6 +416,7 @@ function pruneValues(c: TransformContext, values: Algebra.Values, assertions: As
   const newBindings: Algebra.Values['bindings'] = [];
   const pins = termPinsOn(assertions, values.variables);
   for (const binding of values.bindings) {
+    // TermPinsOn is wayyy cheaper then rowSatisfies
     if (agreesWithPins(pins, binding) && rowSatisfies(assertions, values.variables, binding)) {
       newBindings.push(Object.fromEntries(
         Object.entries(binding).filter(([ name ]) => !isRebuilt(name)),

@@ -116,10 +116,12 @@ export class TermClusterSet<T, Term extends { termType: RDF.Term['termType'] }> 
   private pinChildToOwners: Record<number, Set<number>>;
   /**
    * Whether the last work list to settle left the pins acyclic, which is what lets {@link hasCycle} start
-   * from the groups a run touched rather than from every group there is.
-   * Cleared by a run that gives up halfway,
-   * since the constraints it did establish may have closed a cycle nothing went on to check.
-   * false here means unknowns, it does not mean cycle.
+   * from the groups a run touched rather than from every group there is. Cleared by a run that gives up
+   * halfway, since the constraints it did establish may have closed a cycle nothing went on to check.
+   *
+   * `false` is *not known to be acyclic*, never *cyclic*. Nothing reads it as an answer: all it decides is
+   * where {@link hasCycle} starts from, so being wrong about it the safe way costs a walk of every group
+   * and nothing else.
    */
   private acyclic: boolean;
 

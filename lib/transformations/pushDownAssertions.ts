@@ -277,9 +277,11 @@ function swapWith(
       ));
     }
     // Congruence: these do not touch which variables a solution binds. For the projection,
-    // dom(Θ) ⊆ variables holds, since pVars of a projection is what it projects.
+    // dom(Θ) ⊆ variables holds - not because a filter may not name what the projection drops, but because
+    // `normalisedFor` has already met Θ with the `vRanges` of this operation, and a variable it does not
+    // project never binds here: the strong forms empty the plan there and the rest are dropped, so nothing
+    // naming one is left to push.
     case Algebra.Types.PROJECT: {
-      // Can push since we know we are projected. (by pvars checks)
       return keep(AF.createProject(assertionFilter(c, op.input, assertions), op.variables));
     }
     case Algebra.Types.DISTINCT: {

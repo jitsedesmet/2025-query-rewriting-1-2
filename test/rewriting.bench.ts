@@ -15,34 +15,35 @@ import { nonTripleTermConstruct, testQuery, tripleTermConstruct } from './queryC
  * {@link transformBgp!queryTransform}, the pushdown on its own, and the parse the first of those
  * includes.
  *
- * Run with `yarn bench`. To measure a change rather than a number, save a baseline and compare against
- * it - the benchmarks live in `test`, so checking out another revision of `lib` alone leaves them in
- * place, and vitest reads the sources directly, so nothing needs building in between:
+ * Run with `yarn bench` for a single set of numbers.
  *
- * ```
- * git checkout 8638c96 -- lib          # the revision to measure against
- * yarn bench --outputJson=bench-base.json
- * git checkout HEAD -- lib             # back to the working revision
- * yarn bench --compare=bench-base.json
- * ```
+ * To measure a *change*, use `yarn bench:ab <revision>` (`test/bench-ab.mjs`), which alternates
+ * between the two revisions of `lib` and reports the paired result. A single run of each side and a
+ * `--compare` between them cannot do it: every sample of one revision then falls before every sample of
+ * the other, so anything the machine does in between reads as a difference. Measured on these
+ * benchmarks, that put the parse control - byte-identical on both sides, so necessarily 1.00x - as far
+ * out as 0.53x and 2.57x, and invented a 2% end-to-end regression that eight alternating rounds showed
+ * was not there.
  *
- * `8638c96` is the commit the revision-stamp memos went on top of. Nothing here is a regression test:
- * these numbers move with the machine, so what is worth reading is the ratio the comparison prints, and
- * only when the two runs happened on the same idle machine.
+ *     yarn bench:ab 8638c96 8      # the commit the revision-stamp memos went on top of
+ *     yarn bench:ab HEAD 8         # the null: HEAD against itself, to calibrate the noise
  *
- * **The parse benchmarks are the control.** No revision this is likely to be run across changes
- * anything about parsing, so whatever ratio they report is the noise floor of the two runs, and nothing
- * smaller than that is worth reading anywhere else. On the run this was written from they came out at
- * 1.04x and 1.80x while the pushdown moved 1.48x to 1.62x - so the second parse figure was noise of the
- * same size as the effect being measured, and the pushdown numbers were only worth believing because
- * all three of them moved together and in the direction the memos predict.
+ * Nothing here is a regression test. What eight alternating rounds against `8638c96` reported, with the
+ * parse control at 1.026 and 0.993 and so a noise band of some 3%:
+ *
+ * | benchmark                          | geomean | rounds won |
+ * | ---------------------------------- | ------- | ---------- |
+ * | pushdown, 160 conditions, 16 blocks | 1.300  | 8/8        |
+ * | pushdown, 32 blocks                 | 1.619  | 8/8        |
+ * | pushdown, 64 blocks                 | 1.592  | 8/8        |
+ * | the whole rewriting, all three      | 1.006 to 1.019 | 3/8 to 5/8 |
  *
  * **What each level is for.** `queryTransform` is what a caller experiences, parse included, so it is
  * the honest end-to-end figure and the least sensitive one - the memos need a bigger conjunction than a
- * hand-written filter builds before they reach it, and on that same run it did not move at all. The
- * pushdown is where {@link utils/assertionConjunction!AssertionConjunction} does its work, and so where
- * a change to the memos shows up: it is not part of the standard chain the integration tests run, being
- * a transformation a caller opts into, so it is measured both ways below.
+ * hand-written filter builds before they reach it, which is why all three of those sit inside the noise
+ * band above. The pushdown is where {@link utils/assertionConjunction!AssertionConjunction} does its
+ * work, and so where a change to the memos shows up: it is not part of the standard chain the
+ * integration tests run, being a transformation a caller opts into, so it is measured both ways below.
  */
 
 /** The chain the integration tests run, which does not include the pushdown. */
@@ -126,6 +127,14 @@ function conditionAt(index: number, names: readonly string[]): string {
   }
 }
 
+/**
+ * Long enough to be worth reading. The default 100ms of warm-up leaves V8 still optimising when the
+ * sampling starts, which on a 25ms benchmark is three iterations, and the default 500ms of sampling then
+ * takes some 16 samples of whatever state it settled into. Both are what made a single run of this file
+ * unable to tell a 50% difference from nothing.
+ */
+const settled = { warmupTime: 500, warmupIterations: 16, time: 2000, iterations: 24 };
+
 // Parsed once, so that what the pushdown benchmarks time is the pushdown.
 const parsed: Record<string, Algebra.Operation> = {
   'filter of 160 conditions, 16 blocks': parseQuery(bare, synthetic(16, 160)),
@@ -136,31 +145,31 @@ const parsed: Record<string, Algebra.Operation> = {
 describe('the whole rewriting', () => {
   bench('a mapped query, standard chain', () => {
     queryTransform(mapped, testQuery, [ ...standardTransformations ]);
-  });
+  }, settled);
 
   bench('a filter-heavy mapped query, standard chain', () => {
     queryTransform(mapped, filterHeavyQuery, [ ...standardTransformations ]);
-  });
+  }, settled);
 
   bench('a filter-heavy mapped query, with the assertion pushdown', () => {
     queryTransform(mapped, filterHeavyQuery, [ ...withPushdown ]);
-  });
+  }, settled);
 });
 
 describe('the parse the above includes', () => {
   bench('a mapped query', () => {
     parseQuery(mapped, testQuery);
-  });
+  }, settled);
 
   bench('a filter-heavy mapped query', () => {
     parseQuery(mapped, filterHeavyQuery);
-  });
+  }, settled);
 });
 
 describe('the assertion pushdown, over a parsed plan', () => {
   for (const [ label, plan ] of Object.entries(parsed)) {
     bench(label, () => {
       pushDownAssertions(bare, plan);
-    });
+    }, settled);
   }
 });

@@ -180,7 +180,7 @@ Validated: the suite only makes 40 such calls, so the fuzz is what matters - 400
 comparing indexed vs. scan for every group after every step: **18 991 055 comparisons, 0 disagreements**.
 Result: linear → constant, 24× to 215× on removal.
 
-### 4.3 `AssertionConjunction` recomputes its decomposition - fixed, `7e56755`
+### 4.3 `AssertionConjunction` recomputes its decomposition - fixed, `7e56755`, then reverted, `3e3e032`
 
 Confirmed by counting: 1056 `readingsPerGroup` calls across the suite = 752 `conjuncts` + 235
 `patternValues` + 69 `equatedReadings`, i.e. every one runs its own BFS. 33% are on a conjunction whose
@@ -201,6 +201,11 @@ Validated: 351 hits / 705 misses across the suite and 242 771 checked hits in fu
 a negative control (making `touch()` a no-op makes the fuzz fail) proving the harness is sensitive.
 Result: ~3-5% end-to-end.
 
+Both this and 4.5 were taken back off the branch by `3e3e032`, the two of them being the whole of the
+revision/`touch` mechanism, to be reviewed as a PR of their own: the stamp is load-bearing for whatever
+reads it next, and the argument for why nothing has to invalidate it is worth reading on its own rather
+than among a dozen unrelated fixes. Nothing else on the branch needed it - see 4.4.
+
 ### 4.4 `groupConjuncts` ↔ `writesAnything` recursion - fixed, `38f5d47`
 
 Confirmed, and **reachable from a plain SPARQL query**, not just the internal API - the item's "depth is
@@ -211,11 +216,14 @@ Scoped **per walk** rather than per revision, deliberately deviating from 4.3's 
 conjuncts depend on `this.strength`, and `assertBound` promotes a weak member to strong without any write
 reaching `touch()` - a revision-stamped memo would go stale there.
 
+That is also why it survived `3e3e032` whole: never having read the stamp, it lost only the read-only
+signatures 4.3 had given it.
+
 Validated: 1467 memo lookups across the suite (matching the baseline call count exactly) and ~1.44M in
 fuzz, 0 disagreements, output byte-identical at every depth. Result: 4 s → 2.6 ms at depth 20; no
 measurable change at the depth ≤ 2 the suite actually uses.
 
-### 4.5 `namedMembers` sorts on every call - fixed, `1473bd9`
+### 4.5 `namedMembers` sorts on every call - fixed, `1473bd9`, then reverted, `3e3e032`
 
 Confirmed: 2848 calls per pushdown pass over only 12 distinct revisions - 87.6% re-sort a group at a
 state already sorted. The item's caller list is incomplete and mis-weighted: the dominant caller is

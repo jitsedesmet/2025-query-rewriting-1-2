@@ -1,5 +1,6 @@
 import { describe, it } from 'vitest';
 import { ClusterSolver } from '../lib/ClusterSolver.js';
+import { VAR_PREFIX_USER_QUERY } from '../lib/consts.js';
 import { DF } from '../lib/utils/rdfDatatypes.js';
 
 /**
@@ -80,6 +81,38 @@ describe('clusterSolver', () => {
       expect(solver.getCluster(varY).term).toEqual(DF.quad(termA, termB, termC));
       expect(() => solver.register(DF.quad(termA, termB, termA), varY))
         .toThrow('Cannot match Term');
+    });
+  });
+
+  describe('telling the mapping side of a cluster from the user query side', () => {
+    /**
+     * The two sides are told apart by the whole `uq_` prefix of {@link VAR_PREFIX_USER_QUERY}, not by the
+     * two letters it starts with: `?uqx` names no user query variable - the user's `?uqx` arrives here as
+     * `?uq_uqx` - so it is a mapping variable like any other.
+     */
+    it('counts a variable merely starting with the letters of the prefix as a mapping variable', ({ expect }) => {
+      const solver = new ClusterSolver();
+      const mappingVar = DF.variable('uqx');
+      solver.register(mappingVar, DF.variable(`${VAR_PREFIX_USER_QUERY}x`));
+      expect(solver.mappingVarsOf(solver.getGroup(mappingVar)).map(value => value.value))
+        .toEqual([ 'uqx' ]);
+    });
+
+    /**
+     * What the rewriting reads off a cluster is its *first* variable, so the ordering is the classification
+     * rather than a lexicographic accident of the two prefixes: a mapping variable sorting after `uq_` by
+     * name still comes first.
+     */
+    it('orders the mapping variables first however their names compare', ({ expect }) => {
+      const solver = new ClusterSolver();
+      const userQueryVar = DF.variable(`${VAR_PREFIX_USER_QUERY}a`);
+      const mappingVar = DF.variable('zz_x');
+      solver.register(mappingVar, userQueryVar);
+      solver.register(mappingVar, DF.variable(`${VAR_PREFIX_USER_QUERY}b`));
+      solver.sortClusters();
+      // The variable a bind on `?uq_a` names, which has to be one the mapping body projects.
+      expect(solver.getCluster(userQueryVar).vars.map(value => value.value))
+        .toEqual([ 'zz_x', `${VAR_PREFIX_USER_QUERY}b` ]);
     });
   });
 

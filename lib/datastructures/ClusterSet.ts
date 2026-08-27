@@ -44,11 +44,18 @@ export class ClusterSet<T> {
    * Moves {@link revision} on, invalidating whatever was memoised off the state the set was just in.
    *
    * Called by the method that writes rather than by whoever asked for the write, so that a caller has
-   * nothing to remember. The calls sit on the choke points every write in the hierarchy passes through -
+   * nothing to remember. Most of the calls sit on the choke points the writes of this class pass through -
    * {@link clear}, {@link copyInto}, {@link createEmptyGroup}, {@link remove}, {@link dropGroup},
-   * {@link mergeGroupIds}, and the two of
-   * {@link datastructures/TermClusterSet!TermClusterSet} that write the pins and the ranges - which is what a
-   * subclass extending one of them inherits rather than has to repeat.
+   * {@link mergeGroupIds} - which is what a subclass extending one of them inherits rather than has to
+   * repeat, and what makes `createGroup` and every `super`-chaining override safe without a call of their
+   * own.
+   *
+   * **A subclass writing state no ancestor writes owes a call here on its own account**, since no choke
+   * point of this class covers it. Those are `narrowRange` and `resolveAllConstraints` on
+   * {@link datastructures/TermClusterSet!TermClusterSet}, `assertTermTypeRange` on
+   * {@link datastructures/AssertionClusterSet!AssertionClusterSet}, and `sortClusters`,
+   * `registerExpressionToGroup` and the static-validation branch of `register` on {@link ClusterSolver!ClusterSolver}
+   * - the last three of which write no group at all, which is exactly why they are easy to miss.
    */
   protected touch(): void {
     revisions++;

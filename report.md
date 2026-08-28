@@ -58,22 +58,28 @@ bind has a smaller `pVars`, which is the point. Reaching the outer `PROJECT` is 
 
 Hoisting `op(…, Extend(A, ?x, e), …)` into `Extend(op(…, A, …), ?x, e)` needs:
 
-- **(C1) No capture — read on `pVars`, not on the ranges.** `?x` must not be in scope in the new child:
-  every *other* input `B` must satisfy `!B.vRanges.has(?x)` unless it carries the identical bind (§4,
-  *merge*), and `op` must not introduce `?x` itself — a `GRAPH ?x`, a grouping key, an aggregate target.
-  A `PROJECT` listing `?x` is not a blocker: strike it from the list and rise (§4).
+- **(C1) No capture.** No solution reaching the re-planted `EXTEND` may already bind `?x`: every *other*
+  input `B` must satisfy `B.vRanges.neverBinds(?x)` unless it carries the identical bind (§4, *merge*),
+  and `op` must not introduce `?x` itself — a `GRAPH ?x`, a grouping key, an aggregate target. A
+  `PROJECT` listing `?x` is not a blocker: strike it from the list and rise (§4).
 
-  Scope rather than `neverBinds` because two things go wrong, not one. The runtime one is the failure
-  the spec leaves undefined and this codebase defines as a crash. The static one fires even where no
-  solution would have bound `?x`: SPARQL restricts `BIND` *syntactically* — the variable it introduces
-  must not already be in scope — so an `Extend` over a child that merely **declares** `?x` generates a
-  query no engine will accept. An all-`UNDEF` `VALUES` column is the case that would slip through
-  `neverBinds`.
+  This is an evaluation-time condition, not a syntactic one. `Extend(A, ?x, e)` is *undefined* by the
+  spec when `?x ∈ dom(μ)` for an input mapping μ, which this codebase reads as "must not happen, the
+  engine crashes". Nothing forbids `?x` being merely *in scope* in `A`, so `neverBinds` — out of scope,
+  or in scope with an empty range — is the right reading, and an all-`UNDEF` `VALUES` column is a
+  legitimate hoist target rather than a hazard.
 
-  One deliberate relaxation: an input with *no solutions* may first be collapsed to the scope-free
-  empty operation, `pVars(Empty_S) := S` notwithstanding. Nothing observable changes when the solution
-  set is empty either way, and this pass does not owe `pVars` identity below the anchor. In practice
-  `transformFilterFalse` runs before it and has already done most of this.
+  One deliberate relaxation makes `neverBinds` see more: `withCpVars` does not bottom the ranges under a
+  `FILTER(FALSE)`, so an empty operand still reports `?x` as bindable and blocks. An input with *no
+  solutions* may first be collapsed to the scope-free empty operation, `pVars(Empty_S) := S`
+  notwithstanding — nothing observable changes when the solution set is empty either way, and this pass
+  does not owe `pVars` identity below the anchor. `transformFilterFalse` runs before it and has already
+  done most of this.
+
+  One caveat that belongs to *generation* rather than to the rules: SPARQL's grammar does forbid a
+  `BIND` whose variable is in use in the immediately preceding `TriplesBlock` of the same group graph
+  pattern. It is narrow, and the empty-operand collapse above removes the case in this pipeline that
+  would produce it, but it is where to look if the generator ever rejects this pass's output.
 
 - **(C2) Same inputs — read on the ranges.** Every `?y ∈ V` must take the same value above `op` as it
   did in `A`; `e` being stable then makes it produce the same value, bound or errored. This is about
@@ -84,10 +90,8 @@ Hoisting `op(…, Extend(A, ?x, e), …)` into `Extend(op(…, A, …), ?x, e)` 
 - **(C3) Row correspondence.** `op` must produce solutions in 1-1 multiset correspondence whether the
   bind is applied below or above, and must not *read* `?x` — or `?x` must be substituted away first.
 
-All three are decided from the `CPMeta` of the inputs *before* any rewriting. `VRanges` carries both
-readings — the key set is `pVars`, `neverBinds` is the range — and they want distinct names; suggest
-adding `VRanges.inScope(name)` beside `canBind`/`neverBinds` so a licence cannot silently pick the wrong
-one.
+All three are decided from the `CPMeta` of the inputs *before* any rewriting, and all three read the
+ranges rather than the key set — `neverBinds` throughout, never `has`.
 
 ## 3. Substituting `e` back for `?x`
 
@@ -118,20 +122,20 @@ one we never write.
 | --- | --- | --- |
 | `FILTER` | yes | condition must not mention `?x`, or `e` is a term expression and substitutes in (§3). **`EXISTS` reading `?x` blocks outright.** |
 | `EXTEND` | — | not a swap: the chain is one unit, see §1. |
-| `PROJECT` | **drop** if `?x ∉ variables`; else yes | to rise, `V ⊆ variables`, **and `?x` is struck from `variables`** — a projected variable of a sub-`SELECT` is in scope outside it, so leaving it listed re-violates (C1). `pVars` at the swap is unchanged: `(variables \ {?x}) ∪ {?x}`. Pointless at the root, where there is nothing above to rise to. The main drop site. |
+| `PROJECT` | **drop** if `?x ∉ variables`; else yes | to rise, `V ⊆ variables`, and `?x` is struck from `variables` — not for (C1), which the projection satisfies either way, but so the sub-`SELECT` does not carry an always-unbound column and the metadata stays honest. `pVars` at the swap is unchanged: `(variables \ {?x}) ∪ {?x}`. Pointless at the root, where there is nothing above to rise to. The main drop site. |
 | `GROUP` | **drop** if `?x` is neither a key nor an aggregate target; else barrier | second drop site. A refinement for a constant key is deferred to phase 4. |
 | `DISTINCT` / `REDUCED` | yes | unconditional: `e` is a deterministic function of the row, so the extra column never refines the equivalence classes. |
 | `ORDER_BY` | yes | expressions must not mention `?x` (or substitute, §3). `EXTEND` maps element-wise and preserves the sequence. |
 | `SLICE` | yes | unconditional — `EXTEND` is a bijection on rows and preserves order. One of the few places the pull-up goes where the pushdown may not. |
 | `FROM` | yes | congruent. |
 | `JOIN` | yes | (C1)/(C2) over the siblings, *or* a sibling carries the identical bind (**merge**, below). Cardinality-increasing, so subject to the cost gate below. |
-| `LEFT_JOIN`, from the **LHS** | yes | `?x ∉ pVars(R)`, or `R` carries the identical bind; the condition is treated like a `FILTER`. Cost gate applies. |
+| `LEFT_JOIN`, from the **LHS** | yes | `R.vRanges.neverBinds(?x)`, or `R` carries the identical bind; the condition is treated like a `FILTER`. Cost gate applies. |
 | `LEFT_JOIN`, from the **RHS** | no | hoisting would bind `?x` on the unmatched left rows, where it must stay unbound. Drop-only (§5). |
-| `MINUS`, from the **LHS** | yes | the one row reading `R.vRanges.neverBinds(?x)` rather than scope: `pVars(Minus) = pVars(L)`, so `R` declaring `?x` cannot make the re-planted `BIND` illegal, but an `R` that *binds* it changes both the compatibility and the domain-disjointness test. |
+| `MINUS`, from the **LHS** | yes | `R.vRanges.neverBinds(?x)` — an `R` that binds `?x` changes both the compatibility and the domain-disjointness test, though `pVars(Minus) = pVars(L)` means it never reaches the re-planted bind. |
 | `MINUS`, from the **RHS** | no | RHS bindings are out of scope above. Droppable when `L.vRanges.neverBinds(?x)`: then `?x` is in neither test. |
 | `UNION` | only when **every** branch floats the same bind | same `?x`, `e` structurally equal and stable — and no (C2) condition, since a union merges nothing: the solution above *is* the branch solution, so `e` is asked about the same μ either way. Hoisting from one branch alone would bind `?x` in the others' solutions; adding it to the others instead would *grow* `cVars(union)`, a wrong answer rather than a conservative one. Subsumes `pushUpBoundedFromUnion`. |
 | `GRAPH ?g` | yes | `?x ≠ ?g`, and `?g ∉ V` unless `?g ∈ A.cVars` — `?g` is bound by the join *outside* the pattern. |
-| `SERVICE` | no | barrier, as in the pushdown: `SILENT` turns endpoint failure into one empty solution, where the hoisted bind would still bind `?x`. |
+| `SERVICE` | no | barrier, as in the pushdown: `SILENT` turns endpoint failure into one empty solution, where the hoisted bind would still bind `?x`. Carries a `TODO(future)` in the code, as `pushIntoGraph` does — letting a non-`SILENT` service release a bind is sound and reduces what is shipped to the endpoint. |
 | `BGP`, `PATH`, `VALUES` | — | leaves. |
 
 **Merge: when a sibling carries the bind too.** (C1) would block
@@ -221,9 +225,11 @@ an `EXTEND` or strictly decreases its depth, so one bottom-up traversal is a fix
 
 ## 7. Architecture and reuse
 
-- **Traversal:** `algebraUtils.mapOperation` with a per-type `transform`. It is bottom-up, so by the
-  time a node is visited its children have already floated everything they can to their own top — the
-  floating list is just the `EXTEND` chain at the top of each input, no custom recursion needed.
+- **Traversal:** the post-order `algebraUtils.mapOperation` with a per-type `transform`, which runs
+  after the children — leaves first, working up, the mirror of the pushdown's `mapOperationPreOrder`. By
+  the time a node is visited its children have already floated everything they can to their own top, so
+  the floating list is just the `EXTEND` chain at the top of each input: no custom recursion, and no
+  second pass to reach a fixpoint.
 - **New shared util** `lib/utils/extendChain.ts`: `peelExtends(op) → { core, binds }` and
   `replantExtends(c, op, binds)`. Generalises `directExtensions` (Literal/NamedNode only, loses order)
   and `deleteVarExtensionsInPlace` (in-place, name-list based) from `lib/utils.ts`; both move here and
@@ -275,15 +281,3 @@ examples, one per `|S|`. **Idempotence** (`pullUpExtends ∘ pullUpExtends = pul
 check against `pushDownAssertions`**, so the pair provably does not oscillate. And evaluation tests in
 `test/eval.test.ts` for `OPTIONAL`, `MINUS`, `UNION` and a sub-`SELECT`, since those are where a wrong
 `cVars` silently changes `SELECT *` without any test on the generated string noticing.
-
-## 10. Open questions
-
-1. Is `SERVICE` really a barrier, or should a non-`SILENT` service let a bind out? Hoisting there
-   *reduces* what is shipped to the endpoint, so keeping it in may be the pessimisation.
-2. `pushIntoGraph`'s last branch builds `Extend(Graph(P, :c), ?g, :c)` whenever
-   `P.vRanges.neverBinds(?g)`, with a comment arguing that scope is the wrong reading because `?g` may
-   be "declared below and bindable by nothing there". If (C1)'s syntactic argument holds, that is
-   precisely the case it gets wrong: `?g ∈ pVars(P)` with an empty range generates
-   `GRAPH :c { … } BIND(:c AS ?g)`, where `?g` is already in scope. Either that branch needs
-   `!vRanges.has(?g)` rather than `neverBinds`, or I am over-reading the restriction. Same question for
-   both passes, so worth settling once.

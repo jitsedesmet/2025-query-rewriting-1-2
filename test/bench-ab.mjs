@@ -5,14 +5,13 @@
  * A single `--compare` cannot answer whether a change made the rewriting faster. Running one revision
  * and then the other puts every sample of the first before every sample of the second, so anything the
  * machine does in between - another process starting, the CPU changing its mind about frequency - lands
- * entirely on one side and reads as a difference. Measured on this file's own benchmarks, that put the
- * parse control, which is byte-identical on both sides and so must be 1.00x, anywhere between 0.53x and
- * 2.57x.
+ * entirely on one side and reads as a difference. On this file's own benchmarks that is enough to move the
+ * parse control, which is byte-identical on both sides and so must be 1.00x, well away from it.
  *
  * Alternating fixes it, because drift then falls on both sides equally. The order *within* a round is
  * alternated too: running one side first every time would put whatever the machine does over a round -
  * a core heating up, a cache filling - on the same side each time, which is a bias no number of rounds
- * washes out, and which reads as a percent or two of difference in whichever side goes second.
+ * washes out, and which reads as a difference in whichever side goes second.
  *
  * What is reported per benchmark is how many rounds each side won, and the ratios round by round: an
  * effect shows up as nearly every round agreeing, noise as a coin flip. The parse benchmarks are the
@@ -176,7 +175,8 @@ if (interrupted) {
 const names = [ ...results.base[0].keys() ];
 
 /**
- * A duration in milliseconds, at a width that reads for both a 0.05ms parse and a 40ms pushdown.
+ * A duration in milliseconds, at a width that reads for a sub-millisecond parse as well as for a pushdown
+ * orders of magnitude slower.
  * @param ms - The duration
  * @returns it, formatted
  */
@@ -232,7 +232,7 @@ HEAD is the faster of the two, and "HEAD won" counts the rounds in which it was.
 
 Read the parse benchmarks first: they are byte-identical on both sides, so whatever they report is this
 machine's noise, and nothing smaller is a result. Run \`yarn bench:ab HEAD ${rounds}\` for the null - HEAD
-against itself - to see what this many rounds produces from no difference at all. On the machine this was
-written on, ${rounds} rounds of the null reached 1/${rounds} wins and ratios down to 0.71, so a win count on its own
-decides nothing and a ratio inside about 5% of 1.000 is not a difference.
+against itself - to see what this many rounds produces here from no difference at all. How wide that comes
+out is what decides how big a ratio has to be to mean anything on this machine, and it is wide enough on a
+busy one that a win count on its own decides nothing.
 `);

@@ -26,7 +26,8 @@
  *   yarn bench:ab 8638c96 8
  *
  * `lib` is checked out at that revision and back again on every round, so the working tree has to be
- * clean - the run refuses to start otherwise, rather than discarding uncommitted work.
+ * clean - the run refuses to start otherwise, rather than discarding uncommitted work. However the run
+ * ends, including on a Ctrl-C, `lib` goes back to HEAD before it does.
  */
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -40,15 +41,35 @@ if (revision === undefined) {
   process.stderr.write('usage: yarn bench:ab <revision> [rounds]\n');
   process.exit(64);
 }
+if (!Number.isInteger(rounds) || rounds < 1) {
+  process.stderr.write(`rounds must be a positive whole number, not ${JSON.stringify(roundsArg)}\n`);
+  process.exit(64);
+}
 
 /**
  * Runs a command, handing back what it wrote.
+ *
+ * Its stderr is kept rather than discarded, so that a checkout this refuses to do says why instead of
+ * failing as a bare `Command failed` - the two things that can go wrong here, a checkout that will not
+ * apply and a benchmark that will not run, are both unreadable without it.
  * @param file - The command
  * @param args - Its arguments
  * @returns its stdout
  */
 function run(file, args) {
-  return execFileSync(file, args, { encoding: 'utf8', stdio: [ 'ignore', 'pipe', 'ignore' ]});
+  try {
+    return execFileSync(file, args, { encoding: 'utf8', stdio: [ 'ignore', 'pipe', 'pipe' ]});
+  } catch (error) {
+    // A child that died of a signal rather than an exit code is a Ctrl-C: it reaches every process in the
+    // terminal's group, so the benchmark hears it at the same moment this does. Marked, rather than
+    // reported as a failure, so that the end of the run can tell an interrupt from a checkout that would
+    // not apply and say something shorter than a stack trace about it.
+    if (typeof error.signal === 'string') {
+      throw Object.assign(new Error(`interrupted by ${error.signal}`), { interrupted: true });
+    }
+    const said = String(error.stderr ?? '').trim();
+    throw new Error(`${file} ${args.join(' ')} failed${said === '' ? '' : `:\n${said}`}`, { cause: error });
+  }
 }
 
 // Every round overwrites `lib`, so anything uncommitted there would be lost.
@@ -56,7 +77,12 @@ if (run('git', [ 'status', '--porcelain', '--', 'lib' ]).trim() !== '') {
   process.stderr.write('lib has uncommitted changes; commit or stash them first\n');
   process.exit(1);
 }
-run('git', [ 'rev-parse', '--verify', `${revision}^{commit}` ]);
+// What the revision resolves to, and what is used from here on. Not the string that was typed: that is a
+// revision expression, which is a grammar rather than a name - `origin/main` and `HEAD^{/regex}` are both
+// valid ones - and it goes on to be both an argument to `git checkout` and part of a file name. A commit
+// id can be neither an option nor a path that leaves the scratch directory, so nothing downstream has to
+// be careful. The typed string is only reported back.
+const base = run('git', [ 'rev-parse', '--verify', `${revision}^{commit}` ]).trim();
 
 const scratch = mkdtempSync(join(tmpdir(), 'bench-ab-'));
 
@@ -80,7 +106,7 @@ function mediansOf(path) {
 
 /**
  * One `yarn bench`, with `lib` at the given revision.
- * @param at - The revision to put `lib` at
+ * @param at - A commit id to put `lib` at, or `HEAD`
  * @param round - Which round it is, for the file name
  * @returns the medians it measured
  */
@@ -91,22 +117,60 @@ function measure(at, round) {
   return mediansOf(out);
 }
 
+/**
+ * Puts `lib` back at HEAD and throws the scratch directory away.
+ *
+ * A round leaves `lib` at the base revision in the index as well as the working tree, so a run that ends
+ * anywhere but the end leaves the wrong `lib` staged, quietly, ready for the next `git commit -a` to take
+ * it. Hence the signal handlers below as well as the `finally`: an interrupted run has to put it back too.
+ * Restoring and cleaning up are nested rather than sequential so that a checkout that will not apply still
+ * cannot leak the scratch directory.
+ */
+function restore() {
+  try {
+    run('git', [ 'checkout', 'HEAD', '--', 'lib' ]);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+// Registering these is the whole of what they do, and the empty body is the point. Every round below is
+// synchronous, so nothing here ever runs while one is in flight - the event loop does not turn until the
+// run is over. What registering them changes is that Ctrl-C no longer kills this process where it stands,
+// which is what used to skip the restore and leave the wrong `lib` staged; instead the benchmark dies of
+// the same signal, `run` throws, and the `finally` gets its turn.
+for (const signal of [ 'SIGINT', 'SIGTERM', 'SIGHUP' ]) {
+  process.on(signal, () => {});
+}
+
 const results = { base: [], head: []};
+let interrupted = false;
 try {
   for (let round = 1; round <= rounds; round++) {
     // Whichever side went second last round goes first this one.
     if (round % 2 === 1) {
-      results.base.push(measure(revision, round));
+      results.base.push(measure(base, round));
       results.head.push(measure('HEAD', round));
     } else {
       results.head.push(measure('HEAD', round));
-      results.base.push(measure(revision, round));
+      results.base.push(measure(base, round));
     }
     process.stderr.write(`round ${round}/${rounds}\n`);
   }
+} catch (error) {
+  if (error.interrupted !== true) {
+    throw error;
+  }
+  interrupted = true;
 } finally {
-  run('git', [ 'checkout', 'HEAD', '--', 'lib' ]);
-  rmSync(scratch, { recursive: true, force: true });
+  restore();
+}
+
+// After the `finally` rather than inside the `catch`, because `process.exit` does not let a `finally` run
+// and the restore is the one thing that has to happen.
+if (interrupted) {
+  process.stderr.write('interrupted; `lib` is back at HEAD\n');
+  process.exit(130);
 }
 
 const names = [ ...results.base[0].keys() ];

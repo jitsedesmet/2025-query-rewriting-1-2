@@ -45,7 +45,9 @@
     "doc:check": "typedoc --emit none",
     "lint": "eslint . --cache",
     "postinstall": "yarn husky && yarn run build",
-    "test": "vitest test --run"
+    "test": "vitest test --run",
+    "bench": "vitest bench --run --coverage.enabled=false",
+    "bench:ab": "node test/bench-ab.mjs"
   },
   "dependencies": {
     "@traqula/algebra-sparql-1-2": "^1.2.0",

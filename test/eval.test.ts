@@ -1,14 +1,18 @@
 import { QueryEngine } from '@comunica/query-sparql-file';
 import type * as RDF from '@rdfjs/types';
+import { toAst } from '@traqula/algebra-sparql-1-2';
 import * as arrayifyStreamNS from 'arrayify-stream';
 import { Store } from 'n3';
 import { DataFactory } from 'rdf-data-factory';
+import type { ExpectStatic } from 'vitest';
 import { describe, it } from 'vitest';
 import { transformFilterFalse } from '../lib/transformations/filterFalse.js';
 import { nullifyJoinOverIncompatibleBounds } from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
 import { nullifyUnbindableVars } from '../lib/transformations/nullifyUnbindableVars.js';
+import { pullUpExtends } from '../lib/transformations/pullUpExtends.js';
 import { operationTransform, queryTransform } from '../lib/transformBgp.js';
-import { transformContextFromConstructs } from '../lib/transformContext.js';
+import type { TransformContext } from '../lib/transformContext.js';
+import { createPartialContext, parseQuery, transformContextFromConstructs } from '../lib/transformContext.js';
 import { nonTripleTermConstruct, tripleTermConstruct } from './queryConsts.js';
 import './matchers/toBeRdfIsomorphic.js';
 
@@ -83,6 +87,73 @@ describe('evaluation tests', () => {
 
       expect(resOnMappedData.getQuads(null, null, null, null))
         .toBeRdfIsomorphic(resUsingMapper.getQuads(null, null, null, null));
+    });
+  });
+  describe('assignment pull-up', () => {
+    /**
+     * The rewrites of {@link pullUpExtends} are about `cVars` and `pVars`, and a wrong one of those shows
+     * up in what `SELECT *` returns rather than in the shape of the query - so these run both versions and
+     * compare the answers, duplicates and all. The four operations below are the ones where a solution may
+     * leave a variable unbound, which is exactly where a lost `cVars` is observable.
+     */
+    const pullUpPrefixes = 'PREFIX : <ex://>\n';
+    const c = <TransformContext> createPartialContext();
+
+    async function bindings(query: string): Promise<string[]> {
+      const rows: RDF.Bindings[] = await arrayifyStream(
+        await engine.queryBindings(query, { sources: [ './test/statics/assertionPushdown.ttl' ]}),
+      );
+      // Sorted, but duplicates kept: the multiplicity of every row is part of the answer.
+      return rows
+        .map(row => [ ...row ].map(([ key, value ]) => `${key.value}=${value.value}`).sort().join('|'))
+        .sort();
+    }
+
+    async function assertEquivalent(
+      expect: ExpectStatic,
+      query: string,
+      expectedRows: number,
+    ): Promise<void> {
+      const rewritten = c.generator.generate(toAst(pullUpExtends(c, parseQuery(c, pullUpPrefixes + query)))).trim();
+      const original = await bindings(pullUpPrefixes + query);
+      expect(await bindings(rewritten)).toEqual(original);
+      expect(original).toHaveLength(expectedRows);
+    }
+
+    it('keeps what an OPTIONAL leaves unbound unbound', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        { ?x :p ?y BIND(:a AS ?b) }
+        OPTIONAL { ?y :q ?z }
+      }`, 1);
+    });
+
+    it('keeps a bind out of the compatibility test of a MINUS', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        { ?x :p ?y BIND(:a AS ?b) }
+        MINUS { ?z :q ?y }
+      }`, 0);
+    });
+
+    it('keeps the multiplicities of a UNION every branch of which carries the bind', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        { ?x :p ?y BIND(:a AS ?b) } UNION { ?x :p ?y BIND(:a AS ?b) }
+      }`, 2);
+    });
+
+    it('keeps what a sub-SELECT projects when the bind rises out of it', async({ expect }) => {
+      await assertEquivalent(expect, `SELECT * WHERE {
+        { SELECT ?x ?b WHERE { ?x :p ?y BIND(:a AS ?b) } }
+        ?x :says ?t
+      }`, 1);
+    });
+
+    it('drops a bind nothing projects without changing the answer', async({ expect }) => {
+      // Directly below the projection, which is as far as a drop reaches in this phase: the same bind one
+      // OPTIONAL deeper needs the `needed` analysis, and stays.
+      await assertEquivalent(expect, `SELECT ?x WHERE {
+        ?x :p ?y
+        BIND(:a AS ?b)
+      }`, 1);
     });
   });
 });

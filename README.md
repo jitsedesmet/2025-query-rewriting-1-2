@@ -66,7 +66,7 @@ The rewriter transforms each triple pattern in your BGP (Basic Graph Pattern) in
    - `substituteVarsThatArePreBoundToTerms`: Inline known variable bindings
    - `transformFilterFalse`: Remove impossible branches (FILTER FALSE)
    - `nullifyJoinOverIncompatibleBounds`: Detect incompatible join conditions
-   - `pushUpBoundedFromUnion`: Hoist common bindings out of UNIONs
+   - `pullUpExtends`: Float `BIND`s up the plan and drop the ones nothing reads
 
 ## Mapping Constraints
 
@@ -120,8 +120,8 @@ This means a mapping that doesn't match uses `FILTER(FALSE)` (zero results), not
 | `substituteVarsThatArePreBoundToTerms` | Inline known variable values into patterns |
 | `transformFilterFalse` | Remove FILTER(FALSE) branches and simplify |
 | `nullifyJoinOverIncompatibleBounds` | Replace incompatible join branches with FILTER(FALSE) |
-| `pushUpBoundedFromUnion` | Hoist common bindings out of UNION branches |
 | `pushDownAssertions` | Push assertion filters (`FILTER(sameTerm(?x, c))`) as deep as possible: substitute the term into BGPs and paths, prune VALUES rows, empty UNION branches that cannot bind the variable, and turn an OPTIONAL over an asserted variable into a plain join |
+| `pullUpExtends` | Float every `BIND` as high as the plan allows: past joins, optionals, unions (when every branch carries it) and modifiers, merging the copies several operands carry into one, and deleting a bind a `PROJECT` or a `GROUP` discards |
 | `rewriteNonRecursivePaths` | Expand property paths into BGPs |
 
 ### Blank Node Transformations

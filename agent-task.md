@@ -1,11 +1,21 @@
-# Agent task — implement `pullUpExtends`, phase 1
+# Agent task — `pullUpExtends`, one PR per phase
 
 `report.md` is the design: it carries the *why*, the soundness arguments and the spec references, and
-every `§n` below points into it. `task.md` is the original request. This file is the *what*, in the order
-to do it.
+every `§n` below points into it. `task.md` is the original request.
 
-**Ship phase 1 only.** Phases 2–4 of `report.md` §9 are listed under [Out of scope](#9-out-of-scope);
-leave a `TODO` where the code touches one, do not implement it.
+**How to use this document.** Four phases, four PRs, one agent per PR, in order. Section
+[A. Shared ground](#a-shared-ground) is read by every agent; after that, an agent reads **only its own
+phase section** and treats the later ones as non-existent. Every phase ends green on its own: it ships
+its own tests and keeps every earlier phase's tests passing. Do not start a later phase inside an earlier
+PR — if you find yourself needing something listed under a later phase, block the case and leave a
+`TODO` naming the phase.
+
+| PR | Phase | Ships |
+| --- | --- | --- |
+| 1 | [Phase 1](#phase-1--the-pass) | the pass itself: chain peeling, the two predicates, the congruent operations, `JOIN`/`LEFT_JOIN`/`MINUS`/`UNION`, the two syntactic drops. Deletes `pushUpBoundedFromUnion`. |
+| 2 | [Phase 2](#phase-2--the-needed-analysis-and-general-dropping) | the top-down `needed` analysis, dropping anywhere, the `LEFT_JOIN` RHS drop, the `LEFT_JOIN` merge. |
+| 3 | [Phase 3](#phase-3--transfer-and-weak-assertion) | transfer and weak assertion into a sibling, flag-gated, with the idempotence guard. |
+| 4 | [Phase 4](#phase-4--edge-cases) | the `GROUP`-over-a-constant-key hoist, `EXISTS`, the `NAMED` allowlist, substituting a non-term `e`. |
 
 **The goal in one line.** `pushDownAssertions` leaves a `BIND` behind at every leaf it rewrites
 (`bindAssertedTerms`); this pass floats those binds back up the plan and drops the ones nothing reads,
@@ -17,44 +27,124 @@ SELECT * { { ?s ?p ?o . BIND(<ex://a> AS ?x) } { ?a ?b ?c } }
 SELECT * { ?s ?p ?o . ?a ?b ?c . BIND(<ex://a> AS ?x) }
 ```
 
-## 0. Orientation — read these before writing anything
+# A. Shared ground
+
+## A.1 Orientation — read these before writing anything
 
 | File | What to take from it |
 | --- | --- |
 | `lib/transformations/pushDownAssertions.ts` | the mirror pass. Copy its shape: enter and leave through `withoutCpVars`, read licences off `CPMeta`, one `switch` over `Algebra.Types`, a file-level `@fileoverview` explaining the rules. Its `keepMetadata`/`PreOrderMappingReturn` machinery is pre-order only — you do **not** need it. |
-| `lib/utils/certainlyBoundVars.ts` | `withCpVars`, `withoutCpVars`, `CPMeta { cVars, vRanges }`, `VRanges.neverBinds/canBind/rangeOf`, `termVars`. The `EXTEND` case is the definition of *certain* (§1). Note `withCpVars` **mutates** the node it is handed by caching `metadata` on it. |
-| `lib/utils/expressionHelpers.ts` | `isStaticExpression` — the predicate you generalise (§2 below), plus `splitConjunction`, `booleanConstantOf`. |
-| `lib/utils/partialExpressionEvaluation.ts` | `substituteInExpression(c, expr, view, cVars)` and the `AssertionView` shape you feed it (§4 below). |
+| `lib/utils/certainlyBoundVars.ts` | `withCpVars`, `withoutCpVars`, `CPMeta { cVars, vRanges }`, `VRanges.neverBinds/canBind/rangeOf`, `termVars`. Its `EXTEND` case is the definition of *certain* (§1). Note `withCpVars` **mutates** the node it is handed, caching `metadata` on it. |
+| `lib/utils/expressionHelpers.ts` | `isStaticExpression` — the predicate phase 1 generalises — plus `splitConjunction`, `booleanConstantOf`, `sameTermExpression`. |
+| `lib/utils/partialExpressionEvaluation.ts` | `substituteInExpression(c, expr, view, cVars)` and the `AssertionView` it takes (§A.4). |
 | `lib/utils.ts` | `collectVariableNames(c.astTransformer, obj)`, `directExtensions`, `deleteVarExtensionsInPlace`. |
-| `lib/transformations/pushUpBoundedFromUnion.ts` | the pass you **delete**; its `UNION` rule becomes one row of your table. |
-| `test/pushDownAssertions.test.ts` | the test harness to mirror: `createPartialContext()`, `parseQuery`, `c.generator.generate(toAst(...)).trim()`. |
+| `lib/transformations/removeProjections.ts` | the pattern for carrying information across `mapOperation`: a `Set`/`Map` keyed on the **original** node, since `transform` is handed `(copy, original)`. Phase 2 needs exactly this. |
+| `test/pushDownAssertions.test.ts` | the test harness to mirror: `createPartialContext()`, `parseQuery`, `c.generator.generate(toAst(...)).trim()`, and `toAlgebra(..., { quads: false })` for the `GRAPH` cases. |
 
-## 1. Deliverables
+## A.2 The invariant and the three side conditions
 
-**New**
+Every rewrite is one local swap, `Op1(Op2(…))` ⟶ `Op2(Op1(…))`, preserving the solution multiset,
+`pVars` and `cVars` **at the node the swap is anchored at**. Below that node nothing is preserved and
+nothing needs to be. Reaching the outer `PROJECT` is an outcome, not a goal.
 
-- `lib/utils/extendChain.ts` — peel/replant helpers (§2).
-- `lib/transformations/pullUpExtends.ts` — the pass, exported as `pullUpExtends(c, op)`.
-- `test/pullUpExtends.test.ts` — §8.
+For a bind `?x := e` on input `A` of node `op`, with `V = vars(e)` and the other inputs `B`:
 
-**Modified**
+- **(C1) no capture** — every other `B` satisfies `B.vRanges.neverBinds(?x)`, unless `B` carries an
+  identical bind (merge), and `op` does not introduce `?x` itself (`GRAPH ?x`, an aggregate writing
+  `?x`). Read the **ranges**, never the key set: `?x` merely being *in scope* in `B` is fine — what the
+  spec leaves undefined is extending a μ that already **binds** `?x` (§2).
+- **(C2) same inputs** — every `?y ∈ V` satisfies `A.cVars.has(?y) || every other B:
+  B.vRanges.neverBinds(?y)`. Vacuous for a ground `e`, and vacuous for `UNION`/`MINUS`, which merge
+  nothing.
+- **(C3) readers** — what the node reads must not see `?x`, or must have `e` substituted into it (§A.4).
 
-- `lib/utils/expressionHelpers.ts` — `isStaticExpression` → `isStableExpression`, plus `expressionsEqual`.
-- `lib/utils.ts` — delete `deleteVarExtensionsInPlace` (its only caller is the deleted pass). Keep
-  `directExtensions`: `nullifyJoinOverIncompatibleBounds` still calls it.
-- `lib/transformations/index.ts` — export `pullUpExtends`, drop `pushUpBoundedFromUnion`, update the
-  `@fileoverview` bullet list.
-- `test/integration.test.ts` (`standardTransformations`) and `test/rewriting.bench.ts` (`withPushdown`)
-  — add `pullUpExtends` in front of `removeProjections` (§7).
-- `README.md` — the pipeline bullet list (~line 69) and the API table (~line 123) both name
-  `pushUpBoundedFromUnion`; replace with `pullUpExtends`.
+All three are read off `withCpVars(input).metadata` for the inputs **as they were handed to you**, chain
+included, *before* any rewriting. On a single-input operation (C1)/(C2) hold vacuously and only the
+readers decide.
 
-**Deleted**
+## A.3 Order within a chain
 
-- `lib/transformations/pushUpBoundedFromUnion.ts`. It is a public export, so this is a breaking change —
-  `task.md` explicitly allows it.
+A chain is peeled into an ordered list and decided as a unit. Risers end up above the node, stayers
+below it, so a riser that stood **below** a stayer swaps with it. Two binds may only swap when neither
+reads the other's variable:
 
-## 2. `lib/utils/extendChain.ts`
+- a **stayer** reading a riser's `?x`: substitute (§A.4) if `e` is a term expression, otherwise pin the
+  riser (turn it into a stayer);
+- a **riser** reading a stayer's `?y`: pin the riser, always — above the node it would read `?y` bound
+  where below it read it unbound.
+
+Pinning can create new violations, so iterate until the partition is stable. It terminates: pinning only
+moves binds from *rise* to *stay*.
+
+## A.4 Substituting `e` for `?x` in a reader
+
+Only for a **term expression** `e`; for any other stable expression the hoist blocks instead (the cost
+argument is §3). Call:
+
+```ts
+substituteInExpression(c, condition, {
+  resolve: acc => acc.positions.length === 0 && acc.name === x ? term : undefined,
+  bound: certain ? new Set([ x ]) : new Set(),
+}, cVars);
+```
+
+Two things must be decided **before** that call, not by it:
+
+- a reader containing `bound(?x)` where the bind is **not certain** (`?x ∉ cVars(Extend(A, ?x, e))`,
+  which `withCpVars` already computes) blocks the hoist — the helper would emit the ungrammatical
+  `bound(<ex://a>)`;
+- a reader containing `EXISTS`/`NOT EXISTS` blocks the hoist until phase 4 — the helper returns
+  `EXISTENCE` untouched, and the pushdown carries the same `TODO`.
+
+## A.5 Metadata and traversal discipline
+
+- The pass is one post-order `algebraUtils.mapOperation` with a per-type `transform`: it works back up
+  from the descendants, so by the time your callback sees a node, each input already carries at the top
+  of itself everything it could float. That is the whole recursion — no custom traversal, no fixpoint
+  loop over the tree.
+- Enter and leave through `withoutCpVars`, exactly as `pushDownAssertions` does. Entering gives you a
+  tree of your own to rewrite and a guarantee that what `withCpVars` reports describes the plan as it
+  stands; leaving clears what the rewrites invalidated.
+- Read metadata only off inputs as `mapOperation` hands them back, and **delete `metadata` on every node
+  you build or mutate**. A stale `CPMeta` that survives a rewrite is the likeliest source of a subtle
+  bug; §A.6 requires a test for it.
+
+## A.6 House rules, inherited by every PR
+
+- `yarn test` green — the new tests and every existing suite. `yarn lint` clean. `yarn build` clean.
+- TSDoc with `@param`/`@returns` on every export, and match the comment density of the files around you:
+  this repo explains *why* in prose, not *what*.
+- No `any` beyond the `<'unsafe', T>` pattern the other passes use.
+- Every phase's test file must include the **scope invariant helper**: for each case, `withCpVars` of the
+  output has the same `cVars` and the same `vRanges` key set at the root as `withCpVars` of the input.
+- Every phase must keep **idempotence** (`pullUpExtends ∘ pullUpExtends = pullUpExtends`) and the
+  **no-oscillation** check against `pushDownAssertions` green.
+
+# Phase 1 — the pass
+
+**Goal.** A working `pullUpExtends` that floats and drops binds by purely local, syntactic decisions.
+
+**Prerequisite.** None.
+
+### Files
+
+**New** — `lib/utils/extendChain.ts`, `lib/transformations/pullUpExtends.ts`,
+`test/pullUpExtends.test.ts`.
+
+**Modified** — `lib/utils/expressionHelpers.ts` (the two predicates); `lib/utils.ts` (delete
+`deleteVarExtensionsInPlace`, whose only caller is the deleted pass — keep `directExtensions`,
+`nullifyJoinOverIncompatibleBounds` still calls it); `lib/transformations/index.ts` (export the new pass,
+drop the old one, update the `@fileoverview` list); `test/integration.test.ts`
+(`standardTransformations`) and `test/rewriting.bench.ts` (`withPushdown`), adding `pullUpExtends` in
+front of `removeProjections`; `README.md`, which names `pushUpBoundedFromUnion` in the pipeline list
+(~line 69) and the API table (~line 123).
+
+**Deleted** — `lib/transformations/pushUpBoundedFromUnion.ts`. It is a public export, so this is a
+breaking change; `task.md` allows it.
+
+### Work
+
+**1. `lib/utils/extendChain.ts`**
 
 ```ts
 /** One `BIND(expression AS variable)` lifted out of an EXTEND chain. */
@@ -68,7 +158,7 @@ export interface ChainBind {
 export interface PeeledChain { core: Algebra.Operation; binds: ChainBind[] }
 
 /** Splits the maximal EXTEND chain at the top of `op` off its core. Binds come back in **evaluation
- * order**: `binds[0]` is the innermost one, the one closest to `core`. */
+ * order**: `binds[0]` is the innermost, the one closest to `core`. */
 export function peelExtends(op: Algebra.Operation): PeeledChain;
 
 /** The inverse: rebuilds `AF.createExtend` around `core`, `binds[0]` innermost. */
@@ -76,189 +166,221 @@ export function replantExtends(c: TransformContext, core: Algebra.Operation, bin
 ```
 
 `peelExtends` stops at anything that is not `Algebra.Types.EXTEND`; `replantExtends(c, core, [])` is
-`core`. Evaluation order (innermost first) is the order every ordering argument in this document is
-written in — do not flip it.
+`core`. Evaluation order is how every ordering argument in this document is written — do not flip it.
 
-**Predicates in `lib/utils/expressionHelpers.ts`:**
+**2. The two predicates, in `lib/utils/expressionHelpers.ts`**
 
-- `isStableExpression(c, expression): boolean` — `isStaticExpression` without its "no variables" clause.
-  Same `visitOperationSub` walk, same rejections for `named`/`existence`/`aggregate`/`wildcard`, same
-  operator blocklist **minus `now`**, which is stable by §17.4.5.1 (§1). Allowlist exactly one `named`:
+- `isStableExpression(c, expression)` — `isStaticExpression` without its "no variables" clause: same
+  `visitOperationSub` walk, same rejections for `named`/`existence`/`aggregate`/`wildcard`, same operator
+  blocklist **minus `now`**, which is stable by §17.4.5.1 (§1). Allowlist exactly one `named`:
   `EXTENSION_FUNCTION_BNODE` from `lib/consts.ts`. `isStaticExpression` has no callers today, so replace
-  it rather than adding a second predicate; anything wanting the old meaning is
-  `isStableExpression(c, e) && collectVariableNames(c.astTransformer, e).size === 0`.
-- `expressionsEqual(a, b): boolean` — structural equality over `Algebra.Expression`, used by the merge
-  and `UNION` rules. Recurse on `subType`, compare operators/names, compare terms with `.equals`, compare
-  argument lists pairwise and in order. The algebra ships no such helper (`Canonicalizer` only renames
-  blank nodes), so this is ours. Return `false` for `existence` rather than walking into a pattern.
+  it; anything wanting the old meaning is `isStableExpression(c, e) &&
+  collectVariableNames(c.astTransformer, e).size === 0`.
+- `expressionsEqual(a, b)` — structural equality over `Algebra.Expression` for the merge and `UNION`
+  rules: recurse on `subType`, compare operators and names, compare terms with `.equals`, compare
+  argument lists pairwise and in order, return `false` for `existence` rather than walking a pattern.
+  The algebra ships no such helper (`Canonicalizer` only renames blank nodes), so this is ours.
 
-Both need their own tests; every rule leans on them.
+**3. The pass**, `pullUpExtends<T extends Algebra.Operation>(c: TransformContext, op: T): T`. Per node,
+in this order: peel every input; read the metadata (§A.2); classify each bind *rise* / *stay* / *drop*
+by the table below; settle chain order (§A.3); rebuild the inputs with `replantExtends(c, core_i,
+stayers_i)`; rebuild the node with its own edit (a struck `PROJECT` variable, a substituted condition or
+ordering expression); replant the risers above it in their original relative order — across inputs,
+order by input index then by chain order, and a merged bind is emitted exactly once; delete `metadata`
+on everything you built or mutated.
 
-## 3. The pass — structure
+### Rules
 
-```ts
-export function pullUpExtends<T extends Algebra.Operation>(c: TransformContext, op: T): T {
-  return withoutCpVars(algebraUtils.mapOperation<'unsafe', T>(withoutCpVars(op), {
-    [Algebra.Types.JOIN]: { transform: node => hoistFromJoin(c, node) },
-    ... one entry per operation of §4 ...
-  }));
-}
-```
-
-`mapOperation` is **post-order** — it works back up from the descendants — so by the time your callback
-sees a node, each of its inputs already carries at the top of itself everything it could float. That is
-the whole recursion: no custom traversal, no second pass, no fixpoint loop.
-
-Per node, in this order:
-
-1. **Peel.** `peelExtends` each input.
-2. **Read the metadata**, off each input **as it was handed to you** (chain included), *before* rewriting
-   anything: `withCpVars(input).metadata`. All licences read these. Never read metadata off a node you
-   have already rebuilt.
-3. **Classify** every bind of every input as *rise*, *stay* or *drop* using §4 and §5.
-4. **Settle chain order** (§5, "Order"), which can only turn risers into stayers; iterate until stable.
-5. **Rebuild the inputs**: `replantExtends(c, core_i, stayers_i)`.
-6. **Rebuild the node** from those inputs, applying the rule's own edit — a struck `PROJECT` variable, a
-   substituted `FILTER` condition, substituted `ORDER BY` expressions, a substituted `LEFT_JOIN`
-   condition.
-7. **Replant the risers above it**: `replantExtends(c, newNode, risers)`, risers keeping their original
-   relative order; where several inputs contribute, order by input index, then by chain order; a merged
-   bind (§4, `JOIN`) is emitted exactly once.
-8. **Delete `metadata`** on every node you built or mutated in 5–7. Never let a stale `CPMeta` survive a
-   rewrite — this is the likeliest source of a subtle bug, so give it a test (§8).
-
-## 4. Per-bind decision
-
-For a bind `?x := e` sitting on input `A` of node `op`, with `V = e.reads` and the other inputs `B`:
-
-**Gate 0 — stability.** `isStableExpression(c, e)` or the bind stays. An expression holding an `EXISTS`
-never floats in phase 1.
-
-**(C1) no capture** — for every other input `B`: `B.vRanges.neverBinds(?x)`, unless `B` carries an
-identical bind (merge). And `op` must not introduce `?x` itself: `GRAPH ?x`, an aggregate writing `?x`.
-Read the ranges, never the key set: `?x` merely being *in scope* in `B` is fine, what the spec leaves
-undefined is extending a μ that already **binds** `?x` (§2).
-
-**(C2) same inputs** — for every `?y ∈ V`: `A.cVars.has(?y) || every other B: B.vRanges.neverBinds(?y)`.
-Vacuous for a ground `e`, and vacuous for `UNION`/`MINUS`, which merge nothing.
-
-**(C3) readers** — whatever the node reads must not see `?x`, or must have `e` substituted into it (§6).
+Gate 0 is stability: `isStableExpression(c, e)` or the bind stays. Then (C1), (C2), (C3) of §A.2, then:
 
 | `Algebra.Types` | Phase-1 behaviour |
 | --- | --- |
-| `FILTER` | rise if the condition does not mention `?x`, or `e` is a term expression and substitutes in. A condition holding an `EXISTS` is a **barrier** — `TODO`, as in the pushdown. |
-| `PROJECT` | `?x ∉ variables` → **drop**. Else rise when `V ⊆ variables`, striking `?x` from `variables` (so `pVars` at the swap is `(variables \ {?x}) ∪ {?x}` — unchanged — and the sub-`SELECT` carries no always-unbound column). |
+| `FILTER` | rise if the condition does not mention `?x`, or `e` is a term expression and substitutes in. A condition holding an `EXISTS` is a **barrier** — `TODO(phase 4)`. |
+| `PROJECT` | `?x ∉ variables` → **drop**. Else rise when `V ⊆ variables`, striking `?x` from `variables`, so `pVars` at the swap is `(variables \ {?x}) ∪ {?x}` — unchanged — and the sub-`SELECT` carries no always-unbound column. |
 | `GROUP` | **drop** when `?x` is neither a key, nor an aggregate's `variable`, nor read by any aggregate's `expression`. Otherwise a barrier. `aggregates` are `BoundAggregate`s: an `expression` over the input *beside* the `variable` they write — check both. |
 | `DISTINCT`, `REDUCED` | rise, unconditionally. |
-| `ORDER_BY` | rise; expressions must not mention `?x`, or substitute (§6). |
+| `ORDER_BY` | rise; expressions must not mention `?x`, or substitute (§A.4). |
 | `SLICE` | rise, unconditionally. |
 | `FROM` | rise. |
 | `GRAPH ?g` | rise when `?x ≠ ?g` and (`?g ∉ V` or `?g ∈ A.cVars`). |
-| `JOIN` | rise under (C1)+(C2), **or** under the merge rule below. Cost gate applies. |
+| `JOIN` | rise under (C1)+(C2), or under the merge rule below. Cost gate applies. |
 | `LEFT_JOIN` LHS | rise when `R.vRanges.neverBinds(?x)` (or `R` carries the identical bind) and (C2) holds; the condition is treated exactly like a `FILTER`. Cost gate applies. |
-| `LEFT_JOIN` RHS | never. Not even a drop in phase 1. |
+| `LEFT_JOIN` RHS | never rise, and no drop in this phase — the RHS bindings *are* visible above, so dropping one needs phase 2. |
 | `MINUS` LHS | rise when `R.vRanges.neverBinds(?x)`. (C2) is vacuous. |
-| `MINUS` RHS | never rise. Drop when `L.vRanges.neverBinds(?x)`. |
-| `UNION` | rise **only when every branch's chain carries the same bind**: same `?x`, `expressionsEqual` expressions, stable. Remove it from every branch and emit one above; the §5 order check has to pass in *every* branch, since the bind leaves each of those chains. No (C2) obligation. Subsumes `pushUpBoundedFromUnion`. |
+| `MINUS` RHS | never rise, and no drop in this phase — the drop is licensed by `L.vRanges.neverBinds(?x)` alone, but it ships with the other RHS drops in phase 2. |
+| `UNION` | rise **only when every branch's chain carries the same bind**: same `?x`, `expressionsEqual` expressions, stable. Remove it from every branch and emit one above; the §A.3 order check has to pass in *every* branch. No (C2) obligation. Subsumes `pushUpBoundedFromUnion`. |
 | `SERVICE` | barrier. Add `// TODO(future): a non-SILENT service could release a bind` — `SILENT` turns endpoint failure into one empty solution, where a hoisted bind would still bind `?x`. |
-| `EXTEND` | nothing to do: a chain is one unit and is handled by its parent. |
-| `BGP`, `PATH`, `VALUES`, everything else | leaves / barriers, no callback needed. |
+| `EXTEND` | nothing to do: a chain is one unit, handled by its parent. |
+| `BGP`, `PATH`, `VALUES`, the rest | leaves / barriers, no callback needed. |
 
-**Merge (`JOIN`).** Let `S` be the operands whose chain carries a structurally equal, stable
-`?x := e`. If `V ⊆ O.cVars` for **every** `O ∈ S`, delete the bind from each of them and emit one above
-the join; (C1) is still required of the operands *not* in `S`. At `|S| = 1` this is the ordinary hoist.
-Do **not** merge when some carrier does not have all of `V` certainly bound.
+**Merge (`JOIN`).** Let `S` be the operands whose chain carries a structurally equal, stable `?x := e`.
+If `V ⊆ O.cVars` for **every** `O ∈ S`, delete the bind from each of them and emit one above the join;
+(C1) is still required of the operands not in `S`. At `|S| = 1` this is the ordinary hoist. Do not merge
+when some carrier does not have all of `V` certainly bound.
 
 **Cost gate.** Past a `JOIN` or `LEFT_JOIN`, a bind whose expression is not a term expression
-(`ExpressionTypes.TERM`) rises **only** as part of a merge with `|S| ≥ 2`. A single carrier stays. Every
-other row of the table is cardinality-non-increasing, so no gate there.
+(`ExpressionTypes.TERM`) rises **only** as part of a merge with `|S| ≥ 2`; a single carrier stays. Every
+other row is cardinality-non-increasing, so no gate there.
 
-## 5. Order within a chain
+### Tests — `test/pullUpExtends.test.ts`
 
-Risers end up above the node, stayers below it, so a riser that stood **below** a stayer swaps with it.
-Two binds may only swap when neither reads the other's variable:
+1. One case per row of the table, positive.
+2. Negative: a sibling with `?x` in scope carrying a *different* expression; a `UNION` branch that does
+   not carry the bind; `BIND(RAND() AS ?x)` staying put; a `FILTER` reading a computed (non-term) `?x`;
+   a `FILTER` holding an `EXISTS`; a chain whose outer bind stays and reads the inner one that would
+   otherwise rise (§A.3); a `GROUP` whose aggregate *expression* reads a bind that is neither key nor
+   target; a join whose carriers share `?x` over a `?y ∈ V` not certain on both sides, which must **not**
+   merge.
+3. Merge, both `|S| = 1` and `|S| = 2`.
+4. The three checks of §A.6: scope invariant on every case, idempotence, no oscillation against
+   `pushDownAssertions`.
+5. Unit tests for `isStableExpression` (`now` stable; `rand`/`uuid`/`struuid`/`bnode` not; the one
+   allowlisted `named`; `existence` rejected) and for `expressionsEqual`.
+6. Evaluation tests in `test/eval.test.ts` over `OPTIONAL`, `MINUS`, `UNION` and a sub-`SELECT`: a wrong
+   `cVars` changes what `SELECT *` returns without any string comparison noticing.
 
-- a **stayer** reading a riser's `?x`: substitute (§6) if `e` is a term expression, otherwise pin the
-  riser (turn it into a stayer);
-- a **riser** reading a stayer's `?y`: pin the riser, always. Above the node it would read `?y` bound
-  where below it read it unbound.
+### Done
 
-Pinning can create new violations, so iterate until the partition is stable. It terminates: pinning only
-moves binds from *rise* to *stay*.
+House rules (§A.6), plus: `pushUpBoundedFromUnion` gone from `lib/`, from `lib/transformations/index.ts`
+and from `README.md`, its `UNION` behaviour covered by a `pullUpExtends` test; the worked example at the
+top of this document transforms exactly as written.
 
-## 6. Substituting `e` for `?x` in a reader
+# Phase 2 — the `needed` analysis and general dropping
 
-Only for a **term expression** `e` — never for any other stable expression, where the hoist blocks
-instead (§3 of the report has the cost argument). Call:
+**Goal.** Drop a bind wherever nothing above reads its variable, not only when it has floated to be a
+direct child of a `PROJECT` or `GROUP`. This is what catches `OPTIONAL { … BIND(:a AS ?x) }` under a
+projection that never wanted `?x`, which phase 1 misses (§5).
+
+**Prerequisite.** Phase 1 merged.
+
+### Files
+
+**New** — `lib/utils/neededVars.ts`. **Modified** — `lib/transformations/pullUpExtends.ts`,
+`test/pullUpExtends.test.ts`.
+
+### Work
+
+**1. The analysis.** A top-down walk, run once over the tree the pass already owns (after
+`withoutCpVars`), returning what each node's *output* is read for:
+
+```
+needed(root)  = every variable in pVars(root), unless the caller says otherwise
+needed(child) = needed(op) ∪ variablesRead(op) ∪ ⋃ { pVars(sibling) : op is join/leftJoin/minus }
+```
+
+This is the paper's projection pushing (§III) read as an analysis rather than as a rewrite — (PJPush)
+and (PLPush) push `S ∪ (pVars(A₁) ∩ pVars(A₂))` into both operands, (PMPush) that intersection into the
+right of a `MINUS` — because a variable bound in one operand silently acts as a join key with the other,
+and because `MINUS`' disjointness test reads the *domain*, not the values.
+
+`variablesRead(op)` must cover **every** expression the node owns: a `FILTER` condition, an `EXTEND`
+expression, `ORDER_BY` expressions, the `LEFT_JOIN` condition, a `GRAPH`/`SERVICE` name, `PROJECT`
+variables, and for a `GROUP` both its keys **and** every aggregate's `expression`. Missing one silently
+deletes a bind that is read.
 
 ```ts
-substituteInExpression(c, condition, { resolve: acc => acc.positions.length === 0 && acc.name === x ? term : undefined,
-                                       bound: certain ? new Set([ x ]) : new Set() }, cVars)
+export function neededVariables(
+  c: TransformContext, op: Algebra.Operation, atRoot?: Iterable<string>,
+): Map<Algebra.Operation, Set<string>>;
 ```
 
-Two things must be decided **before** that call, not by it:
+Key the map on node **identity** in the tree you then traverse, and look it up in the pass with the
+`original` argument `mapOperation` hands the `transform` — the pattern `removeProjections` already uses
+with `keptProjections`. Do not stash the result on `metadata`.
 
-- if the reader contains `bound(?x)` and the bind is **not certain** (`?x ∉ cVars(Extend(A, ?x, e))`,
-  which `withCpVars` already computes), block the hoist. The helper would otherwise emit the
-  ungrammatical `bound(<ex://a>)`.
-- if the reader contains an `EXISTS`/`NOT EXISTS`, block the hoist. The helper returns `EXISTENCE`
-  arguments untouched, and substituting into a nested pattern is a `TODO` there too.
+**2. Options.** Introduce the options object here, so phase 3 only adds a field:
 
-## 7. Wiring
-
-The chain the tests and the benchmark run, with the new pass in front of its last step:
-
-```
-operationTransform → pushDownAssertions → transformFilterFalse
-  → nullifyJoinOverIncompatibleBounds → nullifyUnbindableVars → transformFilterFalse
-  → pullUpExtends → removeProjections
+```ts
+export interface PullUpOptions {
+  /** What the caller will project; everything stays in scope when omitted. */
+  projected?: Iterable<string>;
+}
+export function pullUpExtends<T extends Algebra.Operation>(c: TransformContext, op: T, options?: PullUpOptions): T;
 ```
 
-- after `transformFilterFalse`, which collapses the empty operands (C1) would otherwise trip on;
-- before `removeProjections`, which deletes the `PROJECT` nodes the drop rule reads;
-- before `transformExtendsToValues` wherever a caller adds it — it is not in that chain — since it turns
-  `Extend(BGP([]), ?x, t)` into a `VALUES` this pass no longer recognises as a bind.
+`queryTransform` strips the query's outer `PROJECT` before running any transformation and re-adds it
+afterwards, so without `projected` a bind that floats to the root is always re-planted, never dropped.
+Passing the list closes that (§5); the default must keep phase 1's behaviour exactly.
 
-## 8. Tests — `test/pullUpExtends.test.ts`
+**3. Dropping.** A floating bind with `?x ∉ needed(node)` is dropped wherever it stands, including the
+`LEFT_JOIN` RHS. The phase-1 `PROJECT`/`GROUP` drops become special cases of it — keep them working, and
+prefer deleting their bespoke code once the general rule covers them. The `MINUS` RHS drop belongs here
+too, but is licensed by `L.vRanges.neverBinds(?x)` rather than by `needed`: `pVars(Minus) = pVars(L)`, so
+nothing above can read the variable and the compatibility and disjointness tests are its only readers.
 
-Mirror `test/pushDownAssertions.test.ts`: a mapping-less `createPartialContext()`, `parseQuery`, compare
-`c.generator.generate(toAst(pullUpExtends(c, parsed))).trim()` against an expected query string. A `GRAPH`
-case needs `toAlgebra(..., { quads: false })`, as that file's `transformGraphOperation` does.
+**4. The `LEFT_JOIN` merge.** Extend phase 1's merge rule to a `LEFT_JOIN` whose two sides carry the
+identical stable bind, under `V ⊆ cVars(L) ∩ cVars(R)`. The anti-join half computes `e` on `μ_L` either
+way, but it deserves a second look: write the test for an unmatched left row first.
 
-Required cases:
+### Tests
 
-1. **One per row of §4**, positive.
-2. **Negative**: a sibling with `?x` in scope carrying a *different* expression; a `UNION` branch that
-   does not carry the bind; `BIND(RAND() AS ?x)` staying put; a `FILTER` reading a computed (non-term)
-   `?x`; a `FILTER` holding an `EXISTS`; a chain whose outer bind stays and reads the inner one that
-   would otherwise rise (§5); a `GROUP` whose aggregate *expression* reads the bind that is neither key
-   nor target (§4); a join whose carriers share `?x` over a `?y ∈ V` that is not certain on both sides,
-   which must **not** merge.
-3. **Merge**, both `|S| = 1` and `|S| = 2`.
-4. **Metadata/scope invariant**, as a helper run on every case: `withCpVars` of the output must have the
-   same `cVars` and the same `vRanges` key set at the root as `withCpVars` of the input. This is the
-   cheap version of "`pVars`/`cVars` are preserved at the anchor" and catches the stale-metadata bug.
-5. **Idempotence**: `pullUpExtends(pullUpExtends(q)) === pullUpExtends(q)`.
-6. **No oscillation**: `pushDownAssertions(pullUpExtends(pushDownAssertions(q)))` reaches a fixpoint on
-   the queries of case 1.
-7. **Evaluation**, in `test/eval.test.ts`, over `OPTIONAL`, `MINUS`, `UNION` and a sub-`SELECT`: a wrong
-   `cVars` changes what `SELECT *` returns without any string comparison noticing.
-8. Predicate unit tests for `isStableExpression` (`now` stable, `rand`/`uuid`/`struuid`/`bnode` not, the
-   one allowlisted `named`, `existence` rejected) and `expressionsEqual`.
+- `SELECT ?a { ?a :p ?b OPTIONAL { ?b :q ?c . BIND(:v AS ?x) } }` — the bind is dropped, and `?x` is gone
+  from the output.
+- Kept because a sibling's `pVars` needs it as a join key; kept because an `ORDER BY`, a `FILTER`, or an
+  **aggregate expression** reads it; kept at the root when `projected` is not passed; dropped at the root
+  when it is.
+- `LEFT_JOIN` merge, positive and negative (a case where only one side has `V` certain).
+- The three checks of §A.6, and every phase-1 test still green with default options.
 
-## 9. Out of scope
+# Phase 3 — transfer and weak assertion
 
-Phase 2 — the top-down `needed` analysis and general dropping (including `LEFT_JOIN`/`MINUS` RHS), the
-`LEFT_JOIN` merge. Phase 3 — transfer and weak assertion into a sibling, which need an idempotence guard.
-Phase 4 — the `GROUP`-over-a-constant-key hoist, a wider `NAMED` allowlist, `EXISTS` anywhere,
-substituting a non-term `e`. Do not start any of them; `report.md` §5, §6 and §9 hold the designs.
+**Goal.** Two moves for the case phase 1 gives up on: a `JOIN` sibling `B` has `?x` in scope and does
+not carry the identical bind (§6).
 
-## 10. Definition of done
+**Prerequisite.** Phases 1–2 merged.
 
-- `yarn test` green, including the new file and the untouched existing suites.
-- `yarn lint` clean (`@rubensworks/eslint-config`: TSDoc with `@param`/`@returns` on every export, and
-  match the comment density of the files around you — this repo explains *why* in prose).
-- `yarn build` clean; no `any` beyond the `<'unsafe', T>` pattern the other passes use.
-- `pushUpBoundedFromUnion` gone from `lib/`, from `lib/transformations/index.ts`, and from `README.md`,
-  with its `UNION` behaviour covered by a `pullUpExtends` test.
-- The worked example at the top of this file transforms exactly as written.
+### Work
+
+Add `transferIntoSiblings?: boolean` to `PullUpOptions`, **default `false`**. Nothing changes for
+existing callers, and the pipeline of §7 stays as it is.
+
+- **Transfer (strong).** If `?x ∈ B.cVars`, `B` supplies `?x` on every solution and join compatibility
+  already forces it to equal `e`: `Join(Extend(A, ?x, e), B) ≡ Join(A, σ_{?x ≡ e}(B))`. The `EXTEND` is
+  **deleted**, not moved. Ground `e` only.
+- **Weak assertion.** If `?x ∈ B.vRanges` but `?x ∉ B.cVars`, the bind can neither move nor be deleted,
+  but `W⟨?x ≡ e⟩` — `¬bound(?x) ∨ sameTerm(?x, c)` — holds of every solution of `B` that reaches the
+  join, so it may be asserted into `B` while the bind stays where it is.
+
+Build both with the existing conjunction API rather than by hand:
+`AssertionConjunction.of([])`, then `assertTerm(?x, term, /* strong */ true | false)` (it returns `false`
+on a contradiction, which means the operand is empty), then `c.AF.createFilter(B, conjunction.toExpression(c))`.
+
+**The guard.** Both emit filters that `pushDownAssertions` will push down and re-materialise as `EXTEND`s
+at `B`'s leaves, which this pass then picks up again. The strong transfer is monotone — it strictly
+decreases the `EXTEND` count. The weak assertion is not: it would re-emit the same filter forever. Before
+emitting one, read `B`'s top filter chain with `collectAssertions` **out of the condition** — the
+`metadata.assertions` tag `assertionFilter` writes does not survive `pushDownAssertions`, which strips
+every `metadata` on the way out — and skip when the assertion is already there.
+
+### Tests
+
+- Transfer: the `EXTEND` disappears and `B` carries `FILTER(sameTerm(?x, :c))`; the result of the query
+  is unchanged (evaluation test).
+- Weak: `B` carries `FILTER(!bound(?x) || sameTerm(?x, :c))` and the bind stays.
+- **Termination**, the headline test: iterate `pullUpExtends ∘ pushDownAssertions` five times over a
+  query that triggers each move and assert the output stabilises by the second iteration.
+- The guard in isolation: running the pass twice over a plan that already carries the weak assertion adds
+  nothing.
+- Flag off by default: every phase-1 and phase-2 test unchanged.
+
+# Phase 4 — edge cases
+
+**Goal.** The four deferrals, independent of each other. One PR, one commit each.
+
+**Prerequisite.** Phases 1–3 merged (only the fourth item needs phase 2).
+
+- **`GROUP` over a constant key.** A bind of a *ground term* to a grouping key may rise as
+  `Group(A, keys \ {?x}, aggs)`. Blocked when `keys = {?x}`: over an empty input a keyless `GROUP` yields
+  one group where `GROUP BY ?x` yields none. Test both, including the empty-input case.
+- **`EXISTS`.** Give `ExpressionTypes.EXISTENCE` a reads-set — `collectVariableNames` over the nested
+  pattern — so (C2) can be decided for `BIND(EXISTS { … } AS ?x)`, and block such a bind from rising past
+  `GRAPH`, `FROM` and `SERVICE`, which change the active graph the nested pattern is evaluated against.
+  Separately, allow a hoist past a `FILTER` whose `EXISTS` does not read `?x`; substituting into one
+  stays forbidden. Remove the `TODO(phase 4)` markers phase 1 left.
+- **`NAMED` allowlist.** Generalise phase 1's single `EXTENSION_FUNCTION_BNODE` entry into a documented
+  set of extension functions declared stable, with a test that an unlisted one blocks.
+- **Substituting a non-term `e`.** Where `?x` occurs exactly once in the reader and is dead above
+  (phase 2's `needed`), substituting is break-even and deletes a node. Gate it on both conditions, and
+  test that two occurrences still block.
+
+Each item ships with the three checks of §A.6.

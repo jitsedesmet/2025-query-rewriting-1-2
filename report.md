@@ -41,9 +41,9 @@ is the one place this predicate parts ways with the `isStaticExpression` already
 `ExpressionTypes.NAMED` is opaque and unstable unless allowlisted, `EXTENSION_FUNCTION_BNODE`
 (`internal://blank`, the internal form of the `bnodeConsistent` extension function the README documents)
 being the first entry: "same inputs = same identity" is exactly stability. `ExpressionTypes.EXISTENCE` is
-stable per solution, but it reads `vars(P)` of its nested pattern rather than anything visible in the
-expression tree, *and* it is evaluated against the active graph — so it needs both a reads-set for (C2)
-and a block on `GRAPH`, `FROM` and `SERVICE`, which is why §9 defers it. `AGGREGATE` and `WILDCARD` cannot
+a **`TODO`**, as it is in the pushdown: it is stable per solution, but it reads `vars(P)` of a nested
+pattern rather than anything visible in the expression tree, and it is evaluated against the active
+graph. Nothing holding an `EXISTS` floats until that is worked out. `AGGREGATE` and `WILDCARD` cannot
 occur in a `BIND`.
 
 **The unit is the chain, not the node.** Peel the maximal `EXTEND` chain at the top of a subtree into an
@@ -65,22 +65,23 @@ bind has a smaller `pVars`, which is the point. Reaching the outer `PROJECT` is 
 
 Hoisting `op(…, Extend(A, ?x, e), …)` into `Extend(op(…, A, …), ?x, e)` needs:
 
-- **(C1) No capture.** No solution reaching the re-planted `EXTEND` may already bind `?x`: `?x` must be
-  out of scope in every *other* input `B` unless it carries the identical bind (§4, *merge*), and `op`
-  must not introduce `?x` itself — a `GRAPH ?x`, an aggregate target. A `PROJECT` listing `?x` is not a
-  blocker: strike it from the list and rise (§4).
+- **(C1) No capture.** No solution reaching the re-planted `EXTEND` may already bind `?x`: every *other*
+  input `B` must satisfy `B.vRanges.neverBinds(?x)` unless it carries the identical bind (§4, *merge*),
+  and `op` must not introduce `?x` itself — a `GRAPH ?x`, an aggregate target. A `PROJECT` listing `?x`
+  is not a blocker: strike it from the list and rise (§4).
 
-  Soundness alone asks for less. `Extend(A, ?x, e)` is *undefined* by the spec when `?x ∈ dom(μ)` for an
-  input mapping μ, which this codebase reads as "must not happen, the engine crashes"; nothing forbids
-  `?x` being merely in scope, so `B.vRanges.neverBinds(?x)` — out of scope, or in scope with an empty
-  range — is all the evaluation needs.
+  This is an evaluation-time condition, not a syntactic one. Nothing forbids `?x` being in scope in `A`,
+  and no engine should refuse an `Extend` over an input that has it in scope; what the spec leaves
+  *undefined* is `Extend(μ, ?x, e)` for a μ that already **binds** `?x`, which this codebase reads as
+  "must not happen, the engine crashes". So `neverBinds` — out of scope, or in scope with an empty range
+  — is the right reading, and an all-`UNDEF` `VALUES` column is a legitimate hoist target.
 
-  **Generation asks for scope, so scope is what to test.** §10.1 forbids a `BIND` whose variable "has
-  been used in the group graph pattern up to the point of use in BIND"; the grammar's narrower rule about
-  the immediately preceding `TriplesBlock` (§19.7) is only half of it. So an operand with `?x` in scope
-  and never binding it — the all-`UNDEF` `VALUES` column being the case that reaches here — is a
-  generation hazard rather than the free hoist target `neverBinds` calls it, and
-  `algebraUtils.inScopeVariables(B)` decides the right thing while implying `neverBinds`.
+  One caveat that belongs to *generation* rather than to the rules: §10.1 forbids a `BIND` whose variable
+  "has been used in the group graph pattern up to the point of use in BIND", which is broader than the
+  grammar's rule about the immediately preceding `TriplesBlock` (§19.7) and broad enough to cover the
+  operand that has `?x` in scope while never binding it. Nothing in the algebra breaks; it is where to
+  look if the generator ever rejects this pass's output, and the guard would then be
+  `algebraUtils.inScopeVariables` at the re-plant site rather than a stricter licence.
 
   One thing `neverBinds` should see and does not: `withCpVars` leaves the ranges under a `FILTER(FALSE)`
   alone, so an operand with no solutions still reports `?x` as bindable. `transformFilterFalse` runs
@@ -97,8 +98,8 @@ Hoisting `op(…, Extend(A, ?x, e), …)` into `Extend(op(…, A, …), ?x, e)` 
 - **(C3) Row correspondence.** `op` must produce solutions in 1-1 multiset correspondence whether the
   bind is applied below or above, and must not *read* `?x` — or `?x` must be substituted away first.
 
-All three are decided from the metadata of the inputs *before* any rewriting. (C2) reads the ranges rather
-than the key set — `neverBinds`, never `has` — where (C1) reads the scope of the other inputs.
+All three are decided from the `CPMeta` of the inputs *before* any rewriting, and all three read the
+ranges rather than the key set — `neverBinds` throughout, never `has`.
 
 ## 3. Substituting `e` back for `?x`
 
@@ -109,8 +110,10 @@ SPARQL does not distinguish them, and the special forms that handle errors speci
 
 - **`bound(?x)`** reads unboundness instead of propagating it, and takes a bare `Var`, so `bound(e)` is
   not grammatical. It folds to `true` only for a **certain** bind (§1); otherwise the hoist blocks.
-- **`EXISTS` / `NOT EXISTS` reading `?x`** blocks outright: `μ` is substituted into the nested *pattern*,
-  where an unbound `?x` stays a variable and matches anything, and where an expression cannot go.
+- **A condition holding an `EXISTS` / `NOT EXISTS`** is a barrier, and a `TODO` rather than a rule: `μ`
+  is substituted into the nested *pattern*, where an expression cannot go and an unbound `?x` stays a
+  variable that matches anything. `substituteInExpression` leaves `EXISTENCE` untouched for the same
+  reason — the pushdown does not send assertions through one either, and carries the same `TODO`.
 
 **Wanted only when free.** Substitution is the price of hoisting past a reader, not a bonus. With `k`
 occurrences of `?x` in the reader, one evaluation of `e` per row becomes `k+1` — `k` in the reader plus
@@ -121,9 +124,8 @@ lost, since a bind that cannot pass its reader gets re-planted directly above it
 This lands on the existing API rather than fighting it: `AssertionView.resolve` maps an `Access` to an
 `RDF.Term`, so `substituteInExpression` expresses exactly the term case and nothing else. Feed it
 `resolve: ?x ↦ e`, and `bound: {?x}` only for a certain bind. Both exceptions have to be decided *before*
-that call rather than by it: an uncertain bind comes back as the ungrammatical `bound(<:a>)`, and an
-`EXISTENCE` argument comes back untouched (its own `TODO`). A general
-substitute-an-expression-for-a-variable helper is one we never write.
+that call rather than by it — an uncertain bind comes back as the ungrammatical `bound(<:a>)`, an `EXISTS`
+comes back untouched. A general substitute-an-expression-for-a-variable helper is one we never write.
 
 ## 4. Per-operation rules
 
@@ -132,7 +134,7 @@ vacuously and what decides is the *readers* — a condition, an ordering express
 
 | Operation | Bind may rise | Licence, beyond (C1)+(C2) |
 | --- | --- | --- |
-| `FILTER` | yes | condition must not mention `?x`, or `e` is a term expression and substitutes in (§3). **`EXISTS` reading `?x` blocks outright.** |
+| `FILTER` | yes | condition must not mention `?x`, or `e` is a term expression and substitutes in (§3). **A condition holding an `EXISTS` is a barrier (`TODO`, §3).** |
 | `EXTEND` | — | not a swap: the chain is one unit, see §1. |
 | `PROJECT` | **drop** if `?x ∉ variables`; else yes | to rise, `V ⊆ variables`, and `?x` is struck from `variables` — not for (C1), which the projection satisfies either way, but so the sub-`SELECT` does not carry an always-unbound column and the metadata stays honest. `pVars` at the swap is unchanged: `(variables \ {?x}) ∪ {?x}`. Pointless at the root, where there is nothing above to rise to. The main drop site. |
 | `GROUP` | **drop** if `?x` is neither a key, nor read by an aggregate, nor an aggregate target; else barrier | second drop site. The reads matter: an `aggregates` entry is a `BoundAggregate`, an `expression` over the input beside the `variable` it writes, so `GROUP BY ?k (SUM(?x) AS ?s)` reads an `?x` that is neither key nor target. A refinement for a constant key is deferred to phase 4. |
@@ -141,9 +143,9 @@ vacuously and what decides is the *readers* — a condition, an ordering express
 | `SLICE` | yes | unconditional — `EXTEND` is a bijection on rows and preserves order. One of the few places the pull-up goes where the pushdown may not. |
 | `FROM` | yes | congruent. |
 | `JOIN` | yes | (C1)/(C2) over the siblings, *or* a sibling carries the identical bind (**merge**, below). Cardinality-increasing, so subject to the cost gate below. |
-| `LEFT_JOIN`, from the **LHS** | yes | (C1) on `R`, or `R` carries the identical bind; the condition is treated like a `FILTER`. Cost gate applies. |
+| `LEFT_JOIN`, from the **LHS** | yes | `R.vRanges.neverBinds(?x)`, or `R` carries the identical bind; the condition is treated like a `FILTER`. Cost gate applies. |
 | `LEFT_JOIN`, from the **RHS** | no | hoisting would bind `?x` on the unmatched left rows, where it must stay unbound. Drop-only (§5). |
-| `MINUS`, from the **LHS** | yes | (C1) on `R` — an `R` that binds `?x` changes both the compatibility and the domain-disjointness test, though `pVars(Minus) = pVars(L)` means it never reaches the re-planted bind. (C2) is vacuous, as in `UNION`: the output mapping *is* `μ_L`. |
+| `MINUS`, from the **LHS** | yes | `R.vRanges.neverBinds(?x)` — an `R` that binds `?x` changes both the compatibility and the domain-disjointness test, though `pVars(Minus) = pVars(L)` means it never reaches the re-planted bind. (C2) is vacuous, as in `UNION`: the output mapping *is* `μ_L`. |
 | `MINUS`, from the **RHS** | no | RHS bindings are out of scope above. Droppable when `L.vRanges.neverBinds(?x)`: then `?x` is in neither test. |
 | `UNION` | only when **every** branch floats the same bind | same `?x`, `e` structurally equal and stable — and no (C2) condition, since a union merges nothing: the solution above *is* the branch solution, so `e` is asked about the same μ either way. Hoisting from one branch alone would bind `?x` in the others' solutions; adding it to the others instead would *grow* `cVars(union)`, a wrong answer rather than a conservative one. Subsumes `pushUpBoundedFromUnion`. |
 | `GRAPH ?g` | yes | `?x ≠ ?g`, and `?g ∉ V` unless `?g ∈ A.cVars` — `?g` is bound by the join *outside* the pattern. |
@@ -256,10 +258,9 @@ an `EXTEND` or strictly decreases its depth, so one bottom-up traversal is a fix
   `expressionsEqual(a, b)`, for the merge and the `UNION` rule, is ours: the algebra ships no structural
   equality — `Canonicalizer` only renames blank nodes — so it is a structural walk, not
   generate-and-compare.
-- **Reused as-is:** `withCpVars`/`withoutCpVars`/`CPMeta`/`VRanges` for (C2) and the ranges;
-  `algebraUtils.inScopeVariables` for (C1); `substituteInExpression` for §3; `collectVariableNames` for
-  "does this expression mention `?x`" and for `vars(e)`, `EXISTS` operands included — which also gives
-  `EXISTENCE` the reads-set §1 needs.
+- **Reused as-is:** `withCpVars`/`withoutCpVars`/`CPMeta`/`VRanges` for every licence;
+  `substituteInExpression` for §3; `collectVariableNames` for "does this expression mention `?x`" and
+  for `vars(e)`.
 - **Metadata hygiene:** moving a node invalidates the cached `CPMeta` of everything it moved past. Enter
   through `withoutCpVars`, delete the metadata of every node this pass rebuilds, and read `cpVars` only
   off inputs as `mapOperation` hands them back. The likeliest source of a subtle bug; give it a test.
@@ -290,7 +291,8 @@ operationTransform → pushDownAssertions → transformFilterFalse
 3. **Phase 3** — transfer and weak assertion, flag-gated, with the idempotence guard.
 4. **Phase 4, edge cases** — the `GROUP`-over-a-constant-key hoist (`Group(A, keys \ {?x}, aggs)`,
    blocked when `keys = {?x}`, since a keyless `GROUP` over the empty input yields one group where
-   `GROUP BY ?x` yields none); `NAMED` allowlisting and `EXISTENCE`; substituting a non-term `e` where
+   `GROUP BY ?x` yields none); `NAMED` allowlisting, and `EXISTS` — in a bind or in a condition (§3);
+   substituting a non-term `e` where
    `k = 1` and `?x` is dead above, which is break-even and deletes a node but needs §5's analysis.
 
 Tests, mirroring `test/pushDownAssertions.test.ts`: a case per row of §4, the *negative* ones included —

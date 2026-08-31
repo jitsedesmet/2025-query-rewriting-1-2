@@ -115,7 +115,7 @@ type Disposition =
 interface FloatingBind {
   /** The bind itself, as {@link peelExtends} handed it over. */
   bind: ChainBind;
-  /** The index of the input whose chain it came out of. */
+  /** The index of the (multi-)input whose chain it came out of. */
   inputIndex: number;
   /** Its position in that chain, in evaluation order. */
   chainPosition: number;
@@ -131,7 +131,10 @@ interface FloatingBind {
   mustLeaveWith: FloatingBind[];
 }
 
-/** The peeled inputs of one operation and the binds peeled at the top of them. */
+/**
+ * The peeled inputs of one operation and the binds peeled at the top of them.
+ * Needed for multi-operations.
+ */
 interface PeeledInputs {
   /** The inputs, each split into a core and a chain. */
   chains: PeeledChain[];
@@ -194,27 +197,49 @@ export function pullUpExtends<T extends Algebra.Operation>(c: TransformContext, 
   const entered = withoutCpVars(op);
   const sealed = solutionModifierChainOf(entered);
   return withoutCpVars(algebraUtils.mapOperation<'unsafe', T>(entered, {
-    [Algebra.Types.FILTER]: { transform: (filter: Algebra.Filter) => floatThroughFilter(c, filter) },
-    [Algebra.Types.PROJECT]: { transform: (project: Algebra.Project, original) =>
-      floatThroughProject(c, project, sealed.has(original)) },
-    [Algebra.Types.GROUP]: { transform: (group: Algebra.Group) => floatThroughGroup(c, group) },
-    [Algebra.Types.DISTINCT]: { transform: (distinct: Algebra.Distinct, original) =>
-      floatThroughCongruentOperation(c, distinct, sealed.has(original), input => c.AF.createDistinct(input)) },
-    [Algebra.Types.REDUCED]: { transform: (reduced: Algebra.Reduced, original) =>
-      floatThroughCongruentOperation(c, reduced, sealed.has(original), input => c.AF.createReduced(input)) },
-    [Algebra.Types.SLICE]: { transform: (slice: Algebra.Slice, original) =>
-      floatThroughCongruentOperation(c, slice, sealed.has(original), input =>
-        c.AF.createSlice(input, slice.start, slice.length)) },
-    [Algebra.Types.FROM]: { transform: (from: Algebra.From, original) =>
-      floatThroughCongruentOperation(c, from, sealed.has(original), input =>
-        c.AF.createFrom(input, from.default, from.named)) },
-    [Algebra.Types.ORDER_BY]: { transform: (orderBy: Algebra.OrderBy, original) =>
-      floatThroughOrderBy(c, orderBy, sealed.has(original)) },
-    [Algebra.Types.GRAPH]: { transform: (graph: Algebra.Graph) => floatThroughGraph(c, graph) },
-    [Algebra.Types.JOIN]: { transform: (join: Algebra.Join) => floatThroughJoin(c, join) },
-    [Algebra.Types.LEFT_JOIN]: { transform: (leftJoin: Algebra.LeftJoin) => floatThroughLeftJoin(c, leftJoin) },
-    [Algebra.Types.MINUS]: { transform: (minus: Algebra.Minus) => floatThroughMinus(c, minus) },
-    [Algebra.Types.UNION]: { transform: (union: Algebra.Union) => floatThroughUnion(c, union) },
+    [Algebra.Types.FILTER]: {
+      transform: filter => floatThroughFilter(c, filter),
+    },
+    [Algebra.Types.PROJECT]: {
+      transform: (project, original) => floatThroughProject(c, project, sealed.has(original)),
+    },
+    [Algebra.Types.GROUP]: {
+      transform: group => floatThroughGroup(c, group),
+    },
+    [Algebra.Types.ORDER_BY]: {
+      transform: (orderBy, original) => floatThroughOrderBy(c, orderBy, sealed.has(original)),
+    },
+    [Algebra.Types.GRAPH]: {
+      transform: graph => floatThroughGraph(c, graph),
+    },
+    [Algebra.Types.JOIN]: {
+      transform: join => floatThroughJoin(c, join),
+    },
+    [Algebra.Types.LEFT_JOIN]: {
+      transform: leftJoin => floatThroughLeftJoin(c, leftJoin),
+    },
+    [Algebra.Types.MINUS]: {
+      transform: minus => floatThroughMinus(c, minus),
+    },
+    [Algebra.Types.UNION]: {
+      transform: union => floatThroughUnion(c, union),
+    },
+    [Algebra.Types.DISTINCT]: {
+      transform: (distinct, original) =>
+        floatThroughCongruentOperation(c, distinct, sealed.has(original), input => c.AF.createDistinct(input)),
+    },
+    [Algebra.Types.REDUCED]: {
+      transform: (reduced, original) =>
+        floatThroughCongruentOperation(c, reduced, sealed.has(original), input => c.AF.createReduced(input)),
+    },
+    [Algebra.Types.SLICE]: {
+      transform: (slice, original) => floatThroughCongruentOperation(c, slice, sealed.has(original), input =>
+        c.AF.createSlice(input, slice.start, slice.length)),
+    },
+    [Algebra.Types.FROM]: {
+      transform: (from, original) => floatThroughCongruentOperation(c, from, sealed.has(original), input =>
+        c.AF.createFrom(input, from.default, from.named)),
+    },
     // An EXTEND needs no callback of its own: a chain is one unit, decided by whatever it stands under.
     // Everything else is a leaf or a barrier, and a type without a callback is exactly a barrier.
   }));
@@ -277,10 +302,9 @@ function settlePartition(
   while (changed) {
     changed = false;
     for (const floatingBind of peeled.allBinds) {
-      if (floatingBind.disposition === 'stay') {
-        continue;
-      }
-      if (!stillLicensed(floatingBind) || !chainOrderAllows(c, peeled, floatingBind)) {
+      // Not staying is always okay. + You only change when no longer licenced, or chain breaks
+      if (floatingBind.disposition !== 'stay' &&
+          (!stillLicensed(floatingBind) || !chainOrderAllows(c, peeled, floatingBind))) {
         // A group leaves as a whole or not at all, so one member the order forbids pins every copy of it -
         // which is what makes the `UNION` rule "the order check has to pass in every branch".
         for (const member of floatingBind.mustLeaveWith) {
@@ -301,15 +325,16 @@ function settlePartition(
  */
 function chainOrderAllows(c: TransformContext, peeled: PeeledInputs, floatingBind: FloatingBind): boolean {
   for (const bindAbove of peeled.bindsPerInput[floatingBind.inputIndex]) {
-    if (bindAbove.chainPosition <= floatingBind.chainPosition || bindAbove.disposition !== 'stay') {
-      continue;
-    }
-    // Above the operation the riser would read `?y` bound where below it read it unbound.
-    if (floatingBind.bind.reads.has(bindAbove.bind.variable.value)) {
-      return false;
-    }
-    if (!readerAdmitsSubstitution(c, peeled, bindAbove.bind.expression, floatingBind)) {
-      return false;
+    if (bindAbove.chainPosition > floatingBind.chainPosition && bindAbove.disposition === 'stay') {
+      // Above the operation the riser would read `?y` bound where below it read it unbound.
+      // TODO: here we would need to also consider the cost of the current bind expression.
+      //  If it is low, we can substitute.
+      if (floatingBind.bind.reads.has(bindAbove.bind.variable.value)) {
+        return false;
+      }
+      if (!readerAdmitsSubstitution(c, peeled, bindAbove.bind.expression, floatingBind)) {
+        return false;
+      }
     }
   }
   return true;

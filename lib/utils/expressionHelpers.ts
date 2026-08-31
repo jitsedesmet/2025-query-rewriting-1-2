@@ -150,7 +150,7 @@ export function expressionsEqual(left: Algebra.Expression, right: Algebra.Expres
     }
     case Algebra.ExpressionTypes.WILDCARD:
       return true;
-    default:
+    case Algebra.ExpressionTypes.EXISTENCE:
       return false;
   }
 }
@@ -173,12 +173,10 @@ function argumentsEqual(left: readonly Algebra.Expression[], right: readonly Alg
  */
 export function containsExistenceExpression(expression: Algebra.Expression): boolean {
   let found = false;
-  algebraUtils.visitOperationSub(expression, {}, { expression: {
-    existence: { preVisitor: () => {
-      found = true;
-      return { shortcut: true };
-    } },
-  }});
+  algebraUtils.visitOperationSub(expression, {}, { expression: { existence: { preVisitor: () => {
+    found = true;
+    return { shortcut: true };
+  } }}});
   return found;
 }
 

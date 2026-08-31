@@ -114,9 +114,12 @@ describe('evaluation tests', () => {
       query: string,
       expectedRows: number,
     ): Promise<void> {
-      const rewritten = c.generator.generate(toAst(pullUpExtends(c, parseQuery(c, pullUpPrefixes + query)))).trim();
-      const original = await bindings(pullUpPrefixes + query);
+      const evalQuery = pullUpPrefixes + query;
+      const rewritten = c.generator.generate(toAst(pullUpExtends(c, parseQuery(c, evalQuery)))).trim();
+      const original = await bindings(evalQuery);
+      // Result is equal
       expect(await bindings(rewritten)).toEqual(original);
+      // And has the requested length
       expect(original).toHaveLength(expectedRows);
     }
 

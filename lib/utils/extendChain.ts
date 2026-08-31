@@ -33,8 +33,9 @@ export interface PeeledChain {
 }
 
 /**
- * Splits the maximal EXTEND chain at the top of `op` off its core, the binds coming back in evaluation
- * order.
+ * Splits the maximal EXTEND chain at the top of `op` off its core,
+ * the binds coming back in evaluation order.
+ * @example Extend1(Extend2(A)) -> {core: A, binds: [Extend2, Extend1]}
  * @param c - The transformation context, for collecting the variables of an expression
  * @param op - The operation to peel
  * @returns its core and the binds above it, innermost first

@@ -481,6 +481,10 @@ every `metadata` on the way out — and skip when the assertion is already there
   set of extension functions declared stable, with a test that an unlisted one blocks.
 - **Substituting a non-term `e`.** Where `?x` occurs exactly once in the reader and is dead above
   (phase 2's `needed`), substituting is break-even and deletes a node. Gate it on both conditions, and
-  test that two occurrences still block.
+  test that two occurrences still block. The arithmetic, which phase 1 wrote onto
+  `readerAdmitsSubstitution`: with `k` occurrences, substituting costs `k` evaluations in the reader plus
+  one in the re-planted bind, against the `1` it costs now — so no `k` pays while the bind is re-planted,
+  `k = 1` breaks even once the bind can be *dropped* instead, and `k ≥ 2` would need a cost model calling
+  `e` cheap, which is the cardinality estimation §4 of the report defers.
 
 Each item ships with the three checks of §A.6.

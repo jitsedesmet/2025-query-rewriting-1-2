@@ -302,7 +302,8 @@ function settlePartition(
   while (changed) {
     changed = false;
     for (const floatingBind of peeled.allBinds) {
-      // Not staying is always okay. + You only change when no longer licenced, or chain breaks
+      // A bind that already stays has nothing left to decide; a leaver is pinned when its licence or its
+      // place in the chain no longer holds.
       if (floatingBind.disposition !== 'stay' &&
           (!stillLicensed(floatingBind) || !chainOrderAllows(c, peeled, floatingBind))) {
         // A group leaves as a whole or not at all, so one member the order forbids pins every copy of it -
@@ -326,9 +327,12 @@ function settlePartition(
 function chainOrderAllows(c: TransformContext, peeled: PeeledInputs, floatingBind: FloatingBind): boolean {
   for (const bindAbove of peeled.bindsPerInput[floatingBind.inputIndex]) {
     if (bindAbove.chainPosition > floatingBind.chainPosition && bindAbove.disposition === 'stay') {
-      // Above the operation the riser would read `?y` bound where below it read it unbound.
-      // TODO: here we would need to also consider the cost of the current bind expression.
-      //  If it is low, we can substitute.
+      // Above the operation the riser would read `?y` bound where below it read it unbound. No cost
+      // argument can rescue this one: what the riser has to see is `?y` *unbound*, so writing the stayer's
+      // expression in its place would answer a different question however cheap that expression is. Only
+      // pinning preserves the value. §10.1 forbids writing this ordering in the first place - the variable
+      // a BIND introduces may not already have been used in the group - and nothing this repo generates
+      // builds one either, so the check is defensive rather than load-bearing.
       if (floatingBind.bind.reads.has(bindAbove.bind.variable.value)) {
         return false;
       }
@@ -364,11 +368,20 @@ function readerAdmitsSubstitution(
   if (!collectVariableNames(c.astTransformer, reader).has(variableName)) {
     return true;
   }
-  // Only a term expression is written in at all: with `k` occurrences of `?x`, one evaluation of `e` per
-  // row becomes `k+1`, which is free exactly when `e` is a term. And nothing is written into an EXISTS -
-  // `μ` is substituted into the nested *pattern*, where an expression cannot go and an unbound `?x` is a
-  // variable matching anything rather than one term. `substituteInExpression` leaves EXISTENCE untouched
-  // for that reason, and the pushdown carries the same TODO.
+  // Only a term expression is written in at all, and that is a *cost* rule rather than a soundness one.
+  // With `k` occurrences of `?x` in the reader, one evaluation of `e` per row becomes `k` in the reader
+  // plus one in the re-planted bind: `k+1` against `1`, which only breaks even when `e` costs nothing to
+  // re-evaluate - a term. There is no `k` that saves a non-term while the bind is re-planted, so the
+  // relaxation needs one of the two things that change the arithmetic: phase 2's `needed`, which lets the
+  // bind be *dropped* instead of re-planted (`k` against `1`, break-even at `k = 1`), or a cost model that
+  // can call an expression cheap enough to pay for at `k ≥ 2`. This pass has neither.
+  // TODO(phase 4): substitute a non-term `e` where `k = 1` and `?x` is dead above, per phase 4's fourth
+  //  item; a cheapness heuristic for `k ≥ 2` wants the cardinality estimates the report defers.
+  //
+  // And nothing is written into an EXISTS - `μ` is substituted into the nested *pattern*, where an
+  // expression cannot go and an unbound `?x` is a variable matching anything rather than one term.
+  // `substituteInExpression` leaves EXISTENCE untouched for that reason, and the pushdown carries the
+  // same TODO.
   // TODO(phase 4): work out what a substitution into a nested pattern would mean.
   if (floatingBind.bind.expression.subType !== Algebra.ExpressionTypes.TERM || containsExistenceExpression(reader)) {
     return false;

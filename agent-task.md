@@ -10,6 +10,11 @@ its own tests and keeps every earlier phase's tests passing. Do not start a late
 PR — if you find yourself needing something listed under a later phase, block the case and leave a
 `TODO` naming the phase.
 
+**Breaking changes are allowed.** There is no release yet, so nothing here is bound by semantic
+versioning: rename, delete, re-sign or move anything — public exports included — whenever it makes the
+API cleaner, the code simpler, or lets shared logic live in one place. §A.6 says what that obliges you
+to do; it is a licence to improve the codebase, not to leave it inconsistent.
+
 | PR | Phase | Ships |
 | --- | --- | --- |
 | 1 | [Phase 1](#phase-1--the-pass) | the pass itself: chain peeling, the two predicates, the congruent operations, `JOIN`/`LEFT_JOIN`/`MINUS`/`UNION`, the two syntactic drops. Deletes `pushUpBoundedFromUnion`. |
@@ -111,6 +116,17 @@ Two things must be decided **before** that call, not by it:
 
 ## A.6 House rules, inherited by every PR
 
+- **Improve what you touch.** No release, no semantic versioning, so a breaking change is a normal
+  outcome when it raises quality: delete a pass the new one subsumes, re-sign a function whose shape no
+  longer fits, lift logic two passes now share into `lib/utils/`. `task.md` asks for exactly this —
+  "a lot of code written for pushDown assertion can be reused here … feel free to optimize code for
+  reuse" — so where the pull-up needs something `pushDownAssertions.ts` keeps private (its `licensed`
+  predicate, its chain handling), the move is to extract it into a shared helper and have both call it,
+  not to copy it.
+- **What the licence obliges.** Breaking the *API* is free; breaking *query semantics* is not, and the
+  invariant of §A.2 holds through every refactor. A rename or deletion is only done when every call site,
+  `lib/index.ts` / `lib/transformations/index.ts`, the `@fileoverview` lists, the `README.md` tables and
+  the tests move with it in the same PR. Leave no compatibility shim and no deprecated alias behind.
 - `yarn test` green — the new tests and every existing suite. `yarn lint` clean. `yarn build` clean.
 - TSDoc with `@param`/`@returns` on every export, and match the comment density of the files around you:
   this repo explains *why* in prose, not *what*.
@@ -140,7 +156,8 @@ front of `removeProjections`; `README.md`, which names `pushUpBoundedFromUnion` 
 (~line 69) and the API table (~line 123).
 
 **Deleted** — `lib/transformations/pushUpBoundedFromUnion.ts`. It is a public export, so this is a
-breaking change; `task.md` allows it.
+breaking change, which §A.6 licenses: its `UNION` rule becomes one row of the table below, and keeping
+both would leave two passes hoisting the same binds by different rules.
 
 ### Work
 
@@ -300,7 +317,10 @@ export function pullUpExtends<T extends Algebra.Operation>(c: TransformContext, 
 
 `queryTransform` strips the query's outer `PROJECT` before running any transformation and re-adds it
 afterwards, so without `projected` a bind that floats to the root is always re-planted, never dropped.
-Passing the list closes that (§5); the default must keep phase 1's behaviour exactly.
+Passing the list closes that (§5); the default must keep phase 1's behaviour exactly. If threading the
+list out of `queryTransform` reads better than binding it in a closure at the call site, change
+`queryTransform` — §A.6 licenses the signature change, as long as every caller and the README move with
+it.
 
 **3. Dropping.** A floating bind with `?x ∉ needed(node)` is dropped wherever it stands, including the
 `LEFT_JOIN` RHS. The phase-1 `PROJECT`/`GROUP` drops become special cases of it — keep them working, and

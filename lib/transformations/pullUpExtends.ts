@@ -1,8 +1,13 @@
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformContext } from '../transformContext.js';
 import type { CPMeta } from '../utils/certainlyBoundVars.js';
-import { withCpVars, withoutCpVars } from '../utils/certainlyBoundVars.js';
-import { expressionsEqual, isStableExpression } from '../utils/expressionHelpers.js';
+import { cpMetaOf, withoutCpVars } from '../utils/certainlyBoundVars.js';
+import {
+  asksBoundOfVariable,
+  containsExistenceExpression,
+  expressionsEqual,
+  isStableExpression,
+} from '../utils/expressionHelpers.js';
 import type { ChainBind, PeeledChain } from '../utils/extendChain.js';
 import { peelExtends, replantExtends } from '../utils/extendChain.js';
 import { substituteInExpression } from '../utils/partialExpressionEvaluation.js';
@@ -77,7 +82,7 @@ import { collectVariableNames } from '../utils.js';
  * ## What does not move yet
  *
  * A bind holding an `EXISTS` never moves, and neither does one whose reader would have to take a term
- * *inside* an `EXISTS` - see {@link admitsSubstitution}, which is also where the two exceptions to
+ * *inside* an `EXISTS` - see {@link readerAdmitsSubstitution}, which is also where the two exceptions to
  * substitution live.
  *
  * A `SERVICE` is a barrier, as it is in the pushdown: `SILENT` turns endpoint failure into one empty
@@ -97,41 +102,44 @@ type Disposition =
   /** Deleted outright: the operation discards its variable, so nothing above can read it. */
   'drop';
 
-/** One bind of one input, with everything the licences read about it. */
-interface Candidate {
-  /** The bind itself. */
+/** One bind of one input of one operation, with everything the licences read about it. */
+interface FloatingBind {
+  /** The bind itself, as {@link peelExtends} handed it over. */
   bind: ChainBind;
   /** The index of the input whose chain it came out of. */
-  input: number;
+  inputIndex: number;
   /** Its position in that chain, in evaluation order. */
-  position: number;
+  chainPosition: number;
   /**
    * The gate every rule is behind: whether `e` is a pure function of the variables it reads, so that
    * asking it again somewhere else in the plan gives the same answer. That, not simplicity, is what the
    * rules need - nothing below cares how big `e` is.
    */
-  stable: boolean;
+  expressionIsStable: boolean;
   /**
    * Whether `?x ∈ cVars(Extend(A, ?x, e))`, which is what decides the `bound(?x)` fold: substituting a
    * term for an uncertain bind would emit the ungrammatical `bound(<ex://a>)`.
    */
-  certain: boolean;
+  bindsCertainly: boolean;
   /** What holds *where the bind is evaluated*, so below every bind standing above it in its chain. */
-  below: CPMeta;
+  scopeBelowBind: CPMeta;
   /** What has been decided for it, `stay` until a licence says otherwise. */
   disposition: Disposition;
-  /** The binds that have to leave together, this one included; a group of one for an ordinary hoist. */
-  group: Candidate[];
+  /**
+   * The binds that have to leave together, this one included, and a list of one for an ordinary hoist.
+   * A merge and the `UNION` rule are all-or-nothing, so what pins one member pins every copy of it.
+   */
+  mustLeaveWith: FloatingBind[];
 }
 
-/** The peeled inputs of one operation and the binds floating at the top of them. */
-interface FloatingBinds {
-  /** The inputs, split into a core and a chain. */
+/** The peeled inputs of one operation and the binds peeled at the top of them. */
+interface PeeledInputs {
+  /** The inputs, each split into a core and a chain. */
   chains: PeeledChain[];
-  /** The candidates of each input, in evaluation order. */
-  byInput: Candidate[][];
-  /** Every candidate, ordered by input index and then by chain order - the order risers are written in. */
-  all: Candidate[];
+  /** The peeled binds of each input, in evaluation order, indexed as the inputs are. */
+  bindsPerInput: FloatingBind[][];
+  /** Every peeled bind, ordered by input index and then by chain order - the order risers are written in. */
+  allBinds: FloatingBind[];
 }
 
 /**
@@ -144,7 +152,7 @@ interface FloatingBinds {
  * no generator could print in exchange for nothing at all. The chain is short and usually empty:
  * `queryTransform` strips the outer projection before running any transformation.
  */
-const modifierChainTypes = new Set<string>([
+const solutionModifierTypes = new Set<string>([
   Algebra.Types.ASK,
   Algebra.Types.CONSTRUCT,
   Algebra.Types.DESCRIBE,
@@ -157,14 +165,14 @@ const modifierChainTypes = new Set<string>([
 ]);
 
 /**
- * The nodes of the solution-modifier chain at the top of `root` ({@link modifierChainTypes}).
+ * The nodes of the solution-modifier chain at the top of `root` ({@link solutionModifierTypes}).
  * @param root - The root of the tree the traversal is about to run over
  * @returns those nodes, by identity, so that a callback can recognise its own original
  */
-function modifierChainOf(root: Algebra.Operation): Set<Algebra.Operation> {
+function solutionModifierChainOf(root: Algebra.Operation): Set<Algebra.Operation> {
   const sealed = new Set<Algebra.Operation>();
   let current = root;
-  while (modifierChainTypes.has(current.type)) {
+  while (solutionModifierTypes.has(current.type)) {
     sealed.add(current);
     current = (<Algebra.Single> current).input;
   }
@@ -194,27 +202,29 @@ export function pullUpExtends<T extends Algebra.Operation>(c: TransformContext, 
   // what `withCpVars` hands us describes the plan as it is now - and it is cleared again on the way out
   // for the same reason, the rewrites having since invalidated what the licences cached.
   const entered = withoutCpVars(op);
-  const sealed = modifierChainOf(entered);
+  const sealed = solutionModifierChainOf(entered);
   return withoutCpVars(algebraUtils.mapOperation<'unsafe', T>(entered, {
-    [Algebra.Types.FILTER]: { transform: (filter: Algebra.Filter) => throughFilter(c, filter) },
+    [Algebra.Types.FILTER]: { transform: (filter: Algebra.Filter) => floatThroughFilter(c, filter) },
     [Algebra.Types.PROJECT]: { transform: (project: Algebra.Project, original) =>
-      throughProject(c, project, sealed.has(original)) },
-    [Algebra.Types.GROUP]: { transform: (group: Algebra.Group) => throughGroup(c, group) },
+      floatThroughProject(c, project, sealed.has(original)) },
+    [Algebra.Types.GROUP]: { transform: (group: Algebra.Group) => floatThroughGroup(c, group) },
     [Algebra.Types.DISTINCT]: { transform: (distinct: Algebra.Distinct, original) =>
-      throughCongruent(c, distinct, sealed.has(original), input => c.AF.createDistinct(input)) },
+      floatThroughCongruentOperation(c, distinct, sealed.has(original), input => c.AF.createDistinct(input)) },
     [Algebra.Types.REDUCED]: { transform: (reduced: Algebra.Reduced, original) =>
-      throughCongruent(c, reduced, sealed.has(original), input => c.AF.createReduced(input)) },
+      floatThroughCongruentOperation(c, reduced, sealed.has(original), input => c.AF.createReduced(input)) },
     [Algebra.Types.SLICE]: { transform: (slice: Algebra.Slice, original) =>
-      throughCongruent(c, slice, sealed.has(original), input => c.AF.createSlice(input, slice.start, slice.length)) },
+      floatThroughCongruentOperation(c, slice, sealed.has(original), input =>
+        c.AF.createSlice(input, slice.start, slice.length)) },
     [Algebra.Types.FROM]: { transform: (from: Algebra.From, original) =>
-      throughCongruent(c, from, sealed.has(original), input => c.AF.createFrom(input, from.default, from.named)) },
+      floatThroughCongruentOperation(c, from, sealed.has(original), input =>
+        c.AF.createFrom(input, from.default, from.named)) },
     [Algebra.Types.ORDER_BY]: { transform: (orderBy: Algebra.OrderBy, original) =>
-      throughOrderBy(c, orderBy, sealed.has(original)) },
-    [Algebra.Types.GRAPH]: { transform: (graph: Algebra.Graph) => throughGraph(c, graph) },
-    [Algebra.Types.JOIN]: { transform: (join: Algebra.Join) => throughJoin(c, join) },
-    [Algebra.Types.LEFT_JOIN]: { transform: (leftJoin: Algebra.LeftJoin) => throughLeftJoin(c, leftJoin) },
-    [Algebra.Types.MINUS]: { transform: (minus: Algebra.Minus) => throughMinus(c, minus) },
-    [Algebra.Types.UNION]: { transform: (union: Algebra.Union) => throughUnion(c, union) },
+      floatThroughOrderBy(c, orderBy, sealed.has(original)) },
+    [Algebra.Types.GRAPH]: { transform: (graph: Algebra.Graph) => floatThroughGraph(c, graph) },
+    [Algebra.Types.JOIN]: { transform: (join: Algebra.Join) => floatThroughJoin(c, join) },
+    [Algebra.Types.LEFT_JOIN]: { transform: (leftJoin: Algebra.LeftJoin) => floatThroughLeftJoin(c, leftJoin) },
+    [Algebra.Types.MINUS]: { transform: (minus: Algebra.Minus) => floatThroughMinus(c, minus) },
+    [Algebra.Types.UNION]: { transform: (union: Algebra.Union) => floatThroughUnion(c, union) },
     // An EXTEND needs no callback of its own: a chain is one unit, decided by whatever it stands under.
     // Everything else is a leaf or a barrier, and a type without a callback is exactly a barrier.
   }));
@@ -226,12 +236,12 @@ export function pullUpExtends<T extends Algebra.Operation>(c: TransformContext, 
  * A *drop* survives this: deleting a bind leaves the operation exactly where it was, so it says nothing
  * about what could be written above it - and a projection that discards a variable is this phase's main
  * drop site whether it is the query's own or a sub-`SELECT`'s.
- * @param floating - The candidates to pin
+ * @param peeled - The floating binds to pin
  */
-function sealRises(floating: FloatingBinds): void {
-  for (const candidate of floating.all) {
-    if (candidate.disposition !== 'drop') {
-      candidate.disposition = 'stay';
+function pinEveryRise(peeled: PeeledInputs): void {
+  for (const floatingBind of peeled.allBinds) {
+    if (floatingBind.disposition !== 'drop') {
+      floatingBind.disposition = 'stay';
     }
   }
 }
@@ -240,52 +250,52 @@ function sealRises(floating: FloatingBinds): void {
  * Peels the inputs of an operation and reads, per bind, everything the licences will ask about it.
  * @param c - The transformation context
  * @param inputs - The inputs as `mapOperation` handed them back, before any rewriting
- * @returns the peeled chains and their candidates
+ * @returns the peeled chains and their floating binds
  */
-function candidatesOf(c: TransformContext, inputs: readonly Algebra.Operation[]): FloatingBinds {
+function peelInputs(c: TransformContext, inputs: readonly Algebra.Operation[]): PeeledInputs {
   const chains = inputs.map(input => peelExtends(c, input));
-  const byInput = chains.map((chain, input) => chain.binds.map((bind, position) => {
-    const candidate: Candidate = {
+  const bindsPerInput = chains.map((chain, inputIndex) => chain.binds.map((bind, chainPosition) => {
+    const floatingBind: FloatingBind = {
       bind,
-      input,
-      position,
-      stable: isStableExpression(c, bind.expression),
-      certain: withCpVars(bind.node).metadata.cVars.has(bind.variable.value),
-      below: withCpVars(bind.node.input).metadata,
+      inputIndex,
+      chainPosition,
+      expressionIsStable: isStableExpression(c, bind.expression),
+      bindsCertainly: cpMetaOf(bind.extendNode).cVars.has(bind.variable.value),
+      scopeBelowBind: cpMetaOf(bind.extendNode.input),
       disposition: 'stay',
-      group: [],
+      mustLeaveWith: [],
     };
-    candidate.group = [ candidate ];
-    return candidate;
+    floatingBind.mustLeaveWith = [ floatingBind ];
+    return floatingBind;
   }));
-  return { chains, byInput, all: byInput.flat() };
+  return { chains, bindsPerInput, allBinds: bindsPerInput.flat() };
 }
 
 /**
  * Iterates the partition until it is stable, pinning whatever the order within a chain forbids.
  *
- * Terminating because it only ever moves a candidate from leaving to staying, and a candidate that stays
+ * Terminating because it only ever moves a bind from leaving to staying, and a bind that stays
  * is never looked at again. A group leaves as a whole or not at all, so one member the order forbids pins
  * every copy of it - which is what makes the `UNION` rule "the order check has to pass in every branch".
  * @param c - The transformation context
- * @param floating - The candidates, with a first opinion already written into their dispositions
- * @param stillLicensed - Re-checks what the operation itself asks of a candidate, since a substitution
- * into one of its readers may become admissible once a bind below the candidate has been pinned
+ * @param peeled - The floating binds, with a first opinion already written into their dispositions
+ * @param stillLicensed - Re-checks what the operation itself asks of one bind, since a substitution
+ * into one of its readers may become admissible once a bind below it has been pinned
  */
-function settle(
+function settlePartition(
   c: TransformContext,
-  floating: FloatingBinds,
-  stillLicensed: (candidate: Candidate) => boolean,
+  peeled: PeeledInputs,
+  stillLicensed: (floatingBind: FloatingBind) => boolean,
 ): void {
   let changed = true;
   while (changed) {
     changed = false;
-    for (const candidate of floating.all) {
-      if (candidate.disposition === 'stay') {
+    for (const floatingBind of peeled.allBinds) {
+      if (floatingBind.disposition === 'stay') {
         continue;
       }
-      if (!stillLicensed(candidate) || !orderAllows(c, floating, candidate)) {
-        for (const member of candidate.group) {
+      if (!stillLicensed(floatingBind) || !chainOrderAllows(c, peeled, floatingBind)) {
+        for (const member of floatingBind.mustLeaveWith) {
           member.disposition = 'stay';
         }
         changed = true;
@@ -295,22 +305,22 @@ function settle(
 }
 
 /**
- * Whether the binds standing above `candidate` in its own chain let it leave.
+ * Whether the binds standing above `floatingBind` in its own chain let it leave.
  * @param c - The transformation context
- * @param floating - Every candidate of the operation
- * @param candidate - The bind that wants to leave
+ * @param peeled - Every floating bind of the operation
+ * @param floatingBind - The bind that wants to leave
  * @returns whether every stayer above it either does not read it, or admits `e` written in its place
  */
-function orderAllows(c: TransformContext, floating: FloatingBinds, candidate: Candidate): boolean {
-  for (const above of floating.byInput[candidate.input]) {
-    if (above.position <= candidate.position || above.disposition !== 'stay') {
+function chainOrderAllows(c: TransformContext, peeled: PeeledInputs, floatingBind: FloatingBind): boolean {
+  for (const bindAbove of peeled.bindsPerInput[floatingBind.inputIndex]) {
+    if (bindAbove.chainPosition <= floatingBind.chainPosition || bindAbove.disposition !== 'stay') {
       continue;
     }
     // Above the operation the riser would read `?y` bound where below it read it unbound.
-    if (candidate.bind.reads.has(above.bind.variable.value)) {
+    if (floatingBind.bind.reads.has(bindAbove.bind.variable.value)) {
       return false;
     }
-    if (!admitsSubstitution(c, floating, above.bind.expression, candidate)) {
+    if (!readerAdmitsSubstitution(c, peeled, bindAbove.bind.expression, floatingBind)) {
       return false;
     }
   }
@@ -340,48 +350,48 @@ function orderAllows(c: TransformContext, floating: FloatingBinds, candidate: Ca
  * - `e` has to mean down there what it meant up here, so a bind *below* this one that is also leaving may
  *   not write a variable `e` reads - the reader would evaluate `e` against an unbound one.
  * @param c - The transformation context
- * @param floating - Every candidate of the operation, to see what else is leaving
+ * @param peeled - Every floating bind of the operation, to see what else is leaving
  * @param reader - The expression that may read `?x`
- * @param candidate - The bind that wants to pass it
+ * @param floatingBind - The bind that wants to pass it
  * @returns whether the reader lets it pass
  */
-function admitsSubstitution(
+function readerAdmitsSubstitution(
   c: TransformContext,
-  floating: FloatingBinds,
+  peeled: PeeledInputs,
   reader: Algebra.Expression,
-  candidate: Candidate,
+  floatingBind: FloatingBind,
 ): boolean {
-  const name = candidate.bind.variable.value;
-  if (!collectVariableNames(c.astTransformer, reader).has(name)) {
+  const variableName = floatingBind.bind.variable.value;
+  if (!collectVariableNames(c.astTransformer, reader).has(variableName)) {
     return true;
   }
-  if (candidate.bind.expression.subType !== Algebra.ExpressionTypes.TERM || holdsExistence(reader)) {
+  if (floatingBind.bind.expression.subType !== Algebra.ExpressionTypes.TERM || containsExistenceExpression(reader)) {
     return false;
   }
-  if (!candidate.certain && readsBoundOf(reader, name)) {
+  if (!floatingBind.bindsCertainly && asksBoundOfVariable(reader, variableName)) {
     return false;
   }
-  return floating.byInput[candidate.input].every(below =>
-    below.position >= candidate.position ||
-    below.disposition === 'stay' ||
-    !candidate.bind.reads.has(below.bind.variable.value));
+  return peeled.bindsPerInput[floatingBind.inputIndex].every(bindBelow =>
+    bindBelow.chainPosition >= floatingBind.chainPosition ||
+    bindBelow.disposition === 'stay' ||
+    !floatingBind.bind.reads.has(bindBelow.bind.variable.value));
 }
 
 /**
- * Whether every reader of an operation lets a bind pass, {@link admitsSubstitution} deciding each.
+ * Whether every reader of an operation lets a bind pass, {@link readerAdmitsSubstitution} deciding each.
  * @param c - The transformation context
- * @param floating - Every candidate of the operation
+ * @param peeled - Every floating bind of the operation
  * @param readers - The expressions the operation owns
- * @param candidate - The bind that wants to pass them
+ * @param floatingBind - The bind that wants to pass them
  * @returns whether all of them let it pass
  */
-function readersAdmit(
+function allReadersAdmitSubstitution(
   c: TransformContext,
-  floating: FloatingBinds,
+  peeled: PeeledInputs,
   readers: readonly Algebra.Expression[],
-  candidate: Candidate,
+  floatingBind: FloatingBind,
 ): boolean {
-  return readers.every(reader => admitsSubstitution(c, floating, reader, candidate));
+  return readers.every(reader => readerAdmitsSubstitution(c, peeled, reader, floatingBind));
 }
 
 /**
@@ -389,31 +399,31 @@ function readersAdmit(
  * pass a reader at all.
  *
  * A bind whose variable the expression does not hold is skipped rather than substituted into: the call is
- * not free, and {@link admitsSubstitution} has already established that the ones which do hold it may be
+ * not free, and {@link readerAdmitsSubstitution} has already established that the ones which do hold it may be
  * written.
  * @param c - The transformation context
  * @param expression - The reader to rewrite
- * @param leaving - The binds that left from below it
+ * @param departedBinds - The binds that left from below it
  * @param cVars - What is certainly bound where the reader is evaluated, which is what decides
  * `sameTerm(?x, ?x)` for it
  * @returns the rewritten reader
  */
-function substituteLeaving(
+function substituteDepartedBinds(
   c: TransformContext,
   expression: Algebra.Expression,
-  leaving: readonly Candidate[],
+  departedBinds: readonly FloatingBind[],
   cVars: SSet,
 ): Algebra.Expression {
   let result = expression;
-  for (const gone of leaving) {
-    const name = gone.bind.variable.value;
-    if (!collectVariableNames(c.astTransformer, result).has(name)) {
+  for (const departed of departedBinds) {
+    const variableName = departed.bind.variable.value;
+    if (!collectVariableNames(c.astTransformer, result).has(variableName)) {
       continue;
     }
-    const term = (<Algebra.TermExpression> gone.bind.expression).term;
+    const term = (<Algebra.TermExpression> departed.bind.expression).term;
     result = substituteInExpression(c, result, {
-      resolve: access => access.positions.length === 0 && access.name === name ? term : undefined,
-      bound: gone.certain ? new Set([ name ]) : new Set<string>(),
+      resolve: access => access.positions.length === 0 && access.name === variableName ? term : undefined,
+      bound: departed.bindsCertainly ? new Set([ variableName ]) : new Set<string>(),
     }, cVars);
   }
   return result;
@@ -426,18 +436,25 @@ function substituteLeaving(
  * Only what left from *below* it is written in. A bind that stood above the stayer wrote a variable the
  * stayer read as unbound anyway, and reads it as unbound still now that it is gone.
  * @param c - The transformation context
- * @param chain - Every candidate of the stayer's own chain
+ * @param chain - Every floating bind of the stayer's own chain
  * @param stayer - The bind that is staying
  * @returns its bind, rewritten where it has to be and handed back unchanged where it does not
  */
-function rebindStayer(c: TransformContext, chain: readonly Candidate[], stayer: Candidate): ChainBind {
-  const leaving = chain.filter(candidate =>
-    candidate.position < stayer.position && candidate.disposition !== 'stay');
-  if (leaving.length === 0) {
+function rebindStayerAfterDepartures(
+  c: TransformContext,
+  chain: readonly FloatingBind[],
+  stayer: FloatingBind,
+): ChainBind {
+  const departedBelow = chain.filter(floatingBind =>
+    floatingBind.chainPosition < stayer.chainPosition && floatingBind.disposition !== 'stay');
+  if (departedBelow.length === 0) {
     return stayer.bind;
   }
-  const cVars = differenceSets(stayer.below.cVars, new Set(leaving.map(gone => gone.bind.variable.value)));
-  const expression = substituteLeaving(c, stayer.bind.expression, leaving, cVars);
+  const cVars = differenceSets(
+    stayer.scopeBelowBind.cVars,
+    new Set(departedBelow.map(departed => departed.bind.variable.value)),
+  );
+  const expression = substituteDepartedBinds(c, stayer.bind.expression, departedBelow, cVars);
   return { ...stayer.bind, expression, reads: collectVariableNames(c.astTransformer, expression) };
 }
 
@@ -448,32 +465,32 @@ function rebindStayer(c: TransformContext, chain: readonly Candidate[], stayer: 
  * Every node here is freshly built, so none of them carries the `CPMeta` a licence cached on the plan the
  * rewrite has just invalidated. The cores keep theirs, which is correct: nothing below a chain changed.
  * @param c - The transformation context
- * @param floating - The peeled inputs and their settled candidates
- * @param rebuild - Builds the operation back around its new inputs, and edits whatever it reads
+ * @param peeled - The peeled inputs and their settled floating binds
+ * @param rebuildNode - Builds the operation back around its new inputs, and edits whatever it reads
  * @returns the rewritten operation
  */
-function assemble(
+function assembleRewrittenNode(
   c: TransformContext,
-  floating: FloatingBinds,
-  rebuild: (inputs: Algebra.Operation[], risers: Candidate[]) => Algebra.Operation,
+  peeled: PeeledInputs,
+  rebuildNode: (inputs: Algebra.Operation[], risers: FloatingBind[]) => Algebra.Operation,
 ): Algebra.Operation {
-  const inputs = floating.chains.map((chain, index) => replantExtends(
+  const inputs = peeled.chains.map((chain, index) => replantExtends(
     c,
     chain.core,
-    floating.byInput[index]
-      .filter(candidate => candidate.disposition === 'stay')
-      .map(stayer => rebindStayer(c, floating.byInput[index], stayer)),
+    peeled.bindsPerInput[index]
+      .filter(floatingBind => floatingBind.disposition === 'stay')
+      .map(stayer => rebindStayerAfterDepartures(c, peeled.bindsPerInput[index], stayer)),
   ));
   // Ordered by input index and then by chain order, so the relative order of two binds that rose from one
   // chain is the one they had - and a merged bind, which is written out by its representative alone,
   // appears exactly once.
-  const risers = floating.all.filter(candidate => candidate.disposition === 'rise');
-  return replantExtends(c, rebuild(inputs, risers), risers.map(candidate => candidate.bind));
+  const risers = peeled.allBinds.filter(floatingBind => floatingBind.disposition === 'rise');
+  return replantExtends(c, rebuildNode(inputs, risers), risers.map(floatingBind => floatingBind.bind));
 }
 
 /** Whether nothing at all was decided, in which case the operation is handed back untouched. */
-function nothingMoves(floating: FloatingBinds): boolean {
-  return floating.all.every(candidate => candidate.disposition === 'stay');
+function noBindLeaves(peeled: PeeledInputs): boolean {
+  return peeled.allBinds.every(floatingBind => floatingBind.disposition === 'stay');
 }
 
 /**
@@ -487,24 +504,26 @@ function nothingMoves(floating: FloatingBinds): boolean {
  * @param c - The transformation context
  * @param op - The operation to float through
  * @param sealed - Whether it is part of the query's solution-modifier chain, which nothing rises into
- * @param rebuild - Builds it back around its new input
+ * @param rebuildOperation - Builds it back around its new input
  * @returns the rewritten operation
  */
-function throughCongruent(
+function floatThroughCongruentOperation(
   c: TransformContext,
   op: Algebra.Distinct | Algebra.Reduced | Algebra.Slice | Algebra.From,
   sealed: boolean,
-  rebuild: (input: Algebra.Operation) => Algebra.Operation,
+  rebuildOperation: (input: Algebra.Operation) => Algebra.Operation,
 ): Algebra.Operation {
-  const floating = candidatesOf(c, [ op.input ]);
-  for (const candidate of floating.all) {
-    candidate.disposition = candidate.stable ? 'rise' : 'stay';
+  const peeled = peelInputs(c, [ op.input ]);
+  for (const floatingBind of peeled.allBinds) {
+    floatingBind.disposition = floatingBind.expressionIsStable ? 'rise' : 'stay';
   }
   if (sealed) {
-    sealRises(floating);
+    pinEveryRise(peeled);
   }
-  settle(c, floating, () => true);
-  return nothingMoves(floating) ? op : assemble(c, floating, inputs => rebuild(inputs[0]));
+  settlePartition(c, peeled, () => true);
+  return noBindLeaves(peeled) ?
+    op :
+    assembleRewrittenNode(c, peeled, inputs => rebuildOperation(inputs[0]));
 }
 
 /**
@@ -513,17 +532,18 @@ function throughCongruent(
  * @param filter - The filter to float through
  * @returns the rewritten operation
  */
-function throughFilter(c: TransformContext, filter: Algebra.Filter): Algebra.Operation {
-  const floating = candidatesOf(c, [ filter.input ]);
-  for (const candidate of floating.all) {
-    candidate.disposition = candidate.stable ? 'rise' : 'stay';
+function floatThroughFilter(c: TransformContext, filter: Algebra.Filter): Algebra.Operation {
+  const peeled = peelInputs(c, [ filter.input ]);
+  for (const floatingBind of peeled.allBinds) {
+    floatingBind.disposition = floatingBind.expressionIsStable ? 'rise' : 'stay';
   }
-  settle(c, floating, candidate => readersAdmit(c, floating, [ filter.expression ], candidate));
-  return nothingMoves(floating) ?
+  settlePartition(c, peeled, floatingBind =>
+    allReadersAdmitSubstitution(c, peeled, [ filter.expression ], floatingBind));
+  return noBindLeaves(peeled) ?
     filter :
-    assemble(c, floating, (inputs, risers) => c.AF.createFilter(
+    assembleRewrittenNode(c, peeled, (inputs, risers) => c.AF.createFilter(
       inputs[0],
-      substituteLeaving(c, filter.expression, risers, cpVars(inputs[0]).cVars),
+      substituteDepartedBinds(c, filter.expression, risers, cpMetaOf(inputs[0]).cVars),
     ));
 }
 
@@ -537,22 +557,23 @@ function throughFilter(c: TransformContext, filter: Algebra.Filter): Algebra.Ope
  * @param sealed - Whether it is part of the query's solution-modifier chain, which nothing rises into
  * @returns the rewritten operation
  */
-function throughOrderBy(c: TransformContext, orderBy: Algebra.OrderBy, sealed: boolean): Algebra.Operation {
-  const floating = candidatesOf(c, [ orderBy.input ]);
-  for (const candidate of floating.all) {
-    candidate.disposition = candidate.stable ? 'rise' : 'stay';
+function floatThroughOrderBy(c: TransformContext, orderBy: Algebra.OrderBy, sealed: boolean): Algebra.Operation {
+  const peeled = peelInputs(c, [ orderBy.input ]);
+  for (const floatingBind of peeled.allBinds) {
+    floatingBind.disposition = floatingBind.expressionIsStable ? 'rise' : 'stay';
   }
   if (sealed) {
-    sealRises(floating);
+    pinEveryRise(peeled);
   }
-  settle(c, floating, candidate => readersAdmit(c, floating, orderBy.expressions, candidate));
-  return nothingMoves(floating) ?
+  settlePartition(c, peeled, floatingBind =>
+    allReadersAdmitSubstitution(c, peeled, orderBy.expressions, floatingBind));
+  return noBindLeaves(peeled) ?
     orderBy :
-    assemble(c, floating, (inputs, risers) => {
-      const cVars = cpVars(inputs[0]).cVars;
+    assembleRewrittenNode(c, peeled, (inputs, risers) => {
+      const cVars = cpMetaOf(inputs[0]).cVars;
       return c.AF.createOrderBy(
         inputs[0],
-        orderBy.expressions.map(expression => substituteLeaving(c, expression, risers, cVars)),
+        orderBy.expressions.map(expression => substituteDepartedBinds(c, expression, risers, cVars)),
       );
     });
 }
@@ -570,30 +591,33 @@ function throughOrderBy(c: TransformContext, orderBy: Algebra.OrderBy, sealed: b
  * @param sealed - Whether it is the query's own projection, above which a `BIND` cannot be written
  * @returns the rewritten operation
  */
-function throughProject(c: TransformContext, project: Algebra.Project, sealed: boolean): Algebra.Operation {
-  const floating = candidatesOf(c, [ project.input ]);
+function floatThroughProject(c: TransformContext, project: Algebra.Project, sealed: boolean): Algebra.Operation {
+  const peeled = peelInputs(c, [ project.input ]);
   const projected = new Set(project.variables.map(variable => variable.value));
-  for (const candidate of floating.all) {
-    if (!candidate.stable) {
+  for (const floatingBind of peeled.allBinds) {
+    if (!floatingBind.expressionIsStable) {
       continue;
     }
     // A drop would in fact be sound for an *unstable* `e` too - `Extend` is one row in, one row out
     // whatever it computes - but the gate is uniform in this phase, and phase 2 revisits dropping whole.
-    if (!projected.has(candidate.bind.variable.value)) {
-      candidate.disposition = 'drop';
-    } else if ([ ...candidate.bind.reads ].every(name => projected.has(name))) {
-      candidate.disposition = 'rise';
+    if (!projected.has(floatingBind.bind.variable.value)) {
+      floatingBind.disposition = 'drop';
+    } else if ([ ...floatingBind.bind.reads ].every(readVariable => projected.has(readVariable))) {
+      floatingBind.disposition = 'rise';
     }
   }
   if (sealed) {
-    sealRises(floating);
+    pinEveryRise(peeled);
   }
-  settle(c, floating, () => true);
-  return nothingMoves(floating) ?
+  settlePartition(c, peeled, () => true);
+  return noBindLeaves(peeled) ?
     project :
-    assemble(c, floating, (inputs, risers) => {
-      const struck = new Set(risers.map(riser => riser.bind.variable.value));
-      return c.AF.createProject(inputs[0], project.variables.filter(variable => !struck.has(variable.value)));
+    assembleRewrittenNode(c, peeled, (inputs, risers) => {
+      const struckVariables = new Set(risers.map(riser => riser.bind.variable.value));
+      return c.AF.createProject(
+        inputs[0],
+        project.variables.filter(variable => !struckVariables.has(variable.value)),
+      );
     });
 }
 
@@ -609,24 +633,24 @@ function throughProject(c: TransformContext, project: Algebra.Project, sealed: b
  * @param group - The grouping to float through
  * @returns the rewritten operation
  */
-function throughGroup(c: TransformContext, group: Algebra.Group): Algebra.Operation {
-  const floating = candidatesOf(c, [ group.input ]);
-  const visible = new Set(group.variables.map(variable => variable.value));
+function floatThroughGroup(c: TransformContext, group: Algebra.Group): Algebra.Operation {
+  const peeled = peelInputs(c, [ group.input ]);
+  const visibleToGrouping = new Set(group.variables.map(variable => variable.value));
   for (const aggregate of group.aggregates) {
-    visible.add(aggregate.variable.value);
-    for (const name of collectVariableNames(c.astTransformer, aggregate.expression)) {
-      visible.add(name);
+    visibleToGrouping.add(aggregate.variable.value);
+    for (const readVariable of collectVariableNames(c.astTransformer, aggregate.expression)) {
+      visibleToGrouping.add(readVariable);
     }
   }
-  for (const candidate of floating.all) {
-    if (candidate.stable && !visible.has(candidate.bind.variable.value)) {
-      candidate.disposition = 'drop';
+  for (const floatingBind of peeled.allBinds) {
+    if (floatingBind.expressionIsStable && !visibleToGrouping.has(floatingBind.bind.variable.value)) {
+      floatingBind.disposition = 'drop';
     }
   }
-  settle(c, floating, () => true);
-  return nothingMoves(floating) ?
+  settlePartition(c, peeled, () => true);
+  return noBindLeaves(peeled) ?
     group :
-    assemble(c, floating, inputs => c.AF.createGroup(inputs[0], group.variables, group.aggregates));
+    assembleRewrittenNode(c, peeled, inputs => c.AF.createGroup(inputs[0], group.variables, group.aggregates));
 }
 
 /**
@@ -640,20 +664,20 @@ function throughGroup(c: TransformContext, group: Algebra.Group): Algebra.Operat
  * @param graph - The graph operation to float through
  * @returns the rewritten operation
  */
-function throughGraph(c: TransformContext, graph: Algebra.Graph): Algebra.Operation {
-  const floating = candidatesOf(c, [ graph.input ]);
-  const graphVar = graph.name.termType === 'Variable' ? graph.name.value : undefined;
-  for (const candidate of floating.all) {
-    const mayRise = graphVar === undefined || (
-      candidate.bind.variable.value !== graphVar &&
-      (!candidate.bind.reads.has(graphVar) || candidate.below.cVars.has(graphVar))
+function floatThroughGraph(c: TransformContext, graph: Algebra.Graph): Algebra.Operation {
+  const peeled = peelInputs(c, [ graph.input ]);
+  const graphVariableName = graph.name.termType === 'Variable' ? graph.name.value : undefined;
+  for (const floatingBind of peeled.allBinds) {
+    const mayRise = graphVariableName === undefined || (
+      floatingBind.bind.variable.value !== graphVariableName &&
+      (!floatingBind.bind.reads.has(graphVariableName) || floatingBind.scopeBelowBind.cVars.has(graphVariableName))
     );
-    candidate.disposition = candidate.stable && mayRise ? 'rise' : 'stay';
+    floatingBind.disposition = floatingBind.expressionIsStable && mayRise ? 'rise' : 'stay';
   }
-  settle(c, floating, () => true);
-  return nothingMoves(floating) ?
+  settlePartition(c, peeled, () => true);
+  return noBindLeaves(peeled) ?
     graph :
-    assemble(c, floating, inputs => c.AF.createGraph(inputs[0], graph.name));
+    assembleRewrittenNode(c, peeled, inputs => c.AF.createGraph(inputs[0], graph.name));
 }
 
 /**
@@ -676,39 +700,40 @@ function throughGraph(c: TransformContext, graph: Algebra.Graph): Algebra.Operat
  * @param join - The join to float through
  * @returns the rewritten operation
  */
-function throughJoin(c: TransformContext, join: Algebra.Join): Algebra.Operation {
-  const floating = candidatesOf(c, join.input);
+function floatThroughJoin(c: TransformContext, join: Algebra.Join): Algebra.Operation {
+  const peeled = peelInputs(c, join.input);
   // Read before any rewriting: the licences are about the operands as they stand.
-  const operands = join.input.map(input => cpVars(input));
-  groupIdenticalBinds(c, floating);
-  for (const candidate of floating.all) {
-    if (!candidate.stable || candidate.disposition !== 'stay') {
+  const operands = join.input.map(input => cpMetaOf(input));
+  groupIdenticalBinds(c, peeled);
+  for (const floatingBind of peeled.allBinds) {
+    if (!floatingBind.expressionIsStable || floatingBind.disposition !== 'stay') {
       continue;
     }
-    const carriers = candidate.group;
+    const carriers = floatingBind.mustLeaveWith;
     if (carriers.length > 1) {
       // Every carrier has to have all of `V` certain, or the values `e` is asked about are not the ones
       // the merged row holds - a carrier short of that keeps its own copy and nothing merges.
-      const mergeable = carriers.every(carrier =>
-        [ ...carrier.bind.reads ].every(name => carrier.below.cVars.has(name))) &&
-        capturesNothing(candidate, carriers, operands);
+      const mergeable = carriers.every(carrier => [ ...carrier.bind.reads ]
+        .every(readVariable => carrier.scopeBelowBind.cVars.has(readVariable))) &&
+        nothingElseBindsTheVariable(floatingBind, carriers, operands);
       if (mergeable) {
-        markGroup(carriers);
+        letGroupLeave(carriers);
       }
       continue;
     }
     // A single carrier: (C1) over the siblings, (C2) per variable of `e`, and the cost gate.
-    const sameInputs = [ ...candidate.bind.reads ].every(read =>
-      candidate.below.cVars.has(read) || bindsNowhereElse(read, candidate.input, operands));
-    if (candidate.bind.expression.subType === Algebra.ExpressionTypes.TERM &&
-      capturesNothing(candidate, carriers, operands) && sameInputs) {
-      candidate.disposition = 'rise';
+    const readsSameValuesAbove = [ ...floatingBind.bind.reads ].every(readVariable =>
+      floatingBind.scopeBelowBind.cVars.has(readVariable) ||
+      noOtherOperandBinds(readVariable, floatingBind.inputIndex, operands));
+    if (floatingBind.bind.expression.subType === Algebra.ExpressionTypes.TERM &&
+      nothingElseBindsTheVariable(floatingBind, carriers, operands) && readsSameValuesAbove) {
+      floatingBind.disposition = 'rise';
     }
   }
-  settle(c, floating, () => true);
-  return nothingMoves(floating) ?
+  settlePartition(c, peeled, () => true);
+  return noBindLeaves(peeled) ?
     join :
-    assemble(c, floating, inputs => c.AF.createJoin(inputs, false));
+    assembleRewrittenNode(c, peeled, inputs => c.AF.createJoin(inputs, false));
 }
 
 /**
@@ -726,30 +751,31 @@ function throughJoin(c: TransformContext, join: Algebra.Join): Algebra.Operation
  * @param leftJoin - The optional to float through
  * @returns the rewritten operation
  */
-function throughLeftJoin(c: TransformContext, leftJoin: Algebra.LeftJoin): Algebra.Operation {
-  const floating = candidatesOf(c, leftJoin.input);
-  const operands = leftJoin.input.map(input => cpVars(input));
-  for (const candidate of floating.all) {
-    const sameInputs = [ ...candidate.bind.reads ].every(read =>
-      candidate.below.cVars.has(read) || bindsNowhereElse(read, candidate.input, operands));
-    candidate.disposition = candidate.stable &&
-      candidate.input === 0 &&
-      candidate.bind.expression.subType === Algebra.ExpressionTypes.TERM &&
-      capturesNothing(candidate, candidate.group, operands) &&
-      sameInputs ?
+function floatThroughLeftJoin(c: TransformContext, leftJoin: Algebra.LeftJoin): Algebra.Operation {
+  const peeled = peelInputs(c, leftJoin.input);
+  const operands = leftJoin.input.map(input => cpMetaOf(input));
+  for (const floatingBind of peeled.allBinds) {
+    const readsSameValuesAbove = [ ...floatingBind.bind.reads ].every(readVariable =>
+      floatingBind.scopeBelowBind.cVars.has(readVariable) ||
+      noOtherOperandBinds(readVariable, floatingBind.inputIndex, operands));
+    floatingBind.disposition = floatingBind.expressionIsStable &&
+      floatingBind.inputIndex === 0 &&
+      floatingBind.bind.expression.subType === Algebra.ExpressionTypes.TERM &&
+      nothingElseBindsTheVariable(floatingBind, floatingBind.mustLeaveWith, operands) &&
+      readsSameValuesAbove ?
       'rise' :
       'stay';
   }
   const readers = leftJoin.expression === undefined ? [] : [ leftJoin.expression ];
-  settle(c, floating, candidate => readersAdmit(c, floating, readers, candidate));
-  return nothingMoves(floating) ?
+  settlePartition(c, peeled, floatingBind => allReadersAdmitSubstitution(c, peeled, readers, floatingBind));
+  return noBindLeaves(peeled) ?
     leftJoin :
-    assemble(c, floating, (inputs, risers) => c.AF.createLeftJoin(
+    assembleRewrittenNode(c, peeled, (inputs, risers) => c.AF.createLeftJoin(
       inputs[0],
       inputs[1],
       leftJoin.expression === undefined ?
         undefined :
-        substituteLeaving(c, leftJoin.expression, risers, cpVars(inputs[0]).cVars),
+        substituteDepartedBinds(c, leftJoin.expression, risers, cpMetaOf(inputs[0]).cVars),
     ));
 }
 
@@ -766,27 +792,27 @@ function throughLeftJoin(c: TransformContext, leftJoin: Algebra.LeftJoin): Algeb
  * @param minus - The minus to float through
  * @returns the rewritten operation
  */
-function throughMinus(c: TransformContext, minus: Algebra.Minus): Algebra.Operation {
-  const floating = candidatesOf(c, minus.input);
-  const operands = minus.input.map(input => cpVars(input));
-  for (const candidate of floating.all) {
-    candidate.disposition = candidate.stable &&
-      candidate.input === 0 &&
-      capturesNothing(candidate, candidate.group, operands) ?
+function floatThroughMinus(c: TransformContext, minus: Algebra.Minus): Algebra.Operation {
+  const peeled = peelInputs(c, minus.input);
+  const operands = minus.input.map(input => cpMetaOf(input));
+  for (const floatingBind of peeled.allBinds) {
+    floatingBind.disposition = floatingBind.expressionIsStable &&
+      floatingBind.inputIndex === 0 &&
+      nothingElseBindsTheVariable(floatingBind, floatingBind.mustLeaveWith, operands) ?
       'rise' :
       'stay';
   }
-  settle(c, floating, () => true);
-  return nothingMoves(floating) ?
+  settlePartition(c, peeled, () => true);
+  return noBindLeaves(peeled) ?
     minus :
-    assemble(c, floating, (inputs) => {
-      const rebuilt = c.AF.createMinus(inputs[0], inputs[1]);
+    assembleRewrittenNode(c, peeled, (inputs) => {
+      const rebuiltMinus = c.AF.createMinus(inputs[0], inputs[1]);
       // The graph-scope marker is not a licence of ours to drop: it tells an engine that the disjointness
       // test has to ignore a `?g` bound outside the MINUS, which is as true after the rewrite as before.
       if (minus.graphScopeVar !== undefined) {
-        rebuilt.graphScopeVar = minus.graphScopeVar;
+        rebuiltMinus.graphScopeVar = minus.graphScopeVar;
       }
-      return rebuilt;
+      return rebuiltMinus;
     });
 }
 
@@ -802,46 +828,47 @@ function throughMinus(c: TransformContext, minus: Algebra.Minus): Algebra.Operat
  * @param union - The union to float through
  * @returns the rewritten operation
  */
-function throughUnion(c: TransformContext, union: Algebra.Union): Algebra.Operation {
-  const floating = candidatesOf(c, union.input);
-  groupIdenticalBinds(c, floating);
-  for (const candidate of floating.all) {
-    if (candidate.disposition === 'stay' && candidate.stable &&
-      candidate.group.length === union.input.length) {
-      markGroup(candidate.group);
+function floatThroughUnion(c: TransformContext, union: Algebra.Union): Algebra.Operation {
+  const peeled = peelInputs(c, union.input);
+  groupIdenticalBinds(c, peeled);
+  for (const floatingBind of peeled.allBinds) {
+    if (floatingBind.disposition === 'stay' && floatingBind.expressionIsStable &&
+      floatingBind.mustLeaveWith.length === union.input.length) {
+      letGroupLeave(floatingBind.mustLeaveWith);
     }
   }
-  settle(c, floating, () => true);
-  return nothingMoves(floating) ?
+  settlePartition(c, peeled, () => true);
+  return noBindLeaves(peeled) ?
     union :
-    assemble(c, floating, inputs => c.AF.createUnion(inputs, false));
+    assembleRewrittenNode(c, peeled, inputs => c.AF.createUnion(inputs, false));
 }
 
 /**
- * Collects the candidates of different inputs that are the *same* bind, which is what a merge and the
+ * Collects the floating binds of different inputs that are the *same* bind, which is what a merge and the
  * `UNION` rule are about.
  *
  * Only a stable bind is grouped: an unstable one is not the same bind twice even when it is written twice.
  * Two binds of one input can never be in a group together - a chain binding one variable twice is
- * undefined in the first place - so a group holds at most one candidate per input.
+ * undefined in the first place - so a group holds at most one bind per input.
  * @param c - The transformation context
- * @param floating - The candidates to group, whose {@link Candidate.group} this writes
+ * @param peeled - The floating binds to group, whose {@link FloatingBind.mustLeaveWith} this writes
  */
-function groupIdenticalBinds(c: TransformContext, floating: FloatingBinds): void {
-  const byVariable = new Map<string, Candidate[][]>();
-  for (const candidate of floating.all) {
-    if (!candidate.stable) {
+function groupIdenticalBinds(c: TransformContext, peeled: PeeledInputs): void {
+  const groupsByVariable = new Map<string, FloatingBind[][]>();
+  for (const floatingBind of peeled.allBinds) {
+    if (!floatingBind.expressionIsStable) {
       continue;
     }
-    const groups = byVariable.get(candidate.bind.variable.value) ?? [];
-    byVariable.set(candidate.bind.variable.value, groups);
-    const known = groups.find(group =>
-      group[0].input !== candidate.input && expressionsEqual(group[0].bind.expression, candidate.bind.expression));
-    if (known === undefined) {
-      groups.push(candidate.group);
+    const groups = groupsByVariable.get(floatingBind.bind.variable.value) ?? [];
+    groupsByVariable.set(floatingBind.bind.variable.value, groups);
+    const matchingGroup = groups.find(group =>
+      group[0].inputIndex !== floatingBind.inputIndex &&
+      expressionsEqual(group[0].bind.expression, floatingBind.bind.expression));
+    if (matchingGroup === undefined) {
+      groups.push(floatingBind.mustLeaveWith);
     } else {
-      known.push(candidate);
-      candidate.group = known;
+      matchingGroup.push(floatingBind);
+      floatingBind.mustLeaveWith = matchingGroup;
     }
   }
 }
@@ -851,7 +878,7 @@ function groupIdenticalBinds(c: TransformContext, floating: FloatingBinds): void
  * into that one copy.
  * @param group - The group to mark
  */
-function markGroup(group: Candidate[]): void {
+function letGroupLeave(group: FloatingBind[]): void {
   for (const [ index, member ] of group.entries()) {
     member.disposition = index === 0 ? 'rise' : 'absorb';
   }
@@ -868,77 +895,34 @@ function markGroup(group: Candidate[]): void {
  * operand, and no engine should refuse an `Extend` over an input that has it in scope; what the spec
  * leaves undefined is extending a μ that already **binds** `?x`. So an all-`UNDEF` `VALUES` column is a
  * legitimate hoist target.
- * @param candidate - The bind that wants to rise
- * @param carriers - The candidates leaving with it, which are the operands that do not have to answer
+ * @param floatingBind - The bind that wants to rise
+ * @param carriers - The floating binds leaving with it, which are the operands that do not have to answer
  * @param operands - What each operand of the operation binds
  * @returns whether nothing else can bind the variable
  */
-function capturesNothing(
-  candidate: Candidate,
-  carriers: readonly Candidate[],
+function nothingElseBindsTheVariable(
+  floatingBind: FloatingBind,
+  carriers: readonly FloatingBind[],
   operands: readonly CPMeta[],
 ): boolean {
-  const name = candidate.bind.variable.value;
-  const carrying = new Set(carriers.map(carrier => carrier.input));
-  return operands.every((operand, index) => carrying.has(index) || operand.vRanges.neverBinds(name));
+  const variableName = floatingBind.bind.variable.value;
+  const carrying = new Set(carriers.map(carrier => carrier.inputIndex));
+  return operands.every((operand, index) => carrying.has(index) || operand.vRanges.neverBinds(variableName));
 }
 
 /**
  * The second disjunct of (C2): no operand other than the one the bind rises out of can bind `?y`, so the
  * merged solution holds whatever that operand gave it.
- * @param name - The variable `e` reads
- * @param input - The index of the operand the bind rises out of
+ * @param variableName - The variable `e` reads
+ * @param carrierIndex - The index of the operand the bind rises out of
  * @param operands - What each operand of the operation binds
  * @returns whether nothing else can bind it
  */
-function bindsNowhereElse(name: string, input: number, operands: readonly CPMeta[]): boolean {
-  return operands.every((operand, index) => index === input || operand.vRanges.neverBinds(name));
-}
-
-/**
- * Whether a condition holds an `EXISTS` or a `NOT EXISTS`, which no bind may be written into.
- * @param expression - The expression to read
- * @returns whether it holds one
- */
-function holdsExistence(expression: Algebra.Expression): boolean {
-  let found = false;
-  algebraUtils.visitOperationSub(expression, {}, { expression: {
-    existence: { preVisitor: () => {
-      found = true;
-      return { shortcut: true };
-    } },
-  }});
-  return found;
-}
-
-/**
- * Whether an expression asks `bound(?name)`, which is the one reader a term may not simply be written
- * into: `BOUND` takes a bare `Var` where every other built-in takes an expression.
- * @param expression - The expression to read
- * @param name - The variable to look for
- * @returns whether it is asked about
- */
-function readsBoundOf(expression: Algebra.Expression, name: string): boolean {
-  let found = false;
-  algebraUtils.visitOperationSub(expression, {}, { expression: {
-    operator: { preVisitor: (operator) => {
-      if (operator.operator === 'bound' && operator.args.some(argument =>
-        argument.subType === Algebra.ExpressionTypes.TERM &&
-        argument.term.termType === 'Variable' &&
-        argument.term.value === name)) {
-        found = true;
-      }
-      return {};
-    } },
-  }});
-  return found;
-}
-
-/**
- * What an operation binds, the metadata {@link withCpVars} computes.
- * @param op - The operation to read
- * @returns its metadata
- */
-function cpVars(op: Algebra.Operation): CPMeta {
-  return withCpVars(op).metadata;
+function noOtherOperandBinds(
+  variableName: string,
+  carrierIndex: number,
+  operands: readonly CPMeta[],
+): boolean {
+  return operands.every((operand, index) =>
+    index === carrierIndex || operand.vRanges.neverBinds(variableName));
 }

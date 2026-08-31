@@ -204,7 +204,7 @@ export function replantExtends(c: TransformContext, core: Algebra.Operation, bin
 
 *Deviation.* Two signature changes against the sketch above, both to answer questions the licences turned
 out to ask. `peelExtends` takes the context, since `reads` is `collectVariableNames`, which needs the
-`astTransformer`. And a `ChainBind` carries the `node` it came off, so that (C2) can be read at the
+`astTransformer`. And a `ChainBind` carries the `extendNode` it came off, so that (C2) can be read at the
 bind's own position rather than at the top of the chain: `?y ∈ cVars` of the whole input is *also*
 satisfied by a bind further up the chain writing `?y`, which is precisely a `?y` this bind reads unbound.
 `withCpVars(bind.node)` answers the certainty question of §A.4 for free at the same time.
@@ -233,8 +233,8 @@ on everything you built or mutated.
 **A fourth edit the sketch above misses**, and the one bug worth naming: a risen term has to be written
 into the **chain-mates that stay below it**, not only into what the node itself reads. Without it
 `BIND(:a AS ?x) BIND(CONCAT(STR(?x), …) AS ?y)` silently loses `?y` as soon as `?x` rises, `?x` being
-unbound where `?y` is now computed. `rebindStayer` does it, for every bind that left from *below* the
-stayer — what left from above it wrote a variable the stayer read as unbound anyway. The same argument
+unbound where `?y` is now computed. `rebindStayerAfterDepartures` does it, for every bind that left from
+*below* the stayer — what left from above it wrote a variable the stayer read as unbound anyway. The same argument
 adds one clause to §A.4: `e` may only be written into a reader when no bind that is also leaving, and
 stood below this one, writes a variable of `V`.
 
@@ -403,9 +403,9 @@ nothing above can read the variable and the compatibility and disjointness tests
 
 **4. The `LEFT_JOIN` merge.** Extend phase 1's merge rule to a `LEFT_JOIN` whose two sides carry the
 identical stable bind, under `V ⊆ cVars(L) ∩ cVars(R)`. Phase 1 left the `TODO(phase 2)` for it on
-`throughLeftJoin`, and the machinery is already there: `groupIdenticalBinds` and `markGroup` are what
-`throughJoin` merges with, and neither is specific to a `JOIN`. The anti-join half computes `e` on `μ_L` either
-way, but it deserves a second look: write the test for an unmatched left row first.
+`floatThroughLeftJoin`, and the machinery is already there: `groupIdenticalBinds` and `letGroupLeave` are
+what `floatThroughJoin` merges with, and neither is specific to a `JOIN`. The anti-join half computes `e` on
+`μ_L` either way, but it deserves a second look: write the test for an unmatched left row first.
 
 ### Tests
 
@@ -420,7 +420,8 @@ way, but it deserves a second look: write the test for an unmatched left row fir
 # Phase 3 — transfer and weak assertion
 
 **Goal.** Two moves for the case phase 1 gives up on: a `JOIN` sibling `B` has `?x` in scope and does
-not carry the identical bind (§6). Phase 1 covers it with `capturesNothing`, which simply pins the bind.
+not carry the identical bind (§6). Phase 1 covers it with `nothingElseBindsTheVariable`, which simply
+pins the bind.
 
 **Prerequisite.** Phases 1–2.
 
@@ -473,7 +474,8 @@ every `metadata` on the way out — and skip when the assertion is already there
   The `FILTER` half of this item is **already done**: phase 1 allows a hoist past a `FILTER` whose
   `EXISTS` does not read `?x`, and substituting into one stays forbidden (see phase 1's deviations). What
   is left is the bind *holding* an `EXISTS`, which `isStableExpression` still rejects outright. Remove the
-  two `TODO(phase 4)` markers phase 1 left — one on `isStableExpression`, one on `admitsSubstitution`.
+  two `TODO(phase 4)` markers phase 1 left — one on `isStableExpression`, one on
+  `readerAdmitsSubstitution`.
 - **`NAMED` allowlist.** Generalise phase 1's `stableNamedFunctions` set, which holds only
   `EXTENSION_FUNCTION_BNODE`, into a documented
   set of extension functions declared stable, with a test that an unlisted one blocks.

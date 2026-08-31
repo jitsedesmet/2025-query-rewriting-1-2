@@ -291,11 +291,13 @@ an `EXTEND` or strictly decreases its depth, so one bottom-up traversal is a fix
   `expressionsEqual(a, b)`, for the merge and the `UNION` rule, is ours: the algebra ships no structural
   equality — `Canonicalizer` only renames blank nodes — so it is a structural walk, not
   generate-and-compare.
-- **Reused as-is:** `withCpVars`/`withoutCpVars`/`CPMeta`/`VRanges` for every licence;
+- **Reused as-is:** `withCpVars`/`withoutCpVars`/`CPMeta`/`VRanges` for every licence - with `cpMetaOf`,
+  the "read it, do not annotate with it" wrapper both passes had grown privately, lifted into
+  `certainlyBoundVars.ts` so that they share one;
   `substituteInExpression` for §3; `collectVariableNames` for "does this expression mention `?x`" and
   for `vars(e)`.
 - **Metadata hygiene:** moving a node invalidates the cached `CPMeta` of everything it moved past. Enter
-  through `withoutCpVars`, delete the metadata of every node this pass rebuilds, and read `cpVars` only
+  through `withoutCpVars`, delete the metadata of every node this pass rebuilds, and read `cpMetaOf` only
   off inputs as `mapOperation` hands them back. The likeliest source of a subtle bug; give it a test. In
   the end it needed no deletion at all: everything the pass emits is built fresh through the factory, so
   the only cached metadata that survives sits on the cores nothing moved, where it is still true — and

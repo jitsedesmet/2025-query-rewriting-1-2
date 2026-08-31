@@ -26,7 +26,7 @@ describe('pullUpExtends', () => {
   }
 
   /** The variables bound by the EXTEND chain at the top of an operation, in evaluation order. */
-  function bindsAbove(op: Algebra.Operation): string[] {
+  function bindsAtTopOf(op: Algebra.Operation): string[] {
     return peelExtends(c, op).binds.map(bind => bind.variable.value);
   }
 
@@ -40,7 +40,7 @@ describe('pullUpExtends', () => {
   }
 
   /** Whether any operation of a tree still carries a cached `CPMeta`. */
-  function holdsMetadata(op: Algebra.Operation): boolean {
+  function holdsCachedMetadata(op: Algebra.Operation): boolean {
     let found = false;
     c.astTransformer.visitObject(op, (object) => {
       if ('type' in object && 'metadata' in object) {
@@ -64,7 +64,7 @@ describe('pullUpExtends', () => {
     const output = pullUpExtends(c, input);
     expect(c.generator.generate(toAst(output)).trim()).toEqual(expected.trim());
     expect(scopeOf(output)).toEqual(scopeOf(parseQuery(c, prefixes + query)));
-    expect(holdsMetadata(output)).toBe(false);
+    expect(holdsCachedMetadata(output)).toBe(false);
     // Idempotence: what the pass produced is a fixpoint of it.
     expect(c.generator.generate(toAst(pullUpExtends(c, output))).trim()).toEqual(expected.trim());
   }
@@ -166,7 +166,7 @@ describe('pullUpExtends', () => {
       );
       const other = AF.createBgp([ AF.createPattern(DF.variable('a'), DF.namedNode('ex://q'), DF.variable('b')) ]);
       const result = pullUpExtends(c, AF.createJoin([ from, other ], false));
-      expect(bindsAbove(result)).toEqual([ 'x' ]);
+      expect(bindsAtTopOf(result)).toEqual([ 'x' ]);
       expect(scopeOf(result)).toEqual(scopeOf(AF.createJoin([ from, other ], false)));
     });
   });
@@ -177,7 +177,7 @@ describe('pullUpExtends', () => {
     it('rises out of a GRAPH when it does not read the graph variable', ({ expect }) => {
       const parsed = parseWithGraphOperation('SELECT * WHERE { GRAPH ?g { ?s :p ?o BIND(:a AS ?x) } }');
       const result = <Algebra.Project> pullUpExtends(c, parsed);
-      expect(bindsAbove(result.input)).toEqual([ 'x' ]);
+      expect(bindsAtTopOf(result.input)).toEqual([ 'x' ]);
       expect(scopeOf(result)).toEqual(scopeOf(parsed));
     });
 
@@ -186,14 +186,14 @@ describe('pullUpExtends', () => {
         'SELECT * WHERE { GRAPH ?g { { ?s :p ?o } OPTIONAL { ?g :q ?w } BIND(?g AS ?x) } }',
       );
       const result = <Algebra.Project> pullUpExtends(c, parsed);
-      expect(bindsAbove(result.input)).toEqual([]);
+      expect(bindsAtTopOf(result.input)).toEqual([]);
       expect(scopeOf(result)).toEqual(scopeOf(parsed));
     });
 
     it('stays when it writes the graph variable itself', ({ expect }) => {
       const parsed = parseWithGraphOperation('SELECT * WHERE { GRAPH ?g { ?s :p ?o BIND(:a AS ?g) } }');
       const result = <Algebra.Project> pullUpExtends(c, parsed);
-      expect(bindsAbove(result.input)).toEqual([]);
+      expect(bindsAtTopOf(result.input)).toEqual([]);
     });
   });
 

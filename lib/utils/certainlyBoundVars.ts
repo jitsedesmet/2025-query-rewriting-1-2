@@ -493,6 +493,19 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
 }
 
 /**
+ * What an operation binds, which is {@link withCpVars} read for its answer rather than for its side
+ * effect of caching one.
+ *
+ * Every pass reading licences off the plan wants this and not the annotated operation, so both of them
+ * have it rather than a private copy each.
+ * @param op - The operation to read
+ * @returns its metadata
+ */
+export function cpMetaOf(op: Algebra.Operation): CPMeta {
+  return withCpVars(op).metadata;
+}
+
+/**
  * Collects the variables a filter condition can only hold for when they are bound.
  * @param expression - The condition to read
  * @param agg - The variables collected so far, filled in by the recursion

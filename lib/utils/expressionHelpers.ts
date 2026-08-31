@@ -177,6 +177,52 @@ function argumentsEqual(left: readonly Algebra.Expression[], right: readonly Alg
 }
 
 /**
+ * Whether an expression holds an `EXISTS` or a `NOT EXISTS` anywhere inside it.
+ *
+ * The one sub-expression nothing may be substituted into: a solution mapping is written into the nested
+ * *pattern*, where an expression cannot go and an unbound variable stays a variable matching anything
+ * rather than becoming the one term it would be replaced by.
+ * @param expression - The expression to read
+ * @returns whether it holds one
+ */
+export function containsExistenceExpression(expression: Algebra.Expression): boolean {
+  let found = false;
+  algebraUtils.visitOperationSub(expression, {}, { expression: {
+    existence: { preVisitor: () => {
+      found = true;
+      return { shortcut: true };
+    } },
+  }});
+  return found;
+}
+
+/**
+ * Whether an expression asks `bound(?name)` anywhere inside it.
+ *
+ * `BOUND` is the only SPARQL built-in whose grammar takes a bare `Var` rather than an `Expression`, so it
+ * is the one reader a term may not simply be written into: `bound(<ex://a>)` is not a query. It folds to
+ * a constant instead, and only where the variable is proven bound or proven unbound.
+ * @param expression - The expression to read
+ * @param name - The variable to look for
+ * @returns whether it is asked about
+ */
+export function asksBoundOfVariable(expression: Algebra.Expression, name: string): boolean {
+  let found = false;
+  algebraUtils.visitOperationSub(expression, {}, { expression: {
+    operator: { preVisitor: (operator) => {
+      if (operator.operator === 'bound' && operator.args.some(argument =>
+        argument.subType === Algebra.ExpressionTypes.TERM &&
+        argument.term.termType === 'Variable' &&
+        argument.term.value === name)) {
+        found = true;
+      }
+      return {};
+    } },
+  }});
+  return found;
+}
+
+/**
  * Whether an expression is an IRI spelled out as a term.
  * @param expression - The expression to check
  * @returns whether it is a term expression holding a NamedNode

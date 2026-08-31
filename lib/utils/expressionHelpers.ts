@@ -62,31 +62,22 @@ export function createBooleanExpression(c: TransformContext, value: boolean): Al
 
 /**
  * The operators whose value is not a function of the solution mapping they are evaluated on, so that two
- * evaluations of one expression may disagree.
- *
- * `NOW` is deliberately absent: "all calls to [it] in any one query execution must return the same value"
- * (SPARQL 1.1 §17.4.5.1), which is exactly what stability asks for. `BNODE` is present because §17.4.2.14
- * fixes a blank node per solution mapping *and* argument, so a row a join copies gets one node below the
- * join and several above it.
+ * evaluations of one expression may disagree. `NOW` is deliberately absent - "all calls to [it] in any one
+ * query execution must return the same value" (SPARQL 1.1 §17.4.5.1) - where `BNODE` is present because
+ * §17.4.2.14 fixes a blank node per solution mapping *and* argument.
  */
 const unstableOperators = new Set([ 'bnode', 'rand', 'uuid', 'struuid' ]);
 
 /**
  * The extension functions declared stable, which is what lets a `BIND` over one of them move.
- *
- * `EXTENSION_FUNCTION_BNODE` is the internal form of the `bnodeConsistent` function the README documents,
- * and "same inputs = same identity" is stability spelled out. Every other `named` expression is opaque:
- * nothing in the algebra says what it computes, so nothing says it computes it twice the same way.
+ * `EXTENSION_FUNCTION_BNODE` is the internal form of the README's `bnodeConsistent`, whose "same inputs =
+ * same identity" is stability spelled out; every other `named` expression is opaque and so unstable.
  */
 const stableNamedFunctions = new Set<string>([ EXTENSION_FUNCTION_BNODE ]);
 
 /**
  * Whether an expression is a pure function of the variables it reads: asked twice about the same values, it
- * gives the same answer.
- *
- * This is what a rewrite moving an expression to another point in the plan needs, and it is strictly weaker
- * than "the same value in every solution" - a stable expression may read variables, and the rules of the
- * pull-up carry their own side conditions about those. For the older, stronger reading, ask for both:
+ * gives the same answer. Strictly weaker than "the same value in every solution", which is
  * `isStableExpression(c, e) && collectVariableNames(c.astTransformer, e).size === 0`.
  * @param c - The transformation context
  * @param expression - The expression to check
@@ -126,20 +117,18 @@ export function isStableExpression(c: TransformContext, expression: Algebra.Expr
 }
 
 /**
- * Whether two expressions are the same expression, structurally.
- *
- * The algebra ships no such helper - `Canonicalizer` only renames blank nodes - and the merge and `UNION`
- * rules of the pull-up need one: "every branch carries *this* bind" is a question about the expression
- * itself, not about what it evaluates to. Generate-and-compare would answer a different question, two
- * expressions printing the same being neither necessary nor sufficient for the trees to agree.
- *
- * An `existence` is never equal to anything, this one deliberately not walking into a nested pattern: what
- * would have to be compared there is operation equality, which is a bigger promise than any caller needs.
+ * Whether two expressions are the same expression, structurally, which the algebra ships no helper for -
+ * `Canonicalizer` only renames blank nodes. An `existence` is never equal to anything.
  * @param left - One expression
  * @param right - The other
  * @returns whether they are structurally equal
  */
 export function expressionsEqual(left: Algebra.Expression, right: Algebra.Expression): boolean {
+  // A question about the expression itself rather than about what it evaluates to, which is what the merge
+  // and UNION rules of the pull-up ask ("every branch carries *this* bind"). Generate-and-compare would
+  // answer a different one, two expressions printing the same being neither necessary nor sufficient for
+  // the trees to agree. And a nested pattern is deliberately not walked into: comparing there would mean
+  // operation equality, a bigger promise than any caller needs.
   if (left.subType !== right.subType) {
     return false;
   }
@@ -177,11 +166,8 @@ function argumentsEqual(left: readonly Algebra.Expression[], right: readonly Alg
 }
 
 /**
- * Whether an expression holds an `EXISTS` or a `NOT EXISTS` anywhere inside it.
- *
- * The one sub-expression nothing may be substituted into: a solution mapping is written into the nested
- * *pattern*, where an expression cannot go and an unbound variable stays a variable matching anything
- * rather than becoming the one term it would be replaced by.
+ * Whether an expression holds an `EXISTS` or a `NOT EXISTS` anywhere inside it, which is the one
+ * sub-expression nothing may be substituted into.
  * @param expression - The expression to read
  * @returns whether it holds one
  */
@@ -197,11 +183,9 @@ export function containsExistenceExpression(expression: Algebra.Expression): boo
 }
 
 /**
- * Whether an expression asks `bound(?name)` anywhere inside it.
- *
- * `BOUND` is the only SPARQL built-in whose grammar takes a bare `Var` rather than an `Expression`, so it
- * is the one reader a term may not simply be written into: `bound(<ex://a>)` is not a query. It folds to
- * a constant instead, and only where the variable is proven bound or proven unbound.
+ * Whether an expression asks `bound(?name)` anywhere inside it. `BOUND` is the only built-in whose grammar
+ * takes a bare `Var`, so it is the one reader a term may not be written into: `bound(<ex://a>)` is not a
+ * query.
  * @param expression - The expression to read
  * @param name - The variable to look for
  * @returns whether it is asked about

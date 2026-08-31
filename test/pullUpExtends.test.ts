@@ -30,10 +30,7 @@ describe('pullUpExtends', () => {
     return peelExtends(c, op).binds.map(bind => bind.variable.value);
   }
 
-  /**
-   * What an operation puts in scope, as two sorted lists: the variables every solution binds, and the keys
-   * of the ranges, which is what `SELECT *` expands to.
-   */
+  /** What an operation puts in scope: the variables every solution binds, and what `SELECT *` expands to. */
   function scopeOf(op: Algebra.Operation): { cVars: string[]; pVars: string[] } {
     const { cVars, vRanges } = withCpVars(withoutCpVars(op)).metadata;
     return { cVars: [ ...cVars ].sort(), pVars: [ ...vRanges.keys() ].sort() };
@@ -52,14 +49,16 @@ describe('pullUpExtends', () => {
   }
 
   /**
-   * The three checks every case of every phase owes, run on top of the string comparison: the scope
-   * invariant of the rewrite, idempotence of the pass, and the metadata hygiene the licences depend on.
-   *
-   * The scope invariant is what the string comparison cannot see. A hoist that lost a variable out of
-   * `cVars` still prints as a plausible query, and only changes what `SELECT *` returns on data that
-   * leaves something unbound.
+   * Asserts the rewritten query, and with it the three checks every case owes: the scope invariant, the
+   * idempotence of the pass, and the metadata hygiene the licences depend on.
+   * @param expect - The assertion API of the running test
+   * @param query - The query to rewrite, without its prefixes
+   * @param expected - The query the rewrite has to generate
    */
   function expectTransform(expect: typeof Expect, query: string, expected: string): void {
+    // The scope invariant is what the string comparison cannot see: a hoist that lost a variable out of
+    // `cVars` still prints as a plausible query, and only changes what `SELECT *` returns on data that
+    // leaves something unbound.
     const input = parseQuery(c, prefixes + query);
     const output = pullUpExtends(c, input);
     expect(c.generator.generate(toAst(output)).trim()).toEqual(expected.trim());

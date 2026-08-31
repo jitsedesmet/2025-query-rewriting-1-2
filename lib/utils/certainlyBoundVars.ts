@@ -493,11 +493,8 @@ export function withCpVars<T extends Algebra.Operation>(op: T): CPOp<T> {
 }
 
 /**
- * What an operation binds, which is {@link withCpVars} read for its answer rather than for its side
- * effect of caching one.
- *
- * Every pass reading licences off the plan wants this and not the annotated operation, so both of them
- * have it rather than a private copy each.
+ * What an operation binds, which is {@link withCpVars} read for its answer rather than for its side effect
+ * of caching one - what every pass reading licences off the plan actually wants.
  * @param op - The operation to read
  * @returns its metadata
  */

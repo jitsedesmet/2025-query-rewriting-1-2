@@ -578,6 +578,7 @@ function floatThroughCongruentOperation(
   for (const floatingBind of peeled.allBinds) {
     floatingBind.disposition = floatingBind.expressionIsStable ? 'rise' : 'stay';
   }
+  // TODO: could we not simply do an early return in the beginning saying nothing changes?
   if (sealed) {
     pinEveryRise(peeled);
   }
@@ -604,6 +605,7 @@ function floatThroughFilter(c: TransformContext, filter: Algebra.Filter): Algebr
     filter :
     assembleRewrittenNode(c, peeled, (inputs, risers) => c.AF.createFilter(
       inputs[0],
+      // TODO: what is input 0? And are we sure the cVars is not stale?
       substituteDepartedBinds(c, filter.expression, risers, cpMetaOf(inputs[0]).cVars),
     ));
 }

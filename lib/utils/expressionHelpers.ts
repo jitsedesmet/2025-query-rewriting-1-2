@@ -1,8 +1,10 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { EXTENSION_FUNCTION_BNODE } from '../consts.js';
+import { objectRange, predicateRange, subjectRange } from '../RangeSet.js';
 import type { TransformContext } from '../transformContext.js';
 import { termFalse, termTrue } from './operationhelpers.js';
+import { DF } from './rdfDatatypes.js';
 
 /**
  * Splits a filter expression on top level logical conjunctions (`&&`), implementing (SDecompI):
@@ -202,6 +204,44 @@ export function asksBoundOfVariable(expression: Algebra.Expression, name: string
     } },
   }});
   return found;
+}
+
+/** The term types each position of a triple term admits, in the order `TRIPLE()` takes its arguments. */
+const triplePositionRanges = [ subjectRange, predicateRange, objectRange ];
+
+/**
+ * The term an expression *constructs*, which is one thing spelled two ways: a term expression is a
+ * construction of itself, and so is `TRIPLE(s, p, o)` over three term arguments, which the parser keeps
+ * distinct from the `<<( s p o )>>` it means.
+ * @param expression - The expression to read
+ * @returns the term it constructs, or `undefined` when it constructs none
+ */
+export function constructedTermOf(expression: Algebra.Expression): RDF.Term | undefined {
+  if (expression.subType === Algebra.ExpressionTypes.TERM) {
+    return expression.term;
+  }
+  // `constantFoldOperator` already folds a `TRIPLE()` of three *ground* terms into the term it is; this is
+  // the same fold with variables left in, which is what makes the two spellings interchangeable for a
+  // rewrite that moves or writes in the construction rather than evaluating it.
+  if (expression.subType === Algebra.ExpressionTypes.OPERATOR && expression.operator === 'triple' &&
+    expression.args.length === 3) {
+    const components = expression.args.map(argument =>
+      argument.subType === Algebra.ExpressionTypes.TERM ? argument.term : undefined);
+    // A ground component the position cannot hold makes the construction *raise*, and no `<<( … )>>` spells
+    // that - so it stays a `TRIPLE()` rather than becoming a triple term no generator could print. A
+    // variable is left to the ranges, which is where {@link certainlyBoundVars!withCpVars} decides it.
+    if (components.some((component, index) => component === undefined ||
+        (component.termType !== 'Variable' && !triplePositionRanges[index].has(component.termType)))) {
+      // Needed for valid grammar
+      return undefined;
+    }
+    return DF.quad(
+        <RDF.Quad_Subject> components[0],
+        <RDF.Quad_Predicate> components[1],
+        <RDF.Quad_Object> components[2],
+    );
+  }
+  return undefined;
 }
 
 /**

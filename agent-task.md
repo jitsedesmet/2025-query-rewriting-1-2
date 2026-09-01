@@ -209,7 +209,8 @@ bind's own position rather than at the top of the chain: `?y ∈ cVars` of the w
 satisfied by a bind further up the chain writing `?y`, which is precisely a `?y` this bind reads unbound.
 `withCpVars(bind.node)` answers the certainty question of §A.4 for free at the same time.
 
-**2. The two predicates, in `lib/utils/expressionHelpers.ts`**
+**2. The two predicates, in `lib/utils/expressionHelpers.ts`** (three, in the end — see
+`constructedTermOf` under the deviations)
 
 - `isStableExpression(c, expression)` — `isStaticExpression` without its "no variables" clause: same
   `visitOperationSub` walk, same rejections for `named`/`existence`/`aggregate`/`wildcard`, same operator
@@ -291,6 +292,22 @@ barrier would have taken extra code to be strictly worse. What stays forbidden, 
 `TODO(phase 4)`, is *writing* a term into an `EXISTS`: an unbound `?x` in a nested pattern is a variable
 matching anything, where the term replacing it matches one thing. Phase 4 keeps the rest of its `EXISTS`
 item; only the `FILTER` half of it is already done.
+
+**One construction, two spellings.** The parser keeps `<<( s p o )>>` and `TRIPLE(s, p, o)` apart — the
+first is a term expression holding a Quad, the second an operator expression — and `constantFoldOperator`
+only merges them when all three arguments are *ground*. Every rule that asks "is this a term expression"
+was therefore answering a question about spelling rather than about the construction, giving the two
+different licences. `constructedTermOf(expression)` in `expressionHelpers.ts` is the fold with variables
+left in, and the rules read through it: the cost gates on `JOIN`/`LEFT_JOIN`, the substitution gate, and
+the `EXTEND` case of `withCpVars`, which decides certainty and so is shared with the pushdown. A
+`TRIPLE()` no `<<( … )>>` could spell — a ground component the position cannot hold — is not folded: it
+raises, and there is no term to write.
+
+**A reader may take a *position* of the construction.** `AssertionView.resolve` is handed an `Access`,
+which is a variable plus a chain of positions, so `SUBJECT(?x)` over `BIND(<<( ?s ?p ?o )>> AS ?x)`
+resolves to `?s` rather than to an accessor over a triple term the engine has to build first. Only where
+the bind is *certain*: `SUBJECT(?x)` of an unbound `?x` is an error, where the component it would be
+replaced by is an ordinary value, so a construction that can fail has the whole term written in instead.
 
 **A `GRAPH` rule cannot be tested through the generator.** `toAst` writes an `EXTEND` at the top of a
 graph pattern as a `SELECT` expression, exactly as it writes one that rose past the `GRAPH` — so the two

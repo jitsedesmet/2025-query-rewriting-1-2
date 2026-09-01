@@ -382,6 +382,84 @@ describe('pullUpExtends', () => {
     });
   });
 
+  describe('triple term constructions', () => {
+    // `<<( s p o )>>` and `TRIPLE(s, p, o)` are one construction the parser keeps as two shapes - a term
+    // expression holding a Quad, and an operator expression - so every rule that asks "is this a term"
+    // has to read through {@link constructedTermOf} or the two spellings get different answers.
+    it('rises past a join for either spelling of the construction', ({ expect }) => {
+      const built = 'SELECT * WHERE { { ?s :p ?o BIND(%s AS ?x) } { ?a :r ?b } }';
+      const expected = `SELECT ?a ?b ?o ?s ( %s AS ?x ) WHERE {
+  ?s <ex://p> ?o .
+  ?a <ex://r> ?b .
+}`;
+      expectTransform(
+        expect,
+        built.replace('%s', '<<( ?s :q ?o )>>'),
+        expected.replace('%s', '<<( ?s <ex://q> ?o )>>'),
+      );
+      expectTransform(
+        expect,
+        built.replace('%s', 'TRIPLE(?s, :q, ?o)'),
+        expected.replace('%s', 'TRIPLE( ?s , <ex://q> , ?o )'),
+      );
+    });
+
+    it('reads a position out of the construction it wrote in', ({ expect }) => {
+      // `SUBJECT(?x)` of a construction that cannot fail is the component itself, so the reader is left
+      // with the variable rather than with an accessor over a triple term it has to build first.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s :p ?o BIND(<<( ?s :q ?o )>> AS ?x) FILTER(SUBJECT(?x) = :a) }',
+        `SELECT ?o ?s ( <<( ?s <ex://q> ?o )>> AS ?x ) WHERE {
+  ?s <ex://p> ?o .
+  FILTER ( SAMETERM( ?s , <ex://a> ) )
+}`,
+      );
+    });
+
+    it('reads through a nested position', ({ expect }) => {
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          ?s :p ?o BIND(<<( ?s :q <<( ?s :r ?s )>> )>> AS ?x) FILTER(SUBJECT(OBJECT(?x)) = :a)
+        }`,
+        `SELECT ?o ?s ( <<( ?s <ex://q> <<( ?s <ex://r> ?s )>> )>> AS ?x ) WHERE {
+  ?s <ex://p> ?o .
+  FILTER ( SAMETERM( ?s , <ex://a> ) )
+}`,
+      );
+    });
+
+    it('writes the whole term in when the construction can fail', ({ expect }) => {
+      // `?o` occupies the subject position, and an object may be a literal, so the construction may raise
+      // and leave `?x` unbound - where `SUBJECT(?x)` is an error and the component would not be.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s :p ?o BIND(<<( ?o :q ?s )>> AS ?x) FILTER(SUBJECT(?x) = :a) }',
+        `SELECT ?o ?s ( <<( ?o <ex://q> ?s )>> AS ?x ) WHERE {
+  ?s <ex://p> ?o .
+  FILTER ( SAMETERM( SUBJECT( <<( ?o <ex://q> ?s )>> ) , <ex://a> ) )
+}`,
+      );
+    });
+
+    it('leaves a TRIPLE() no triple term could spell', ({ expect }) => {
+      // A literal cannot be a subject, so this raises rather than constructing - and there is no
+      // `<<( … )>>` for it, so it stays an operator expression and the cost gate keeps it put.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { { ?s :p ?o BIND(TRIPLE("lit", :q, ?o) AS ?x) } { ?a :r ?b } }',
+        `SELECT ?a ?b ?o ?s ?x WHERE {
+  {
+    ?s <ex://p> ?o .
+    BIND( TRIPLE( "lit" , <ex://q> , ?o ) AS ?x )
+  }
+  ?a <ex://r> ?b .
+}`,
+      );
+    });
+  });
+
   describe('optionals, minus and unions', () => {
     it('rises out of the left of an OPTIONAL', ({ expect }) => {
       expectTransform(

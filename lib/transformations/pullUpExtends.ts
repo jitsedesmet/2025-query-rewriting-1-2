@@ -1,9 +1,13 @@
+import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { TransformContext } from '../transformContext.js';
+import type { Access } from '../utils/assertions.js';
+import { componentOf } from '../utils/assertions.js';
 import type { CPMeta } from '../utils/certainlyBoundVars.js';
-import { cpMetaOf, withoutCpVars } from '../utils/certainlyBoundVars.js';
+import { cpMetaOf, termVars, withoutCpVars } from '../utils/certainlyBoundVars.js';
 import {
   asksBoundOfVariable,
+  constructedTermOf,
   containsExistenceExpression,
   expressionsEqual,
   isStableExpression,
@@ -121,6 +125,12 @@ interface FloatingBind {
   chainPosition: number;
   /** The gate every rule is behind: whether `e` gives the same answer wherever in the plan it is asked. */
   expressionIsStable: boolean;
+  /**
+   * The term `e` constructs, when it constructs one - a term expression or a `TRIPLE()` over term
+   * arguments, which are one construction spelled two ways. `undefined` for everything else, and that is
+   * what the cost rules read: a construction is free to re-evaluate where a computation is not.
+   */
+  constructedTerm: RDF.Term | undefined;
   /** Whether `?x ∈ cVars(Extend(A, ?x, e))`, which is what decides the `bound(?x)` fold. */
   bindsCertainly: boolean;
   /** What holds *where the bind is evaluated*, so below every bind standing above it in its chain. */
@@ -274,6 +284,7 @@ function peelInputs(c: TransformContext, inputs: readonly Algebra.Operation[]): 
       inputIndex,
       chainPosition,
       expressionIsStable: isStableExpression(c, bind.expression),
+      constructedTerm: constructedTermOf(bind.expression),
       bindsCertainly: cpMetaOf(bind.extendNode).cVars.has(bind.variable.value),
       scopeBelowBind: cpMetaOf(bind.extendNode.input),
       disposition: 'stay',
@@ -363,7 +374,7 @@ function readerAdmitsSubstitution(
   if (!collectVariableNames(c.astTransformer, reader).has(variableName)) {
     return true;
   }
-  // Only a term expression is written in at all, and that is a *cost* rule rather than a soundness one.
+  // Only a construction is written in at all, and that is a *cost* rule rather than a soundness one.
   // With `k` occurrences of `?x` in the reader, one evaluation of `e` per row becomes `k` in the reader
   // plus one in the re-planted bind: `k+1` against `1`, which only breaks even when `e` costs nothing to
   // re-evaluate - a term. There is no `k` that saves a non-term while the bind is re-planted, so the
@@ -380,7 +391,7 @@ function readerAdmitsSubstitution(
   // TODO(phase 4): work out what a substitution into a nested pattern would mean.
   // TODO: should we differentiate between the Triple/Quad term expression `<<( )>>` and the `TRIPLE()` Operation?
   //   Maybe we can normalize in place? Or have we normalized already before?
-  if (floatingBind.bind.expression.subType !== Algebra.ExpressionTypes.TERM || containsExistenceExpression(reader)) {
+  if (floatingBind.constructedTerm === undefined || containsExistenceExpression(reader)) {
     return false;
   }
   // `bound(?x)` reads unboundness instead of propagating it, and takes a bare `Var`, so it folds to `true`
@@ -429,22 +440,53 @@ function substituteDepartedBinds(
   cVars: SSet,
 ): Algebra.Expression {
   let result = expression;
+  // Carried across the loop rather than recollected per bind: substituting can only take `variableName`
+  // out and put the variables of `term` in, and the constant folding on top can only take more out. So
+  // this stays a superset of what `result` really reads, which is all the skip below needs - an
+  // over-estimate costs a substitution call that finds nothing, never a substitution that is missed.
+  const readVariables = collectVariableNames(c.astTransformer, result);
   for (const departed of departedBinds) {
     const variableName = departed.bind.variable.value;
-    // TODO: this will reanalyze the whole thing in every loop.
-    //  We can also maintaine a SET and add the variables that apear in the expressiosn we subsitute.
-    if (collectVariableNames(c.astTransformer, result).has(variableName)) {
-      // We know we cannot subsitute
-      const term = (<Algebra.TermExpression> departed.bind.expression).term;
+    if (readVariables.has(variableName) && departed.constructedTerm !== undefined) {
+      const term = departed.constructedTerm;
       result = substituteInExpression(c, result, {
-        // TODO: In case you access SUBJECT(?x) with BIND(<<(?s ?p ?o)>> as ?x)
-        //  AND we know ?x in cVars (so it does not throw), then we can also replace with `?s` right?
-        resolve: access => access.positions.length === 0 && access.name === variableName ? term : undefined,
+        resolve: access => access.name === variableName ? readThrough(term, access, departed) : undefined,
         bound: departed.bindsCertainly ? new Set([ variableName ]) : new Set<string>(),
       }, cVars);
+      readVariables.delete(variableName);
+      for (const name of termVars(term)) {
+        readVariables.add(name);
+      }
     }
   }
   return result;
+}
+
+/**
+ * The term an access reads out of the one a departed bind constructs: the term itself for a bare variable,
+ * and a position of it for an accessor chain such as `SUBJECT(?x)`.
+ *
+ * A position is only read off a construction the bind is *certain* to make. `SUBJECT(?x)` of an unbound
+ * `?x` is an error, where the component it would be replaced by is an ordinary value - so where the
+ * construction can fail, the whole term is written in instead and the accessor is left to raise on it,
+ * exactly as it did before.
+ * @param term - The term the departed bind constructs
+ * @param access - The reading of it the expression asks for
+ * @param departed - The bind that left, for whether its construction can fail
+ * @returns the term read, or `undefined` when this access is not one to decide
+ */
+function readThrough(term: RDF.Term, access: Access, departed: FloatingBind): RDF.Term | undefined {
+  if (access.positions.length === 0) {
+    return term;
+  }
+  if (!departed.bindsCertainly) {
+    return undefined;
+  }
+  let component: RDF.Term | undefined = term;
+  for (const position of access.positions) {
+    component = component === undefined ? undefined : componentOf(component, position);
+  }
+  return component;
 }
 
 /**
@@ -739,7 +781,7 @@ function floatThroughJoin(c: TransformContext, join: Algebra.Join): Algebra.Oper
     const readsSameValuesAbove = [ ...floatingBind.bind.reads ].every(readVariable =>
       floatingBind.scopeBelowBind.cVars.has(readVariable) ||
       noOtherOperandBinds(readVariable, floatingBind.inputIndex, operands));
-    if (floatingBind.bind.expression.subType === Algebra.ExpressionTypes.TERM &&
+    if (floatingBind.constructedTerm !== undefined &&
       nothingElseBindsTheVariable(floatingBind, carriers, operands) && readsSameValuesAbove) {
       floatingBind.disposition = 'rise';
     }
@@ -772,7 +814,7 @@ function floatThroughLeftJoin(c: TransformContext, leftJoin: Algebra.LeftJoin): 
       noOtherOperandBinds(readVariable, floatingBind.inputIndex, operands));
     floatingBind.disposition = floatingBind.expressionIsStable &&
       floatingBind.inputIndex === 0 &&
-      floatingBind.bind.expression.subType === Algebra.ExpressionTypes.TERM &&
+      floatingBind.constructedTerm !== undefined &&
       nothingElseBindsTheVariable(floatingBind, floatingBind.mustLeaveWith, operands) &&
       readsSameValuesAbove ?
       'rise' :

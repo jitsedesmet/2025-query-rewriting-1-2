@@ -621,6 +621,13 @@ function floatThroughOrderBy(c: TransformContext, orderBy: Algebra.OrderBy, seal
   for (const floatingBind of peeled.allBinds) {
     floatingBind.disposition = floatingBind.expressionIsStable ? 'rise' : 'stay';
   }
+  // TODO: in case we have a `SELECT ?s ?p ?o { ?s ?p ?o . BIND(<ex://a> as ?x) } ORDER BY ?s ?x ?o`
+  //  We can rewrite it to `SELECT ?s ?p ?o { ?s ?p ?o } ORDER BY ?s ?o`
+  //  since the `static`/fully-defined nature of ?x means it does not provide any info to the order by
+  //  You may simply make a function `cleanStaticFromOrder` which takes an orderBy operation and cleans it up.
+  //  If you have no more expressions, the orderBy can be removed keeping the child.
+  //  We should anotate that function that we can drop teh orderBy and that this is only valid given that orderBy
+  //  does not drop any results: https://www.w3.org/TR/sparql12-query/#defn_algOrderBy
   settlePartition(c, peeled, floatingBind =>
     allReadersAdmitSubstitution(c, peeled, orderBy.expressions, floatingBind));
   return noBindLeaves(peeled) ?
@@ -651,20 +658,20 @@ function floatThroughProject(c: TransformContext, project: Algebra.Project, seal
   // that the sub-SELECT does not carry an always-unbound column. `pVars` at the swap is unchanged:
   // `(variables \ {?x}) ∪ {?x}`.
   for (const floatingBind of peeled.allBinds) {
-    if (!floatingBind.expressionIsStable) {
-      continue;
-    }
-    // A drop would in fact be sound for an *unstable* `e` too - `Extend` is one row in, one row out
-    // whatever it computes - but the gate is uniform in this phase, and phase 2 revisits dropping whole.
-    if (!projected.has(floatingBind.bind.variable.value)) {
-      floatingBind.disposition = 'drop';
-    } else if (!sealed && [ ...floatingBind.bind.reads ].every(readVariable => projected.has(readVariable))) {
-      // Only the *rise* is what sealing forbids. A drop leaves the projection exactly where it was, so it
-      // says nothing about what could be written above it - and a projection that discards a variable is
-      // this phase's main drop site whether it is the query's own or a sub-SELECT's.
-      floatingBind.disposition = 'rise';
+    if (floatingBind.expressionIsStable) {
+      // A drop would in fact be sound for an *unstable* `e` too - `Extend` is one row in, one row out
+      // whatever it computes - but the gate is uniform in this phase, and phase 2 revisits dropping whole.
+      if (!projected.has(floatingBind.bind.variable.value)) {
+        floatingBind.disposition = 'drop';
+      } else if (!sealed && [ ...floatingBind.bind.reads ].every(readVariable => projected.has(readVariable))) {
+        // Only the *rise* is what sealing forbids. A drop leaves the projection exactly where it was, so it
+        // says nothing about what could be written above it - and a projection that discards a variable is
+        // this phase's main drop site whether it is the query's own or a sub-SELECT's.
+        floatingBind.disposition = 'rise';
+      }
     }
   }
+  // TODO: Why can we do isStillLicenced always true while it gets recomputed for the other operations?
   settlePartition(c, peeled, () => true);
   return noBindLeaves(peeled) ?
     project :
@@ -672,6 +679,7 @@ function floatThroughProject(c: TransformContext, project: Algebra.Project, seal
       const struckVariables = new Set(risers.map(riser => riser.bind.variable.value));
       return c.AF.createProject(
         rewrittenInputs[0],
+        // No longer project variables whose construction has risen beyond the operation.
         project.variables.filter(variable => !struckVariables.has(variable.value)),
       );
     });
@@ -698,6 +706,10 @@ function floatThroughGroup(c: TransformContext, group: Algebra.Group): Algebra.O
       visibleToGrouping.add(readVariable);
     }
   }
+  // TODO: can we not also do some constant substitution in the expressions? you have:
+  //  `{ SELECT (CONCAT(?x, ?o) as ?y) ?o { ?s ?p ?o. BIND("apple" as ?x). } GROUP BY ?x ?o }`
+  //  We can write: `{SELECT (CONCAT("apple", ?o) AS ?y) ?o { ?s ?p ?o } GROUP BY ?o } BIND ("apple" as ?x)`
+  //  Or is this for the next phase?
   for (const floatingBind of peeled.allBinds) {
     if (floatingBind.expressionIsStable && !visibleToGrouping.has(floatingBind.bind.variable.value)) {
       floatingBind.disposition = 'drop';
@@ -749,38 +761,40 @@ function floatThroughJoin(c: TransformContext, join: Algebra.Join): Algebra.Oper
   const operands = join.input.map(input => cpMetaOf(input));
   groupIdenticalBinds(c, peeled);
   for (const floatingBind of peeled.allBinds) {
-    if (!floatingBind.expressionIsStable || floatingBind.disposition !== 'stay') {
-      continue;
-    }
-    const carriers = floatingBind.mustLeaveWith;
-    if (carriers.length > 1) {
-      // The merge: `Join(Extend(A, ?x, e), Extend(B, ?x, e)) ≡ Extend(Join(A, B), ?x, e)` whenever every
-      // carrier has all of `V` certainly bound, since join compatibility then forces every `?y ∈ V` to one
-      // value across the merge and `e` is stable, so every carrier computed the same `?x`: that component
-      // of the compatibility test is a tautology and the copies collapse into one. Multiplicity is
-      // untouched, no pair of rows having been rejected on `?x` - and a carrier short of `V` keeps its own
-      // copy, the values `e` is asked about not being the ones the merged row holds.
-      const mergeable = carriers.every(carrier => [ ...carrier.bind.reads ]
-        .every(readVariable => carrier.scopeBelowBind.cVars.has(readVariable))) &&
-        nothingElseBindsTheVariable(floatingBind, carriers, operands);
-      if (mergeable) {
-        letGroupLeave(carriers);
+    if (floatingBind.expressionIsStable && floatingBind.disposition === 'stay') {
+      const carriers = floatingBind.mustLeaveWith;
+      if (carriers.length > 1) {
+        // The merge: `Join(Extend(A, ?x, e), Extend(B, ?x, e)) ≡ Extend(Join(A, B), ?x, e)` whenever every
+        // carrier has all of `V` certainly bound, since join compatibility then forces every `?y ∈ V` to one
+        // value across the merge and `e` is stable, so every carrier computed the same `?x`: that component
+        // of the compatibility test is a tautology and the copies collapse into one. Multiplicity is
+        // untouched, no pair of rows having been rejected on `?x` - and a carrier short of `V` keeps its own
+        // copy, the values `e` is asked about not being the ones the merged row holds.
+        if (carriers.every(carrier =>
+          [ ...carrier.bind.reads ].every(readVariable => carrier.scopeBelowBind.cVars.has(readVariable))) &&
+            nothingElseBindsTheVariable(floatingBind, carriers, operands)) {
+          letGroupLeave(carriers);
+        }
+      } else {
+        // A single carrier: (C1) over the siblings, (C2) per variable of `e`, and the cost gate. The gate: a
+        // term expression is free to re-evaluate, so its pull-up is a pure win, but a join may *increase*
+        // cardinality, so anything else can end up evaluated more often than the original. Past a join a
+        // non-term expression therefore rises only under the merge above, which deletes an evaluation
+        // outright. It is a trade rather than a truth - a single-carrier rise wins whenever the join is
+        // selective and loses whenever it fans out, and nothing in the algebra says which - so it is worth
+        // revisiting if cardinality estimates ever reach this pass.
+        const readsSameValuesAbove = [ ...floatingBind.bind.reads ].every(readVariable =>
+          floatingBind.scopeBelowBind.cVars.has(readVariable) ||
+            noOtherOperandBinds(readVariable, floatingBind.inputIndex, operands));
+        // TODO(future) think about cardinality estimates. Joins can restrict but also grow.
+        //  Here we say that we do not take the risk of pullUp in case the expression is complex.
+        if (floatingBind.constructedTerm !== undefined &&
+            // TODO: do we need the `nothingElseBindsTheVariable` given that
+            //  we already checked the `noOtherOperandBinds`?
+            nothingElseBindsTheVariable(floatingBind, carriers, operands) && readsSameValuesAbove) {
+          floatingBind.disposition = 'rise';
+        }
       }
-      continue;
-    }
-    // A single carrier: (C1) over the siblings, (C2) per variable of `e`, and the cost gate. The gate: a
-    // term expression is free to re-evaluate, so its pull-up is a pure win, but a join may *increase*
-    // cardinality, so anything else can end up evaluated more often than the original. Past a join a
-    // non-term expression therefore rises only under the merge above, which deletes an evaluation
-    // outright. It is a trade rather than a truth - a single-carrier rise wins whenever the join is
-    // selective and loses whenever it fans out, and nothing in the algebra says which - so it is worth
-    // revisiting if cardinality estimates ever reach this pass.
-    const readsSameValuesAbove = [ ...floatingBind.bind.reads ].every(readVariable =>
-      floatingBind.scopeBelowBind.cVars.has(readVariable) ||
-      noOtherOperandBinds(readVariable, floatingBind.inputIndex, operands));
-    if (floatingBind.constructedTerm !== undefined &&
-      nothingElseBindsTheVariable(floatingBind, carriers, operands) && readsSameValuesAbove) {
-      floatingBind.disposition = 'rise';
     }
   }
   settlePartition(c, peeled, () => true);
@@ -901,21 +915,21 @@ function floatThroughUnion(c: TransformContext, union: Algebra.Union): Algebra.O
  * @param peeled - The floating binds to group, whose {@link FloatingBind.mustLeaveWith} this writes
  */
 function groupIdenticalBinds(c: TransformContext, peeled: PeeledInputs): void {
+  // List of equal groups for a var
   const groupsByVariable = new Map<string, FloatingBind[][]>();
   for (const floatingBind of peeled.allBinds) {
-    if (!floatingBind.expressionIsStable) {
-      continue;
-    }
-    const groups = groupsByVariable.get(floatingBind.bind.variable.value) ?? [];
-    groupsByVariable.set(floatingBind.bind.variable.value, groups);
-    const matchingGroup = groups.find(group =>
-      group[0].inputIndex !== floatingBind.inputIndex &&
-      expressionsEqual(group[0].bind.expression, floatingBind.bind.expression));
-    if (matchingGroup === undefined) {
-      groups.push(floatingBind.mustLeaveWith);
-    } else {
-      matchingGroup.push(floatingBind);
-      floatingBind.mustLeaveWith = matchingGroup;
+    if (floatingBind.expressionIsStable) {
+      const groups = groupsByVariable.get(floatingBind.bind.variable.value) ?? [];
+      groupsByVariable.set(floatingBind.bind.variable.value, groups);
+      const matchingGroup = groups.find(group =>
+        group[0].inputIndex !== floatingBind.inputIndex &&
+          expressionsEqual(group[0].bind.expression, floatingBind.bind.expression));
+      if (matchingGroup === undefined) {
+        groups.push(floatingBind.mustLeaveWith);
+      } else {
+        matchingGroup.push(floatingBind);
+        floatingBind.mustLeaveWith = matchingGroup;
+      }
     }
   }
 }

@@ -285,7 +285,11 @@ function peelInputs(c: TransformContext, inputs: readonly Algebra.Operation[]): 
  * Iterates the partition until it is stable, pinning whatever the order within a chain forbids.
  * @param c - The transformation context
  * @param peeled - The floating binds, with a first opinion already written into their dispositions
- * @param stillLicensed - Re-checks what the operation itself asks of one bind
+ * @param stillLicensed - Re-checks what the operation itself asks of one bind. Only an operation owning a
+ * *reader expression* needs one: {@link readerAdmitsSubstitution} reads which binds below are leaving, and
+ * pinning shrinks that, so a reader can go from refusing a bind to admitting it. Every other licence here
+ * is about the operation and the bind alone - a projection's variable list, a join's operand ranges -
+ * which no pinning can change, so those pass `() => true` and mean it exactly
  */
 function settlePartition(
   c: TransformContext,
@@ -611,9 +615,10 @@ function floatThroughFilter(c: TransformContext, filter: Algebra.Filter): Algebr
  * @returns the rewritten operation
  */
 function floatThroughOrderBy(c: TransformContext, orderBy: Algebra.OrderBy, sealed: boolean): Algebra.Operation {
-  // Nothing here drops either, so a sealed ordering has nothing to decide.
+  // Nothing here drops either, so a sealed ordering has nothing left to *float* - but its comparators can
+  // still be cleaned, and a root ORDER BY is exactly where a query writes them.
   if (sealed) {
-    return orderBy;
+    return cleanStaticFromOrder(c, orderBy);
   }
   const peeled = peelInputs(c, [ orderBy.input ]);
   // An EXTEND maps element-wise and preserves the sequence, so the order the comparators produce is the
@@ -621,24 +626,66 @@ function floatThroughOrderBy(c: TransformContext, orderBy: Algebra.OrderBy, seal
   for (const floatingBind of peeled.allBinds) {
     floatingBind.disposition = floatingBind.expressionIsStable ? 'rise' : 'stay';
   }
-  // TODO: in case we have a `SELECT ?s ?p ?o { ?s ?p ?o . BIND(<ex://a> as ?x) } ORDER BY ?s ?x ?o`
-  //  We can rewrite it to `SELECT ?s ?p ?o { ?s ?p ?o } ORDER BY ?s ?o`
-  //  since the `static`/fully-defined nature of ?x means it does not provide any info to the order by
-  //  You may simply make a function `cleanStaticFromOrder` which takes an orderBy operation and cleans it up.
-  //  If you have no more expressions, the orderBy can be removed keeping the child.
-  //  We should anotate that function that we can drop teh orderBy and that this is only valid given that orderBy
-  //  does not drop any results: https://www.w3.org/TR/sparql12-query/#defn_algOrderBy
   settlePartition(c, peeled, floatingBind =>
     allReadersAdmitSubstitution(c, peeled, orderBy.expressions, floatingBind));
   return noBindLeaves(peeled) ?
-    orderBy :
+    cleanStaticFromOrder(c, orderBy) :
     assembleRewrittenNode(c, peeled, (rewrittenInputs, risers) => {
       const cVars = cpMetaOf(rewrittenInputs[0]).cVars;
-      return c.AF.createOrderBy(
+      // Cleaned *after* the substitution, which is what turns a comparator over a risen `?x` into the
+      // constant it was reading and so into one this can throw away.
+      return cleanStaticFromOrder(c, c.AF.createOrderBy(
         rewrittenInputs[0],
         orderBy.expressions.map(expression => substituteDepartedBinds(c, expression, risers, cVars)),
-      );
+      ));
     });
+}
+
+/**
+ * The variables of a chain that hold one value in every solution, so that reading one tells the reader
+ * nothing it did not already know.
+ * @param c - The transformation context
+ * @param op - The operation whose EXTEND chain to read
+ * @returns those variable names
+ */
+function constantVariablesOf(c: TransformContext, op: Algebra.Operation): SSet {
+  const constant = new Set<string>();
+  // One pass in evaluation order is a fixpoint: a bind can only read what stands before it in the chain.
+  // Being unbound in every solution counts - `BIND(1/0 AS ?x)` is as constant as `BIND(:a AS ?x)`, and an
+  // unbound comparator is a value the ordering has a place for rather than an absence.
+  for (const bind of peelExtends(c, op).binds) {
+    if (isStableExpression(c, bind.expression) &&
+      [ ...bind.reads ].every(readVariable => constant.has(readVariable))) {
+      constant.add(bind.variable.value);
+    }
+  }
+  return constant;
+}
+
+/**
+ * Drops the comparators of an `ORDER_BY` that carry no ordering information, and the operation itself when
+ * none are left.
+ *
+ * A comparator with one value across the whole sequence compares equal on every pair, so removing it
+ * leaves the ordering relation exactly as it was - ties included, which is what a `SLICE` above would be
+ * reading. Removing the operation is sound for the same reason plus one more: `ORDER BY` only *permutes*
+ * a solution sequence ([§18.2.5.2](https://www.w3.org/TR/sparql12-query/#defn_algOrderBy)), it never adds
+ * or drops a solution, so what is left when it goes is the same multiset with the same scope.
+ *
+ * Stability is what makes "reads no variable" too weak a test on its own: `ORDER BY RAND()` reads nothing
+ * and orders by a different value every time it is asked.
+ * @param c - The transformation context
+ * @param orderBy - The ordering to clean
+ * @returns the ordering over the comparators that decide something, or its input when none do
+ */
+function cleanStaticFromOrder(c: TransformContext, orderBy: Algebra.OrderBy): Algebra.Operation {
+  const constant = constantVariablesOf(c, orderBy.input);
+  const deciding = orderBy.expressions.filter(expression => !(isStableExpression(c, expression) &&
+    [ ...collectVariableNames(c.astTransformer, expression) ].every(name => constant.has(name))));
+  if (deciding.length === orderBy.expressions.length) {
+    return orderBy;
+  }
+  return deciding.length === 0 ? orderBy.input : c.AF.createOrderBy(orderBy.input, deciding);
 }
 
 /**
@@ -706,10 +753,12 @@ function floatThroughGroup(c: TransformContext, group: Algebra.Group): Algebra.O
       visibleToGrouping.add(readVariable);
     }
   }
-  // TODO: can we not also do some constant substitution in the expressions? you have:
-  //  `{ SELECT (CONCAT(?x, ?o) as ?y) ?o { ?s ?p ?o. BIND("apple" as ?x). } GROUP BY ?x ?o }`
-  //  We can write: `{SELECT (CONCAT("apple", ?o) AS ?y) ?o { ?s ?p ?o } GROUP BY ?o } BIND ("apple" as ?x)`
-  //  Or is this for the next phase?
+  // TODO(phase 4): a bind of a ground term to a *grouping key* may rise as `Group(A, keys \ {?x}, aggs)`,
+  //  which is phase 4's first item. Grouping by a variable with one value puts every row in the same
+  //  group, so striking it changes no group - and once `?x` is above the GROUP, the substitution this
+  //  pass already does rewrites what the aggregates and select expressions read of it. The trap the item
+  //  names: `keys = {?x}` is blocked, since over an empty input a keyless GROUP yields one group where
+  //  `GROUP BY ?x` yields none.
   for (const floatingBind of peeled.allBinds) {
     if (floatingBind.expressionIsStable && !visibleToGrouping.has(floatingBind.bind.variable.value)) {
       floatingBind.disposition = 'drop';
@@ -786,11 +835,13 @@ function floatThroughJoin(c: TransformContext, join: Algebra.Join): Algebra.Oper
         const readsSameValuesAbove = [ ...floatingBind.bind.reads ].every(readVariable =>
           floatingBind.scopeBelowBind.cVars.has(readVariable) ||
             noOtherOperandBinds(readVariable, floatingBind.inputIndex, operands));
-        // TODO(future) think about cardinality estimates. Joins can restrict but also grow.
-        //  Here we say that we do not take the risk of pullUp in case the expression is complex.
+        // The two operand checks are about two different variables and neither implies the other:
+        // `nothingElseBindsTheVariable` is (C1), over the bind's *target* `?x`, and asks whether the
+        // re-planted EXTEND would land on a solution that already binds it; `noOtherOperandBinds` above is
+        // one disjunct of (C2), over each `?y ∈ V` that `e` *reads*, and has an escape hatch (C1) has no
+        // analogue for - a `?y` the carrier binds certainly needs nothing of the siblings. For a ground
+        // `e`, `V` is empty and (C2) is vacuous, so (C1) is doing all of the work on its own.
         if (floatingBind.constructedTerm !== undefined &&
-            // TODO: do we need the `nothingElseBindsTheVariable` given that
-            //  we already checked the `noOtherOperandBinds`?
             nothingElseBindsTheVariable(floatingBind, carriers, operands) && readsSameValuesAbove) {
           floatingBind.disposition = 'rise';
         }

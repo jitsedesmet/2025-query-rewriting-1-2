@@ -185,6 +185,66 @@ LIMIT 5`,
     });
   });
 
+  describe('ordering that decides nothing', () => {
+    it('drops a comparator over a variable a BIND fixes', ({ expect }) => {
+      // `?x` holds one value across the whole sequence, so it compares equal on every pair and decides no
+      // ordering. The bind itself stays: nothing above the sealed ORDER BY can take it, and knowing that
+      // nothing *reads* it is the analysis phase 2 brings.
+      expectTransform(
+        expect,
+        'SELECT ?s ?p ?o WHERE { ?s ?p ?o . BIND(<ex://a> AS ?x) } ORDER BY ?s ?x ?o',
+        `SELECT ?s ?p ?o WHERE {
+  ?s ?p ?o .
+  BIND( <ex://a> AS ?x )
+}
+ORDER BY ASC ( ?s ) ASC ( ?o )`,
+      );
+    });
+
+    it('drops the ordering itself when no comparator decides anything', ({ expect }) => {
+      // And then the projection sees an EXTEND chain where it saw an ORDER BY, so the drop rule reaches a
+      // bind it could not before - the two rewrites cascade in one post-order pass.
+      expectTransform(
+        expect,
+        'SELECT ?s WHERE { ?s :p ?o . BIND(:a AS ?x) } ORDER BY ?x',
+        `SELECT ?s WHERE {
+  ?s <ex://p> ?o .
+}`,
+      );
+    });
+
+    it('keeps a comparator that is unstable rather than constant', ({ expect }) => {
+      // `RAND()` reads no variable either, which is why "mentions nothing" is the wrong test: it orders by
+      // a different value every time it is asked.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s :p ?o . BIND(RAND() AS ?x) } ORDER BY ?x',
+        `SELECT ?o ?s ( RAND( ) AS ?x ) WHERE {
+  ?s <ex://p> ?o .
+}
+ORDER BY ASC ( ?x )`,
+      );
+    });
+
+    it('cleans what the substitution made constant', ({ expect }) => {
+      // The sub-SELECT is not sealed, so `?x` rises and the comparator over it becomes the term it read -
+      // which is then a comparator this can throw away.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { { SELECT ?s ?x WHERE { ?s :p ?o BIND(:a AS ?x) } ORDER BY ?x ?s } ?s :q ?w }',
+        `SELECT ?s ?w ( <ex://a> AS ?x ) WHERE {
+  {
+    SELECT ?s WHERE {
+      ?s <ex://p> ?o .
+    }
+    ORDER BY ASC ( ?s )
+  }
+  ?s <ex://q> ?w .
+}`,
+      );
+    });
+  });
+
   describe('a named graph', () => {
     // A GRAPH is the one operation whose rule the generated string cannot show: `toAst` writes an EXTEND
     // at the top of a graph pattern as a SELECT expression, exactly as it writes one that rose past it.

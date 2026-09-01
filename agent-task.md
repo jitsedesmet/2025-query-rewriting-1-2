@@ -249,7 +249,7 @@ Gate 0 is stability: `isStableExpression(c, e)` or the bind stays. Then (C1), (C
 | `PROJECT` | `?x ∉ variables` → **drop**. Else rise when `V ⊆ variables`, striking `?x` from `variables`, so `pVars` at the swap is `(variables \ {?x}) ∪ {?x}` — unchanged — and the sub-`SELECT` carries no always-unbound column. The rise is blocked at the query's *own* projection — see the deviation below the table; the drop is not. |
 | `GROUP` | **drop** when `?x` is neither a key, nor an aggregate's `variable`, nor read by any aggregate's `expression`. Otherwise a barrier. `aggregates` are `BoundAggregate`s: an `expression` over the input *beside* the `variable` they write — check both. |
 | `DISTINCT`, `REDUCED` | rise, unconditionally. |
-| `ORDER_BY` | rise; expressions must not mention `?x`, or substitute (§A.4). |
+| `ORDER_BY` | rise; expressions must not mention `?x`, or substitute (§A.4). A comparator that decides no ordering is then dropped, and the operation with it when none are left — see the deviations. |
 | `SLICE` | rise, unconditionally. |
 | `FROM` | rise. |
 | `GRAPH ?g` | rise when `?x ≠ ?g` and (`?g ∉ V` or `?g ∈ A.cVars`). |
@@ -308,6 +308,18 @@ which is a variable plus a chain of positions, so `SUBJECT(?x)` over `BIND(<<( ?
 resolves to `?s` rather than to an accessor over a triple term the engine has to build first. Only where
 the bind is *certain*: `SUBJECT(?x)` of an unbound `?x` is an error, where the component it would be
 replaced by is an ordinary value, so a construction that can fail has the whole term written in instead.
+
+**An `ORDER_BY` cleans what it no longer needs.** Not in the plan, and it belongs here rather than in a
+general simplification pass because it is the pull-up's own substitution that creates the opportunity: a
+comparator over a risen `?x` becomes the term `?x` was reading, and a comparator with one value across the
+whole sequence compares equal on every pair, so removing it leaves the ordering relation exactly as it was
+— ties included, which is what a `SLICE` above would be reading. When none are left the `ORDER_BY` goes
+too, which is sound because it only *permutes* a sequence
+([§18.2.5.2](https://www.w3.org/TR/sparql12-query/#defn_algOrderBy)) and so leaves the same multiset with
+the same scope. `cleanStaticFromOrder` reads the constant variables off the chain below it, which is why
+`ORDER BY ?s ?x ?o` over `BIND(:a AS ?x)` loses its middle comparator without `?x` having to move at all.
+The two rewrites cascade: an `ORDER_BY` that disappears leaves the projection above it looking at an
+`EXTEND` chain, where its drop rule reaches a bind it could not before.
 
 **A `GRAPH` rule cannot be tested through the generator.** `toAst` writes an `EXTEND` at the top of a
 graph pattern as a `SELECT` expression, exactly as it writes one that rose past the `GRAPH` — so the two

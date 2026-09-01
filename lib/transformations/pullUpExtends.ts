@@ -327,12 +327,7 @@ function settlePartition(
 function chainOrderAllows(c: TransformContext, peeled: PeeledInputs, floatingBind: FloatingBind): boolean {
   for (const bindAbove of peeled.bindsPerInput[floatingBind.inputIndex]) {
     if (bindAbove.chainPosition > floatingBind.chainPosition && bindAbove.disposition === 'stay') {
-      // Above the operation the riser would read `?y` bound where below it read it unbound. No cost
-      // argument can rescue this one: what the riser has to see is `?y` *unbound*, so writing the stayer's
-      // expression in its place would answer a different question however cheap that expression is. Only
-      // pinning preserves the value. §10.1 forbids writing this ordering in the first place - the variable
-      // a BIND introduces may not already have been used in the group - and nothing this repo generates
-      // builds one either, so the check is defensive rather than load-bearing.
+      // I read a variable that is only assigned AFTER my construction. So the var must remain UNBOUND and cannot move.
       if (floatingBind.bind.reads.has(bindAbove.bind.variable.value)) {
         return false;
       }
@@ -383,6 +378,8 @@ function readerAdmitsSubstitution(
   // `substituteInExpression` leaves EXISTENCE untouched for that reason, and the pushdown carries the
   // same TODO.
   // TODO(phase 4): work out what a substitution into a nested pattern would mean.
+  // TODO: should we differentiate between the Triple/Quad term expression `<<( )>>` and the `TRIPLE()` Operation?
+  //   Maybe we can normalize in place? Or have we normalized already before?
   if (floatingBind.bind.expression.subType !== Algebra.ExpressionTypes.TERM || containsExistenceExpression(reader)) {
     return false;
   }
@@ -391,12 +388,12 @@ function readerAdmitsSubstitution(
   if (!floatingBind.bindsCertainly && asksBoundOfVariable(reader, variableName)) {
     return false;
   }
-  // `e` has to mean down there what it meant up here, so a bind *below* this one that is also leaving may
-  // not write a variable `e` reads - the reader would evaluate `e` against an unbound one.
-  return peeled.bindsPerInput[floatingBind.inputIndex].every(bindBelow =>
-    bindBelow.chainPosition >= floatingBind.chainPosition ||
-    bindBelow.disposition === 'stay' ||
-    !floatingBind.bind.reads.has(bindBelow.bind.variable.value));
+  // Cannot substitute when there is a bind *below* this one that does not stay (the expression cannot read it),
+  //  while the expression reads it.
+  return !peeled.bindsPerInput[floatingBind.inputIndex].some(bindBelow =>
+    bindBelow.chainPosition < floatingBind.chainPosition &&
+    bindBelow.disposition !== 'stay' &&
+    floatingBind.bind.reads.has(bindBelow.bind.variable.value));
 }
 
 /**
@@ -434,16 +431,18 @@ function substituteDepartedBinds(
   let result = expression;
   for (const departed of departedBinds) {
     const variableName = departed.bind.variable.value;
-    // Skipped rather than substituted into: the call is not free, and {@link readerAdmitsSubstitution} has
-    // already established that the ones which do hold the variable may be written.
-    if (!collectVariableNames(c.astTransformer, result).has(variableName)) {
-      continue;
+    // TODO: this will reanalyze the whole thing in every loop.
+    //  We can also maintaine a SET and add the variables that apear in the expressiosn we subsitute.
+    if (collectVariableNames(c.astTransformer, result).has(variableName)) {
+      // We know we cannot subsitute
+      const term = (<Algebra.TermExpression> departed.bind.expression).term;
+      result = substituteInExpression(c, result, {
+        // TODO: In case you access SUBJECT(?x) with BIND(<<(?s ?p ?o)>> as ?x)
+        //  AND we know ?x in cVars (so it does not throw), then we can also replace with `?s` right?
+        resolve: access => access.positions.length === 0 && access.name === variableName ? term : undefined,
+        bound: departed.bindsCertainly ? new Set([ variableName ]) : new Set<string>(),
+      }, cVars);
     }
-    const term = (<Algebra.TermExpression> departed.bind.expression).term;
-    result = substituteInExpression(c, result, {
-      resolve: access => access.positions.length === 0 && access.name === variableName ? term : undefined,
-      bound: departed.bindsCertainly ? new Set([ variableName ]) : new Set<string>(),
-    }, cVars);
   }
   return result;
 }
@@ -463,8 +462,8 @@ function rebindStayerAfterDepartures(
 ): ChainBind {
   // Only what left from *below* it is written in. A bind that stood above the stayer wrote a variable the
   // stayer read as unbound anyway, and reads it as unbound still now that it is gone.
-  const departedBelow = chain.filter(floatingBind =>
-    floatingBind.chainPosition < stayer.chainPosition && floatingBind.disposition !== 'stay');
+  const departedBelow = chain
+    .filter(floatingBind => floatingBind.chainPosition < stayer.chainPosition && floatingBind.disposition !== 'stay');
   if (departedBelow.length === 0) {
     return stayer.bind;
   }
@@ -499,7 +498,7 @@ function assembleRewrittenNode(
       .map(stayer => rebindStayerAfterDepartures(c, peeled.bindsPerInput[index], stayer)),
   ));
   // Ordered by input index and then by chain order, so the relative order of two binds that rose from one
-  // chain is the one they had - and a merged bind, which is written out by its representative alone,
+  // chain is the one they had - and a merged bind, which is written out by its *representative* alone,
   // appears exactly once.
   const risers = peeled.allBinds.filter(floatingBind => floatingBind.disposition === 'rise');
   return replantExtends(c, rebuildNode(inputs, risers), risers.map(floatingBind => floatingBind.bind));

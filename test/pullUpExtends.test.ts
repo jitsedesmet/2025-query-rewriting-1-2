@@ -154,6 +154,21 @@ describe('pullUpExtends', () => {
       );
     });
 
+    it('stops below the query\'s own solution modifiers', ({ expect }) => {
+      // The bind rises out of the join, and then stops: SPARQL has nowhere to write a BIND above a SELECT
+      // or between it and its ORDER BY and LIMIT, so the sealed chain decides nothing and returns early.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { { ?s :p ?o BIND(:a AS ?x) } { ?a :r ?b } } ORDER BY ?o LIMIT 5',
+        `SELECT ?a ?b ?o ?s ( <ex://a> AS ?x ) WHERE {
+  ?s <ex://p> ?o .
+  ?a <ex://r> ?b .
+}
+ORDER BY ASC ( ?o )
+LIMIT 5`,
+      );
+    });
+
     it('rises past a FROM, whose place in a query no parser puts a hoist target above', ({ expect }) => {
       // Built by hand: `FROM` only occurs at the top of a query, where the modifier chain seals it.
       const { AF, DF } = c;

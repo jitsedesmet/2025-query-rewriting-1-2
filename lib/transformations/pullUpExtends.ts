@@ -256,21 +256,6 @@ export function pullUpExtends<T extends Algebra.Operation>(c: TransformContext, 
 }
 
 /**
- * Pins everything that wanted to rise, for an operation of the solution-modifier chain. A drop survives it.
- * @param peeled - The floating binds to pin
- */
-function pinEveryRise(peeled: PeeledInputs): void {
-  // A drop is left alone: deleting a bind leaves the operation exactly where it was, so it says nothing
-  // about what could be written above it - and a projection that discards a variable is this phase's main
-  // drop site whether it is the query's own or a sub-`SELECT`'s.
-  for (const floatingBind of peeled.allBinds) {
-    if (floatingBind.disposition !== 'drop') {
-      floatingBind.disposition = 'stay';
-    }
-  }
-}
-
-/**
  * Peels the inputs of an operation and reads, per bind, everything the licences will ask about it.
  * @param c - The transformation context
  * @param inputs - The inputs as `mapOperation` handed them back, before any rewriting
@@ -522,17 +507,19 @@ function rebindStayerAfterDepartures(
  * itself around those, and the risers above it.
  * @param c - The transformation context
  * @param peeled - The peeled inputs and their settled floating binds
- * @param rebuildNode - Builds the operation back around its new inputs, and edits whatever it reads
+ * @param rebuildNode - Builds the operation back around its rewritten inputs, indexed as the operation's
+ * own are - so `rewrittenInputs[0]` of a single-input operation is that input, with the stayers re-planted
+ * and the risers gone - and edits whatever the operation reads
  * @returns the rewritten operation
  */
 function assembleRewrittenNode(
   c: TransformContext,
   peeled: PeeledInputs,
-  rebuildNode: (inputs: Algebra.Operation[], risers: FloatingBind[]) => Algebra.Operation,
+  rebuildNode: (rewrittenInputs: Algebra.Operation[], risers: FloatingBind[]) => Algebra.Operation,
 ): Algebra.Operation {
   // Every node here is freshly built, so none of them carries the `CPMeta` a licence cached on the plan
   // the rewrite has just invalidated. The cores keep theirs, which is correct: nothing below one changed.
-  const inputs = peeled.chains.map((chain, index) => replantExtends(
+  const rewrittenInputs = peeled.chains.map((chain, index) => replantExtends(
     c,
     chain.core,
     peeled.bindsPerInput[index]
@@ -543,7 +530,7 @@ function assembleRewrittenNode(
   // chain is the one they had - and a merged bind, which is written out by its *representative* alone,
   // appears exactly once.
   const risers = peeled.allBinds.filter(floatingBind => floatingBind.disposition === 'rise');
-  return replantExtends(c, rebuildNode(inputs, risers), risers.map(floatingBind => floatingBind.bind));
+  return replantExtends(c, rebuildNode(rewrittenInputs, risers), risers.map(floatingBind => floatingBind.bind));
 }
 
 /**
@@ -570,6 +557,11 @@ function floatThroughCongruentOperation(
   sealed: boolean,
   rebuildOperation: (input: Algebra.Operation) => Algebra.Operation,
 ): Algebra.Operation {
+  // Nothing here drops, and a sealed operation lets nothing rise, so every bind would end up staying:
+  // there is nothing to decide, and no reason to pay `peelInputs` to find that out.
+  if (sealed) {
+    return op;
+  }
   const peeled = peelInputs(c, [ op.input ]);
   // Unconditional, and it is worth saying why for each: `e` is a deterministic function of the row, so the
   // extra column never refines the equivalence classes a DISTINCT or a REDUCED deduplicates over; and an
@@ -578,14 +570,10 @@ function floatThroughCongruentOperation(
   for (const floatingBind of peeled.allBinds) {
     floatingBind.disposition = floatingBind.expressionIsStable ? 'rise' : 'stay';
   }
-  // TODO: could we not simply do an early return in the beginning saying nothing changes?
-  if (sealed) {
-    pinEveryRise(peeled);
-  }
   settlePartition(c, peeled, () => true);
   return noBindLeaves(peeled) ?
     op :
-    assembleRewrittenNode(c, peeled, inputs => rebuildOperation(inputs[0]));
+    assembleRewrittenNode(c, peeled, rewrittenInputs => rebuildOperation(rewrittenInputs[0]));
 }
 
 /**
@@ -603,10 +591,15 @@ function floatThroughFilter(c: TransformContext, filter: Algebra.Filter): Algebr
     allReadersAdmitSubstitution(c, peeled, [ filter.expression ], floatingBind));
   return noBindLeaves(peeled) ?
     filter :
-    assembleRewrittenNode(c, peeled, (inputs, risers) => c.AF.createFilter(
-      inputs[0],
-      // TODO: what is input 0? And are we sure the cVars is not stale?
-      substituteDepartedBinds(c, filter.expression, risers, cpMetaOf(inputs[0]).cVars),
+    assembleRewrittenNode(c, peeled, (rewrittenInputs, risers) => c.AF.createFilter(
+      rewrittenInputs[0],
+      // The condition is evaluated over the filter's own input as this rewrite leaves it - the stayers
+      // re-planted, the risers gone - so that is where its `cVars` has to be read. Not stale: the pass
+      // never mutates a node, it builds a fresh one through the factory, so a cached `CPMeta` can only
+      // sit on a subtree that is structurally what it was when the metadata was computed. The one thing
+      // that *would* be stale is metadata left by an earlier pass, which entering through
+      // `withoutCpVars` has already cleared.
+      substituteDepartedBinds(c, filter.expression, risers, cpMetaOf(rewrittenInputs[0]).cVars),
     ));
 }
 
@@ -618,23 +611,24 @@ function floatThroughFilter(c: TransformContext, filter: Algebra.Filter): Algebr
  * @returns the rewritten operation
  */
 function floatThroughOrderBy(c: TransformContext, orderBy: Algebra.OrderBy, sealed: boolean): Algebra.Operation {
+  // Nothing here drops either, so a sealed ordering has nothing to decide.
+  if (sealed) {
+    return orderBy;
+  }
   const peeled = peelInputs(c, [ orderBy.input ]);
   // An EXTEND maps element-wise and preserves the sequence, so the order the comparators produce is the
   // same whether the bind is applied below or above them.
   for (const floatingBind of peeled.allBinds) {
     floatingBind.disposition = floatingBind.expressionIsStable ? 'rise' : 'stay';
   }
-  if (sealed) {
-    pinEveryRise(peeled);
-  }
   settlePartition(c, peeled, floatingBind =>
     allReadersAdmitSubstitution(c, peeled, orderBy.expressions, floatingBind));
   return noBindLeaves(peeled) ?
     orderBy :
-    assembleRewrittenNode(c, peeled, (inputs, risers) => {
-      const cVars = cpMetaOf(inputs[0]).cVars;
+    assembleRewrittenNode(c, peeled, (rewrittenInputs, risers) => {
+      const cVars = cpMetaOf(rewrittenInputs[0]).cVars;
       return c.AF.createOrderBy(
-        inputs[0],
+        rewrittenInputs[0],
         orderBy.expressions.map(expression => substituteDepartedBinds(c, expression, risers, cVars)),
       );
     });
@@ -664,20 +658,20 @@ function floatThroughProject(c: TransformContext, project: Algebra.Project, seal
     // whatever it computes - but the gate is uniform in this phase, and phase 2 revisits dropping whole.
     if (!projected.has(floatingBind.bind.variable.value)) {
       floatingBind.disposition = 'drop';
-    } else if ([ ...floatingBind.bind.reads ].every(readVariable => projected.has(readVariable))) {
+    } else if (!sealed && [ ...floatingBind.bind.reads ].every(readVariable => projected.has(readVariable))) {
+      // Only the *rise* is what sealing forbids. A drop leaves the projection exactly where it was, so it
+      // says nothing about what could be written above it - and a projection that discards a variable is
+      // this phase's main drop site whether it is the query's own or a sub-SELECT's.
       floatingBind.disposition = 'rise';
     }
-  }
-  if (sealed) {
-    pinEveryRise(peeled);
   }
   settlePartition(c, peeled, () => true);
   return noBindLeaves(peeled) ?
     project :
-    assembleRewrittenNode(c, peeled, (inputs, risers) => {
+    assembleRewrittenNode(c, peeled, (rewrittenInputs, risers) => {
       const struckVariables = new Set(risers.map(riser => riser.bind.variable.value));
       return c.AF.createProject(
-        inputs[0],
+        rewrittenInputs[0],
         project.variables.filter(variable => !struckVariables.has(variable.value)),
       );
     });
@@ -712,7 +706,8 @@ function floatThroughGroup(c: TransformContext, group: Algebra.Group): Algebra.O
   settlePartition(c, peeled, () => true);
   return noBindLeaves(peeled) ?
     group :
-    assembleRewrittenNode(c, peeled, inputs => c.AF.createGroup(inputs[0], group.variables, group.aggregates));
+    assembleRewrittenNode(c, peeled, rewrittenInputs =>
+      c.AF.createGroup(rewrittenInputs[0], group.variables, group.aggregates));
 }
 
 /**
@@ -738,7 +733,7 @@ function floatThroughGraph(c: TransformContext, graph: Algebra.Graph): Algebra.O
   settlePartition(c, peeled, () => true);
   return noBindLeaves(peeled) ?
     graph :
-    assembleRewrittenNode(c, peeled, inputs => c.AF.createGraph(inputs[0], graph.name));
+    assembleRewrittenNode(c, peeled, rewrittenInputs => c.AF.createGraph(rewrittenInputs[0], graph.name));
 }
 
 /**
@@ -791,7 +786,7 @@ function floatThroughJoin(c: TransformContext, join: Algebra.Join): Algebra.Oper
   settlePartition(c, peeled, () => true);
   return noBindLeaves(peeled) ?
     join :
-    assembleRewrittenNode(c, peeled, inputs => c.AF.createJoin(inputs, false));
+    assembleRewrittenNode(c, peeled, rewrittenInputs => c.AF.createJoin(rewrittenInputs, false));
 }
 
 /**
@@ -826,12 +821,15 @@ function floatThroughLeftJoin(c: TransformContext, leftJoin: Algebra.LeftJoin): 
   settlePartition(c, peeled, floatingBind => allReadersAdmitSubstitution(c, peeled, readers, floatingBind));
   return noBindLeaves(peeled) ?
     leftJoin :
-    assembleRewrittenNode(c, peeled, (inputs, risers) => c.AF.createLeftJoin(
-      inputs[0],
-      inputs[1],
+    assembleRewrittenNode(c, peeled, (rewrittenInputs, risers) => c.AF.createLeftJoin(
+      rewrittenInputs[0],
+      rewrittenInputs[1],
       leftJoin.expression === undefined ?
         undefined :
-        substituteDepartedBinds(c, leftJoin.expression, risers, cpMetaOf(inputs[0]).cVars),
+        // The condition is evaluated on `μ_L ⋈ μ_R`, so what is certainly bound where it stands is a
+        // superset of the left operand's `cVars`. Handing it the left alone is the conservative half:
+        // fewer folds than could be made, never one that could not.
+        substituteDepartedBinds(c, leftJoin.expression, risers, cpMetaOf(rewrittenInputs[0]).cVars),
     ));
 }
 
@@ -859,8 +857,8 @@ function floatThroughMinus(c: TransformContext, minus: Algebra.Minus): Algebra.O
   settlePartition(c, peeled, () => true);
   return noBindLeaves(peeled) ?
     minus :
-    assembleRewrittenNode(c, peeled, (inputs) => {
-      const rebuiltMinus = c.AF.createMinus(inputs[0], inputs[1]);
+    assembleRewrittenNode(c, peeled, (rewrittenInputs) => {
+      const rebuiltMinus = c.AF.createMinus(rewrittenInputs[0], rewrittenInputs[1]);
       // The graph-scope marker is not a licence of ours to drop: it tells an engine that the disjointness
       // test has to ignore a `?g` bound outside the MINUS, which is as true after the rewrite as before.
       if (minus.graphScopeVar !== undefined) {
@@ -893,7 +891,7 @@ function floatThroughUnion(c: TransformContext, union: Algebra.Union): Algebra.O
   settlePartition(c, peeled, () => true);
   return noBindLeaves(peeled) ?
     union :
-    assembleRewrittenNode(c, peeled, inputs => c.AF.createUnion(inputs, false));
+    assembleRewrittenNode(c, peeled, rewrittenInputs => c.AF.createUnion(rewrittenInputs, false));
 }
 
 /**

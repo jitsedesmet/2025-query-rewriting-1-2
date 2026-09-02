@@ -166,7 +166,7 @@ vacuously and what decides is the *readers* — a condition, an ordering express
 | `MINUS`, from the **LHS** | yes | `R.vRanges.neverBinds(?x)` — an `R` that binds `?x` changes both the compatibility and the domain-disjointness test, though `pVars(Minus) = pVars(L)` means it never reaches the re-planted bind. (C2) is vacuous, as in `UNION`: the output mapping *is* `μ_L`. |
 | `MINUS`, from the **RHS** | no | RHS bindings are out of scope above. Droppable when `L.vRanges.neverBinds(?x)`: then `?x` is in neither test. |
 | `UNION` | only when **every** branch floats the same bind | same `?x`, `e` structurally equal and stable — and no (C2) condition, since a union merges nothing: the solution above *is* the branch solution, so `e` is asked about the same μ either way. Hoisting from one branch alone would bind `?x` in the others' solutions; adding it to the others instead would *grow* `cVars(union)`, a wrong answer rather than a conservative one. Subsumes `pushUpBoundedFromUnion`. |
-| `GRAPH ?g` | yes | `?x ≠ ?g`, and `?g ∉ V` unless `?g ∈ A.cVars` — `?g` is bound by the join *outside* the pattern. |
+| `GRAPH ?g` | yes | `?x ≠ ?g`, and `?g ∉ V` unless `?g ∈ A.cVars` — `?g` is bound by the join *outside* the pattern. A bind *of* `?g` is not merely blocked: that outside join makes it a graph selection, `Graph(?g, Extend(P, ?g, :a)) ≡ Extend(Graph(:a, P), ?g, :a)`, which is phase 4. |
 | `SERVICE` | no | barrier, as in the pushdown: `SILENT` turns endpoint failure into one empty solution, where the hoisted bind would still bind `?x`. Carries a `TODO(future)` in the code, as `pushIntoGraph` does — letting a non-`SILENT` service release a bind is sound and reduces what is shipped to the endpoint. |
 | `BGP`, `PATH`, `VALUES` | — | leaves. |
 

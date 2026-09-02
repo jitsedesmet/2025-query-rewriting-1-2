@@ -295,7 +295,7 @@ Gate 0 is stability: `isStableExpression(c, e)` or the bind stays. Then (C1), (C
 | `ORDER_BY` | rise; expressions must not mention `?x`, or substitute (§A.4). A comparator that decides no ordering is then dropped, and the operation with it when none are left — see the deviations. |
 | `SLICE` | rise, unconditionally. |
 | `FROM` | rise. |
-| `GRAPH ?g` | rise when `?x ≠ ?g` and (`?g ∉ V` or `?g ∈ A.cVars`). |
+| `GRAPH ?g` | rise when `?x ≠ ?g` and (`?g ∉ V` or `?g ∈ A.cVars`). A bind that *writes* `?g` is a barrier here and an assertion in phase 4 — see its list. |
 | `JOIN` | rise under (C1)+(C2), or under the merge rule below. Cost gate applies. |
 | `LEFT_JOIN` LHS | rise when `R.vRanges.neverBinds(?x)` and (C2) holds; the condition is treated exactly like a `FILTER`. Cost gate applies. The "or `R` carries the identical bind" half is the `LEFT_JOIN` merge, which [phase 2](#phase-2--the-needed-analysis-and-general-dropping) explicitly ships; phase 1 leaves a `TODO(phase 2)` at the site. |
 | `LEFT_JOIN` RHS | never rise, and no drop in this phase — the RHS bindings *are* visible above, so dropping one needs phase 2. |
@@ -572,6 +572,15 @@ every `metadata` on the way out — and skip when the assertion is already there
 - **`NAMED` allowlist.** Generalise phase 1's `stableNamedFunctions` set, which holds only
   `EXTENSION_FUNCTION_BNODE`, into a documented
   set of extension functions declared stable, with a test that an unlisted one blocks.
+- **A bind of the graph variable selects that graph.** `GRAPH ?g { P . BIND(:a AS ?g) }` reads as a
+  barrier in phase 1, on (C1) with the `GRAPH` itself as the other binder — but `?g` is unbound *inside*
+  the pattern, so the join with `{?g ↦ u}` that a `GRAPH` ends with keeps only the graph named `:a`:
+  `Graph(?g, Extend(P, ?g, :a)) ≡ Extend(Graph(:a, P), ?g, :a)`. Both sides are
+  `{ μ + {?g ↦ :a} : μ ∈ ⟦P⟧_{G_:a} }`, and an `:a` the dataset does not name gives the empty multiset
+  either way. Worth having: it turns a scan of every named graph into one graph, and the bind rises after
+  it. Ground `e` only, and only where `P` does not itself bind `?g`. The mirror of `pushIntoGraph`'s rule
+  in `pushDownAssertions`, which already selects the single graph from an assertion — this is reading the
+  bind *as* that assertion.
 - **Substituting a non-term `e`.** Where `?x` occurs exactly once in the reader and is dead above
   (phase 2's `needed`), substituting is break-even and deletes a node. Gate it on both conditions, and
   test that two occurrences still block. The arithmetic, which phase 1 wrote onto

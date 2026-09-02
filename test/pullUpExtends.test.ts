@@ -331,7 +331,10 @@ ORDER BY ASC ( ?x )`,
 
     it('stays when it writes the graph variable itself', ({ expect }) => {
       // (C1) with the operation as the other binder: the GRAPH puts `?g` in every solution above it.
-      // TODO: this is an assertion that we should handle in a next phase.
+      // TODO(phase 4): this bind is an *assertion* in disguise and phase 4 should read it as one. `?g` is
+      //  unbound inside the pattern, so the join with `{?g ↦ u}` that a GRAPH ends with keeps only the
+      //  graph named `:a` - which is to say `Graph(?g, Extend(P, ?g, :a)) ≡ Extend(Graph(:a, P), ?g, :a)`,
+      //  turning a scan of every named graph into one graph and letting the bind rise after all.
       expectTransformGraphOperation(
         expect,
         'SELECT * WHERE { GRAPH ?g { ?s :p ?o BIND(:a AS ?g) } }',

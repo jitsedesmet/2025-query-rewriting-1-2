@@ -7,10 +7,6 @@
   "description": "Query rewriting for a SPARQL 1.2 query on RDF 1.1 data ",
   "lsd:module": true,
   "license": "MIT",
-  "workspaces": [
-    "./traqula/engines/*",
-    "./traqula/packages/*"
-  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/jitsedesmet/2025-query-rewriting-1-2"
@@ -54,8 +50,8 @@
     "bench:ab": "node test/bench-ab.mjs"
   },
   "dependencies": {
-    "@traqula/algebra-sparql-1-2": "^1.2.0",
-    "@traqula/algebra-transformations-1-2": "^1.2.0",
+    "@traqula/algebra-sparql-1-2": "^1.2.2",
+    "@traqula/algebra-transformations-1-2": "^1.2.2",
     "@traqula/core": "^1.2.0",
     "@traqula/generator-sparql-1-2": "^1.2.0",
     "@traqula/parser-sparql-1-2": "^1.2.0",

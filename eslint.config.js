@@ -89,9 +89,6 @@ export default config([
   {
     ignores: [
       'documentation',
-      // A local clone of the upstream dependency, kept for reference now that the workspace link is gone.
-      // It brings its own eslint config and is not ours to lint; the entry is inert once it is removed.
-      'traqula',
       // Working documents rather than sources: the task, the design it was turned into, and the per-PR
       // plan. Their code blocks are algebra sketches and interface excerpts, not files the build compiles,
       // so `parserOptions.project` has nothing to type-check them against.

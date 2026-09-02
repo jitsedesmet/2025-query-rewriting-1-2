@@ -362,7 +362,8 @@ comparator over a risen `?x` becomes the term `?x` was reading, and a comparator
 whole sequence compares equal on every pair, so removing it leaves the ordering relation exactly as it was
 — ties included, which is what a `SLICE` above would be reading. When none are left the `ORDER_BY` goes
 too, which is sound because it only *permutes* a sequence
-([§18.2.5.2](https://www.w3.org/TR/sparql12-query/#defn_algOrderBy)) and so leaves the same multiset with
+([the definition of `OrderBy`](https://www.w3.org/TR/sparql12-query/#defn_algOrderBy)) and so leaves the
+same multiset with
 the same scope. `cleanStaticFromOrder` reads the constant variables off the chain below it, which is why
 `ORDER BY ?s ?x ?o` over `BIND(:a AS ?x)` loses its middle comparator without `?x` having to move at all.
 The rewrites then cascade: a comparator that goes is one fewer reader of `?x`, so the bind rises past the

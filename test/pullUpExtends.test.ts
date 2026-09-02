@@ -231,8 +231,8 @@ ORDER BY ASC ( ?s )`,
       // `?x` holds a different value on every row and the ordering is a real one. Nothing moves either -
       // an unstable expression cannot rise - so this is the untouched tree, printed. `toAst` writes a
       // BIND at the top of a WHERE as a SELECT expression, which is where SPARQL's own algebra puts it
-      // (§18.2.4.1 extends before it orders), so the string re-parses to exactly this tree; see
-      // `traqula-agent.md` §3. The assertion below is what says the bind did not move.
+      // (§18.3.4.4 extends before §18.3.5 orders), so the string re-parses to exactly this tree; see
+      // `traqula-agent.md` §3, which carries the argument. The assertion below says the bind did not move.
       const query = 'SELECT * WHERE { ?s :p ?o . BIND(RAND() AS ?x) } ORDER BY ?x';
       expectTransform(
         expect,

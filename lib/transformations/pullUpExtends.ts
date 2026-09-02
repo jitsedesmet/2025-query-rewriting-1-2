@@ -668,7 +668,8 @@ function constantVariablesOf(c: TransformContext, op: Algebra.Operation): SSet {
  * A comparator with one value across the whole sequence compares equal on every pair, so removing it
  * leaves the ordering relation exactly as it was - ties included, which is what a `SLICE` above would be
  * reading. Removing the operation is sound for the same reason plus one more: `ORDER BY` only *permutes*
- * a solution sequence ([§18.2.5.2](https://www.w3.org/TR/sparql12-query/#defn_algOrderBy)), it never adds
+ * a solution sequence ([the definition of `OrderBy`](https://www.w3.org/TR/sparql12-query/#defn_algOrderBy)),
+ * it never adds
  * or drops a solution, so what is left when it goes is the same multiset with the same scope.
  *
  * Stability is what makes "reads no variable" too weak a test on its own: `ORDER BY RAND()` reads nothing

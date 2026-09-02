@@ -54,24 +54,44 @@ The same flattening as entry 1, in the place it belongs. `Project(Extend(OrderBy
 `SELECT … (e AS ?x) … ORDER BY …`, which re-parses to `Project(OrderBy(Extend(P, ?x, e)))`.
 
 That is faithful rather than lucky, and it is worth knowing *why*, because it looks like entry 1 and is
-not. SPARQL converts the select expressions ([§18.2.4.4](https://www.w3.org/TR/sparql12-query/#selExpr))
-**before** it converts the solution modifiers
-([§18.2.5](https://www.w3.org/TR/sparql12-query/#convertSolMod)), so the `EXTEND`s land *under* the
-`OrderBy` and an alias is in scope for `ORDER BY`. The everyday proof is the idiom nobody disputes:
+not. The question it turns on: is a variable a `SELECT` expression introduces in scope for `ORDER BY`?
+
+**The spec says yes, by where it puts the step.** SPARQL builds the algebra as a sequence of wrappings,
+so a step that runs earlier ends up *deeper*. `(expr AS ?var)` becomes an `Extend` in
+[§18.3.4.4 SELECT Expressions](https://www.w3.org/TR/sparql12-query/#selExpr), and the `OrderBy` is added
+in [§18.3.5 Converting Solution Modifiers](https://www.w3.org/TR/sparql12-query/#convertSolMod), which
+comes after — so the `Extend` lands under the `OrderBy`.
+
+The easiest way to check that reading is to look at what §18.3.5 lists. It applies the modifiers "in the
+following order: Order by, Projection, Distinct, Reduced, Offset, Limit" — **no step for select
+expressions**. They are absent because they are already converted. And §18.3.4.4 cannot be about
+sub-selects only, as it might first appear: a sub-select is translated as a whole query where its graph
+pattern is translated, so if §18.3.4.4 did not cover the top level, a plain
+`SELECT (COUNT(*) AS ?c) …` would have no rule producing its `Extend` at all.
+
+**Two implementations and one idiom agree.** The everyday proof is the query nobody disputes:
 
 ```sparql
 SELECT ?x (COUNT(*) AS ?c) WHERE { ?x :p ?o } GROUP BY ?x ORDER BY DESC(?c)
 ```
 
-`?c` is a select expression like any other, and ordering by it works. Checked against an engine rather
-than only read off the spec — `SELECT ?v ((0 - ?v) AS ?neg) { VALUES ?v { 1 2 3 } } ORDER BY ?neg` returns
-`3, 2, 1` under Comunica, matching the `BIND`-in-`WHERE` spelling and differing from the unordered
-control.
+An aggregate alias is a select expression like any other; were the `Extend` outside the `OrderBy`, `?c`
+would be unbound at ordering time and this would silently not sort. Measured rather than assumed:
+`SELECT ?v ((0 - ?v) AS ?neg) { VALUES ?v { 1 2 3 } } ORDER BY ?neg` returns `3, 2, 1` under Comunica,
+matching the `BIND`-in-`WHERE` spelling and differing from the unordered control, and Traqula's own
+`toAlgebra` reads that query back as `project(orderby(extend(…)))`.
 
-Moving an `EXTEND` *across* an `ORDER BY` is then sound on top of that: an `EXTEND` is element-wise and
-order-preserving, so the swap changes nothing as long as the ordering does not read the variable. This is
-why `ORDER_BY` is deliberately **not** on the sealed chain of entry 2, and why a test whose expected
-output shows a `BIND` as a `SELECT` expression is not evidence that the bind moved — assert on the algebra
-if that is the question. `test/eval.test.ts` carries two order-preserving cases for it, since a string
-comparison cannot see an ordering change. Where the same flattening crosses a `GRAPH` instead, it is
-entry 1, and there it really is a bug.
+**What follows for us.** Moving an `EXTEND` *across* an `ORDER BY` is sound on top of that: an `EXTEND` is
+element-wise and order-preserving, so the swap changes nothing as long as the ordering does not read the
+variable. This is why `ORDER_BY` is deliberately **not** on the sealed chain of entry 2, and why a test
+whose expected output shows a `BIND` as a `SELECT` expression is not evidence that the bind moved — assert
+on the algebra if that is the question. `test/eval.test.ts` carries two order-preserving cases, since
+neither a sorted comparison nor a string comparison can see an ordering change.
+
+Adjacent but not ours: a [known erratum](https://www.w3.org/2013/sparql-errata) records that `DISTINCT`
+and projection must preserve the ordering `OrderBy` gave, and that this is unclear where the ordering uses
+variables the projection drops. Nothing here changes which variables are ordered by, other than removing
+comparators that decide nothing — and a comparator that compared equal on every pair carried no order to
+lose.
+
+Where the same flattening crosses a `GRAPH` instead, it is entry 1, and there it really is a bug.

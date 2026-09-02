@@ -226,19 +226,24 @@ ORDER BY ASC ( ?s )`,
       );
     });
 
-    it('keeps a comparator that is unstable rather than constant', ({ expect }) => {
-      // TODO: this test is wrong. Since the expression is not stable it cannot move.
-      //  also ?x becomes unbound to the orderBy
-      // `RAND()` reads no variable either, which is why "mentions nothing" is the wrong test: it orders by
-      // a different value every time it is asked.
+    it('keeps a comparator over a variable no BIND fixes', ({ expect }) => {
+      // The comparator is `?x`, and what decides it is the expression *below*: `RAND()` is unstable, so
+      // `?x` holds a different value on every row and the ordering is a real one. Nothing moves either -
+      // an unstable expression cannot rise - so this is the untouched tree, printed. `toAst` writes a
+      // BIND at the top of a WHERE as a SELECT expression, which is where SPARQL's own algebra puts it
+      // (§18.2.4.1 extends before it orders), so the string re-parses to exactly this tree; see
+      // `traqula-agent.md` §3. The assertion below is what says the bind did not move.
+      const query = 'SELECT * WHERE { ?s :p ?o . BIND(RAND() AS ?x) } ORDER BY ?x';
       expectTransform(
         expect,
-        'SELECT * WHERE { ?s :p ?o . BIND(RAND() AS ?x) } ORDER BY ?x',
+        query,
         `SELECT ?o ?s ( RAND( ) AS ?x ) WHERE {
   ?s <ex://p> ?o .
 }
 ORDER BY ASC ( ?x )`,
       );
+      const result = <Algebra.Project> pullUpExtends(c, parseQuery(c, prefixes + query));
+      expect(bindsAtTopOf(result.input)).toEqual([]);
     });
 
     it('cleans what the substitution made constant', ({ expect }) => {
@@ -261,9 +266,10 @@ ORDER BY ASC ( ?x )`,
   });
 
   describe('a named graph', () => {
-    // TODO: this sounds like a bug in toAST? We should make a `traqula-agent.md` file that explains the BUG.
-    // A GRAPH is the one operation whose rule the generated string cannot show: `toAst` writes an EXTEND
-    // at the top of a graph pattern as a SELECT expression, exactly as it writes one that rose past it.
+    // A GRAPH is the one operation whose rule the generated string cannot show, and that is an upstream
+    // bug rather than a limit of the rule: `toAst` writes an EXTEND at the top of a graph pattern as a
+    // SELECT expression, which puts it *outside* the GRAPH it was inside. See `traqula-agent.md` §1 for
+    // the reproducer and the scope it changes. These cases therefore assert on the algebra.
     it('rises out of a GRAPH when it does not read the graph variable', ({ expect }) => {
       const parsed = parseWithGraphOperation('SELECT * WHERE { GRAPH ?g { ?s :p ?o BIND(:a AS ?x) } }');
       const result = <Algebra.Project> pullUpExtends(c, parsed);

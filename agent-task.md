@@ -47,6 +47,7 @@ SELECT * { ?s ?p ?o . ?a ?b ?c . BIND(<ex://a> AS ?x) }
 | `lib/transformations/removeProjections.ts` | the pattern for carrying information across `mapOperation`: a `Set`/`Map` keyed on the **original** node, since `transform` is handed `(copy, original)`. Phase 2 needs exactly this. |
 | `lib/transformations/pullUpExtends.ts` | the pass itself, once phase 1 shipped: the traversal, the `Candidate`/`FloatingBinds` machinery every rule is written against, and the `@fileoverview` carrying the argument for each. |
 | `lib/utils/extendChain.ts` | `peelExtends(c, op)` / `replantExtends(c, core, binds)` and the `ChainBind` they trade in. |
+| `traqula-agent.md` | upstream behaviours that shape the code here, with reproducers — most of all that `toAst` lifts an `EXTEND` out of a `GRAPH`, which is why the `GRAPH` cases assert on the algebra rather than on the generated string. |
 | `test/pushDownAssertions.test.ts` | the test harness to mirror: `createPartialContext()`, `parseQuery`, `c.generator.generate(toAst(...)).trim()`, and `toAlgebra(..., { quads: false })` for the `GRAPH` cases. |
 
 ## A.2 The invariant and the three side conditions
@@ -369,11 +370,12 @@ ordering, and the projection above — which never asked for `?x` — drops it. 
 BIND(:a AS ?x) } ORDER BY ?s ?x ?o` comes out as `SELECT ?s ?p ?o { ?s ?p ?o } ORDER BY ?s ?o`, bind and
 all, in one post-order pass.
 
-**A `GRAPH` rule cannot be tested through the generator.** `toAst` writes an `EXTEND` at the top of a
-graph pattern as a `SELECT` expression, exactly as it writes one that rose past the `GRAPH` — so the two
-outcomes print identically and the `GRAPH` cases assert on the algebra instead (`peelExtends` at the
-node, plus the scope invariant). Not a deviation in behaviour, but it is why those three tests look
-different from the rest.
+**A `GRAPH` rule cannot be tested through the generator**, and the reason is an upstream bug rather than a
+limit of the rule: `toAst` writes an `EXTEND` at the top of a graph pattern as a `SELECT` expression,
+which puts it *outside* the `GRAPH` it was inside, so the round trip changes the algebra and its `cVars`.
+`traqula-agent.md` §1 has the reproducer. The two outcomes therefore print identically here and the
+`GRAPH` cases assert on the algebra instead (`peelExtends` at the node, plus the scope invariant). Not a
+deviation in behaviour, but it is why those three tests look different from the rest.
 
 ### Tests — `test/pullUpExtends.test.ts`
 

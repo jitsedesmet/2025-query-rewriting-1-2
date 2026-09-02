@@ -47,7 +47,6 @@ SELECT * { ?s ?p ?o . ?a ?b ?c . BIND(<ex://a> AS ?x) }
 | `lib/transformations/removeProjections.ts` | the pattern for carrying information across `mapOperation`: a `Set`/`Map` keyed on the **original** node, since `transform` is handed `(copy, original)`. Phase 2 needs exactly this. |
 | `lib/transformations/pullUpExtends.ts` | the pass itself, once phase 1 shipped: the traversal, the `Candidate`/`FloatingBinds` machinery every rule is written against, and the `@fileoverview` carrying the argument for each. |
 | `lib/utils/extendChain.ts` | `peelExtends(c, op)` / `replantExtends(c, core, binds)` and the `ChainBind` they trade in. |
-| `traqula-agent.md` | upstream behaviours that shape the code here, with reproducers — most of all that `toAst` lifts an `EXTEND` out of a `GRAPH`, which is why the `GRAPH` cases assert on the algebra rather than on the generated string. |
 | `test/pushDownAssertions.test.ts` | the test harness to mirror: `createPartialContext()`, `parseQuery`, `c.generator.generate(toAst(...)).trim()`, and `toAlgebra(..., { quads: false })` for the `GRAPH` cases. |
 
 ## A.2 The invariant and the three side conditions
@@ -382,12 +381,15 @@ ordering, and the projection above — which never asked for `?x` — drops it. 
 BIND(:a AS ?x) } ORDER BY ?s ?x ?o` comes out as `SELECT ?s ?p ?o { ?s ?p ?o } ORDER BY ?s ?o`, bind and
 all, in one post-order pass.
 
-**A `GRAPH` rule cannot be tested through the generator**, and the reason is an upstream bug rather than a
-limit of the rule: `toAst` writes an `EXTEND` at the top of a graph pattern as a `SELECT` expression,
-which puts it *outside* the `GRAPH` it was inside, so the round trip changes the algebra and its `cVars`.
-`traqula-agent.md` §1 has the reproducer. The two outcomes therefore print identically here and the
-`GRAPH` cases assert on the algebra instead (`peelExtends` at the node, plus the scope invariant). Not a
-deviation in behaviour, but it is why those three tests look different from the rest.
+**Nothing rises above the query's own projection, and an `ORDER_BY` is not one of those.** An `EXTEND`
+between a `PROJECT` and its `ORDER_BY` is where SPARQL writes a `SELECT` expression — the conversion adds
+those before it wraps the `OrderBy` ([§18.3.4.4](https://www.w3.org/TR/sparql12-query/#selExpr) precedes
+[§18.3.5](https://www.w3.org/TR/sparql12-query/#convertSolMod), whose own list of modifiers has no step
+for them) — so a bind may rise past an ordering and reach the projection that discards it. A consequence
+worth knowing when reading a test: `toAst` prints an `EXTEND` in that chain as a `SELECT` expression
+either way, so an expected output showing a `BIND` in the select list is not evidence that the bind moved.
+`test/eval.test.ts` carries two order-preserving cases, since neither a sorted comparison nor a string
+comparison can see an ordering change.
 
 ### Tests — `test/pullUpExtends.test.ts`
 

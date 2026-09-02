@@ -68,9 +68,24 @@ describe('pullUpExtends', () => {
     expect(c.generator.generate(toAst(pullUpExtends(c, output))).trim()).toEqual(expected.trim());
   }
 
-  /** Transforms a query parsed *without* quads, so that a GRAPH survives as an operation of its own. */
+  /** Parses a query *without* quads, so that a GRAPH survives as an operation of its own. */
   function parseWithGraphOperation(query: string): Algebra.Operation {
     return toAlgebra(c.parser.parse(prefixes + query), { quads: false, blankToVariable: true });
+  }
+
+  /**
+   * {@link expectTransform} for a query whose GRAPH has to stay an operation, which is the only way to
+   * reach the GRAPH rule - {@link parseQuery} always asks for quads.
+   * @param expect - The assertion API of the running test
+   * @param query - The query to rewrite, without its prefixes
+   * @param expected - The query the rewrite has to generate
+   */
+  function expectTransformGraphOperation(expect: typeof Expect, query: string, expected: string): void {
+    const output = pullUpExtends(c, parseWithGraphOperation(query));
+    expect(c.generator.generate(toAst(output)).trim()).toEqual(expected.trim());
+    expect(scopeOf(output)).toEqual(scopeOf(parseWithGraphOperation(query)));
+    expect(holdsCachedMetadata(output)).toBe(false);
+    expect(c.generator.generate(toAst(pullUpExtends(c, output))).trim()).toEqual(expected.trim());
   }
 
   describe('congruent operations', () => {
@@ -231,8 +246,8 @@ ORDER BY ASC ( ?s )`,
       // `?x` holds a different value on every row and the ordering is a real one. Nothing moves either -
       // an unstable expression cannot rise - so this is the untouched tree, printed. `toAst` writes a
       // BIND at the top of a WHERE as a SELECT expression, which is where SPARQL's own algebra puts it
-      // (§18.3.4.4 extends before §18.3.5 orders), so the string re-parses to exactly this tree; see
-      // `traqula-agent.md` §3, which carries the argument. The assertion below says the bind did not move.
+      // (§18.3.4.4 extends before §18.3.5 orders), so the string re-parses to exactly this tree - which
+      // means an expected output like this one is no evidence either way. The assertion below is.
       const query = 'SELECT * WHERE { ?s :p ?o . BIND(RAND() AS ?x) } ORDER BY ?x';
       expectTransform(
         expect,
@@ -266,30 +281,68 @@ ORDER BY ASC ( ?x )`,
   });
 
   describe('a named graph', () => {
-    // A GRAPH is the one operation whose rule the generated string cannot show, and that is an upstream
-    // bug rather than a limit of the rule: `toAst` writes an EXTEND at the top of a graph pattern as a
-    // SELECT expression, which puts it *outside* the GRAPH it was inside. See `traqula-agent.md` §1 for
-    // the reproducer and the scope it changes. These cases therefore assert on the algebra.
+    // A GRAPH evaluates its pattern against each named graph and joins `{?g ↦ u}` on *outside* it, so `?g`
+    // is bound above where the pattern below may leave it unbound.
     it('rises out of a GRAPH when it does not read the graph variable', ({ expect }) => {
-      const parsed = parseWithGraphOperation('SELECT * WHERE { GRAPH ?g { ?s :p ?o BIND(:a AS ?x) } }');
-      const result = <Algebra.Project> pullUpExtends(c, parsed);
-      expect(bindsAtTopOf(result.input)).toEqual([ 'x' ]);
-      expect(scopeOf(result)).toEqual(scopeOf(parsed));
+      expectTransformGraphOperation(
+        expect,
+        'SELECT * WHERE { GRAPH ?g { ?s :p ?o BIND(:a AS ?x) } }',
+        `SELECT ?g ?o ?s ( <ex://a> AS ?x ) WHERE {
+  GRAPH ?g {
+    ?s <ex://p> ?o .
+  }
+}`,
+      );
+    });
+
+    it('rises when the pattern binds the graph variable certainly', ({ expect }) => {
+      // The escape hatch: `?g` reads the same inside as out, because the pattern binds it in every
+      // solution, so `e` is asked about the same value either side of the GRAPH.
+      expectTransformGraphOperation(
+        expect,
+        'SELECT * WHERE { GRAPH ?g { ?g :q ?w BIND(?g AS ?x) } }',
+        `SELECT ?g ?w ( ?g AS ?x ) WHERE {
+  GRAPH ?g {
+    ?g <ex://q> ?w .
+  }
+}`,
+      );
     });
 
     it('stays when it reads a graph variable the pattern does not certainly bind', ({ expect }) => {
-      const parsed = parseWithGraphOperation(
+      // The OPTIONAL leaves `?g` unbound on the rows it misses, where above the GRAPH it is always the
+      // graph name - so the bind would read a different value if it rose.
+      expectTransformGraphOperation(
+        expect,
         'SELECT * WHERE { GRAPH ?g { { ?s :p ?o } OPTIONAL { ?g :q ?w } BIND(?g AS ?x) } }',
+        `SELECT ?g ?o ?s ?w ?x WHERE {
+  GRAPH ?g {
+    {
+      ?s <ex://p> ?o .
+      OPTIONAL {
+        ?g <ex://q> ?w .
+      }
+      BIND( ?g AS ?x )
+    }
+  }
+}`,
       );
-      const result = <Algebra.Project> pullUpExtends(c, parsed);
-      expect(bindsAtTopOf(result.input)).toEqual([]);
-      expect(scopeOf(result)).toEqual(scopeOf(parsed));
     });
 
     it('stays when it writes the graph variable itself', ({ expect }) => {
-      const parsed = parseWithGraphOperation('SELECT * WHERE { GRAPH ?g { ?s :p ?o BIND(:a AS ?g) } }');
-      const result = <Algebra.Project> pullUpExtends(c, parsed);
-      expect(bindsAtTopOf(result.input)).toEqual([]);
+      // (C1) with the operation as the other binder: the GRAPH puts `?g` in every solution above it.
+      expectTransformGraphOperation(
+        expect,
+        'SELECT * WHERE { GRAPH ?g { ?s :p ?o BIND(:a AS ?g) } }',
+        `SELECT ?g ?o ?s WHERE {
+  GRAPH ?g {
+    {
+      ?s <ex://p> ?o .
+      BIND( <ex://a> AS ?g )
+    }
+  }
+}`,
+      );
     });
   });
 

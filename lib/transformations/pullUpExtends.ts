@@ -871,16 +871,17 @@ function floatThroughLeftJoin(c: TransformContext, leftJoin: Algebra.LeftJoin): 
   // TODO(phase 2): a right-hand side carrying the identical bind merges with the left, under
   // `V ⊆ cVars(L) ∩ cVars(R)`.
   for (const floatingBind of peeled.allBinds) {
-    const readsSameValuesAbove = [ ...floatingBind.bind.reads ].every(readVariable =>
-      floatingBind.scopeBelowBind.cVars.has(readVariable) ||
-      noOtherOperandBinds(readVariable, floatingBind.inputIndex, operands));
-    floatingBind.disposition = floatingBind.expressionIsStable &&
-      floatingBind.inputIndex === 0 &&
-      floatingBind.constructedTerm !== undefined &&
-      nothingElseBindsTheVariable(floatingBind, floatingBind.mustLeaveWith, operands) &&
-      readsSameValuesAbove ?
-      'rise' :
-      'stay';
+    if (floatingBind.expressionIsStable &&
+        floatingBind.inputIndex === 0 &&
+        floatingBind.constructedTerm !== undefined &&
+        nothingElseBindsTheVariable(floatingBind, floatingBind.mustLeaveWith, operands) &&
+        [ ...floatingBind.bind.reads ].every(readVariable =>
+          floatingBind.scopeBelowBind.cVars.has(readVariable) ||
+            noOtherOperandBinds(readVariable, floatingBind.inputIndex, operands))) {
+      floatingBind.disposition = 'rise';
+    } else {
+      floatingBind.disposition = 'stay';
+    }
   }
   const readers = leftJoin.expression === undefined ? [] : [ leftJoin.expression ];
   settlePartition(c, peeled, floatingBind => allReadersAdmitSubstitution(c, peeled, readers, floatingBind));
@@ -913,11 +914,13 @@ function floatThroughMinus(c: TransformContext, minus: Algebra.Minus): Algebra.O
   // Hoisting out of the right is meaningless - its bindings are out of scope above it - and dropping one
   // there waits for phase 2, licensed by `L.vRanges.neverBinds(?x)` rather than by the `needed` analysis.
   for (const floatingBind of peeled.allBinds) {
-    floatingBind.disposition = floatingBind.expressionIsStable &&
-      floatingBind.inputIndex === 0 &&
-      nothingElseBindsTheVariable(floatingBind, floatingBind.mustLeaveWith, operands) ?
-      'rise' :
-      'stay';
+    if (floatingBind.expressionIsStable &&
+        floatingBind.inputIndex === 0 &&
+        nothingElseBindsTheVariable(floatingBind, floatingBind.mustLeaveWith, operands)) {
+      floatingBind.disposition = 'rise';
+    } else {
+      floatingBind.disposition = 'stay';
+    }
   }
   settlePartition(c, peeled, () => true);
   return noBindLeaves(peeled) ?

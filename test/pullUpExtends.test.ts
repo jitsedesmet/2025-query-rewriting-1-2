@@ -227,6 +227,8 @@ ORDER BY ASC ( ?s )`,
     });
 
     it('keeps a comparator that is unstable rather than constant', ({ expect }) => {
+      // TODO: this test is wrong. Since the expression is not stable it cannot move.
+      //  also ?x becomes unbound to the orderBy
       // `RAND()` reads no variable either, which is why "mentions nothing" is the wrong test: it orders by
       // a different value every time it is asked.
       expectTransform(
@@ -259,6 +261,7 @@ ORDER BY ASC ( ?x )`,
   });
 
   describe('a named graph', () => {
+    // TODO: this sounds like a bug in toAST? We should make a `traqula-agent.md` file that explains the BUG.
     // A GRAPH is the one operation whose rule the generated string cannot show: `toAst` writes an EXTEND
     // at the top of a graph pattern as a SELECT expression, exactly as it writes one that rose past it.
     it('rises out of a GRAPH when it does not read the graph variable', ({ expect }) => {

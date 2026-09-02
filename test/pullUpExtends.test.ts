@@ -190,6 +190,8 @@ LIMIT 5`,
       // `?x` holds one value across the whole sequence, so it compares equal on every pair and decides no
       // ordering. The bind itself stays: nothing above the sealed ORDER BY can take it, and knowing that
       // nothing *reads* it is the analysis phase 2 brings.
+      // TODO: it would be nice if this allows us to drop the bind too. Is this possible? or planned in a next stage?
+      //  Without making the code much more complex.
       expectTransform(
         expect,
         'SELECT ?s ?p ?o WHERE { ?s ?p ?o . BIND(<ex://a> AS ?x) } ORDER BY ?s ?x ?o',

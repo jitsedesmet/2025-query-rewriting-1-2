@@ -835,6 +835,8 @@ function floatThroughJoin(c: TransformContext, join: Algebra.Join): Algebra.Oper
         const readsSameValuesAbove = [ ...floatingBind.bind.reads ].every(readVariable =>
           floatingBind.scopeBelowBind.cVars.has(readVariable) ||
             noOtherOperandBinds(readVariable, floatingBind.inputIndex, operands));
+        // TODO(future) think about cardinality estimates. Joins can restrict but also grow.
+        //  Here we say that we do not take the risk of pullUp in case the expression is complex.
         // The two operand checks are about two different variables and neither implies the other:
         // `nothingElseBindsTheVariable` is (C1), over the bind's *target* `?x`, and asks whether the
         // re-planted EXTEND would land on a solution that already binds it; `noOtherOperandBinds` above is

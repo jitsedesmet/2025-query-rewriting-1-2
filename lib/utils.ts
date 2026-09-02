@@ -131,6 +131,21 @@ export function collectVariableNames(astTransformer: TransformContext['astTransf
 }
 
 /**
+ * The direct child operations of a node, in order: the array of a multi-input operation such as a `JOIN`,
+ * the single input of a single-input one wrapped in a list, and an empty list for a leaf. It reads the
+ * shape off `input` itself - an `Operation[]` for a multi-input operation, an `Operation` for a
+ * single-input one - rather than enumerating the operation types.
+ * @param op - The operation whose children to read
+ * @returns its direct child operations
+ */
+export function childOperationsOf(op: Algebra.Operation): Algebra.Operation[] {
+  if (!('input' in op) || op.input === undefined) {
+    return [];
+  }
+  return Array.isArray(op.input) ? [ ...op.input ] : [ op.input ];
+}
+
+/**
  * Extracts direct variable assignments from the EXTEND chain at the top of an operation, keeping only the
  * ones whose expression is a Literal or a NamedNode.
  * @param op - The operation to search

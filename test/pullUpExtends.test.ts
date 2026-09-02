@@ -186,20 +186,31 @@ LIMIT 5`,
   });
 
   describe('ordering that decides nothing', () => {
-    it('drops a comparator over a variable a BIND fixes', ({ expect }) => {
+    it('drops a comparator over a variable a BIND fixes, and then the bind', ({ expect }) => {
       // `?x` holds one value across the whole sequence, so it compares equal on every pair and decides no
-      // ordering. The bind itself stays: nothing above the sealed ORDER BY can take it, and knowing that
-      // nothing *reads* it is the analysis phase 2 brings.
-      // TODO: it would be nice if this allows us to drop the bind too. Is this possible? or planned in a next stage?
-      //  Without making the code much more complex.
+      // ordering. Once the comparator is gone nothing in the ordering reads `?x`, so the bind rises past
+      // it - an ordering is not sealed, being below the projection rather than above it - and the
+      // projection, which never asked for `?x`, drops it.
       expectTransform(
         expect,
         'SELECT ?s ?p ?o WHERE { ?s ?p ?o . BIND(<ex://a> AS ?x) } ORDER BY ?s ?x ?o',
         `SELECT ?s ?p ?o WHERE {
   ?s ?p ?o .
-  BIND( <ex://a> AS ?x )
 }
 ORDER BY ASC ( ?s ) ASC ( ?o )`,
+      );
+    });
+
+    it('re-plants a bind the projection does ask for above the ordering', ({ expect }) => {
+      // The same rise, with nothing to drop it: `toAst` writes an EXTEND between a PROJECT and its
+      // ORDER_BY as a SELECT expression, which is exactly where SPARQL puts one.
+      expectTransform(
+        expect,
+        'SELECT ?s ?x WHERE { ?s :p ?o . BIND(:a AS ?x) } ORDER BY ?s',
+        `SELECT ?s ( <ex://a> AS ?x ) WHERE {
+  ?s <ex://p> ?o .
+}
+ORDER BY ASC ( ?s )`,
       );
     });
 

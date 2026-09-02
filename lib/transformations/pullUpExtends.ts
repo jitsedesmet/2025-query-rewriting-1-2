@@ -156,7 +156,12 @@ interface PeeledInputs {
 
 /**
  * The operations that make up a query's solution-modifier chain: what stands between the root of what this
- * pass is handed and the pattern the query is about.
+ * pass is handed and the pattern the query is about, and so what a bind may not rise into.
+ *
+ * An `ORDER_BY` is deliberately absent. It stands *below* the projection, so the gap a bind rises into
+ * there is the one a `SELECT` expression is written in, and SPARQL has a place for it; stopping the walk
+ * at one costs nothing either, a query's chain holding no further modifier below its ordering. That is
+ * what lets a bind an ordering no longer reads reach the projection that discards it.
  */
 const solutionModifierTypes = new Set<string>([
   Algebra.Types.ASK,
@@ -166,7 +171,6 @@ const solutionModifierTypes = new Set<string>([
   Algebra.Types.DISTINCT,
   Algebra.Types.REDUCED,
   Algebra.Types.SLICE,
-  Algebra.Types.ORDER_BY,
   Algebra.Types.FROM,
 ]);
 
@@ -217,7 +221,7 @@ export function pullUpExtends<T extends Algebra.Operation>(c: TransformContext, 
       transform: group => floatThroughGroup(c, group),
     },
     [Algebra.Types.ORDER_BY]: {
-      transform: (orderBy, original) => floatThroughOrderBy(c, orderBy, sealed.has(original)),
+      transform: orderBy => floatThroughOrderBy(c, orderBy),
     },
     [Algebra.Types.GRAPH]: {
       transform: graph => floatThroughGraph(c, graph),
@@ -611,15 +615,9 @@ function floatThroughFilter(c: TransformContext, filter: Algebra.Filter): Algebr
  * Floats binds through an `ORDER_BY`, whose ordering expressions are its readers.
  * @param c - The transformation context
  * @param orderBy - The ordering to float through
- * @param sealed - Whether it is part of the query's solution-modifier chain, which nothing rises into
  * @returns the rewritten operation
  */
-function floatThroughOrderBy(c: TransformContext, orderBy: Algebra.OrderBy, sealed: boolean): Algebra.Operation {
-  // Nothing here drops either, so a sealed ordering has nothing left to *float* - but its comparators can
-  // still be cleaned, and a root ORDER BY is exactly where a query writes them.
-  if (sealed) {
-    return cleanStaticFromOrder(c, orderBy);
-  }
+function floatThroughOrderBy(c: TransformContext, orderBy: Algebra.OrderBy): Algebra.Operation {
   const peeled = peelInputs(c, [ orderBy.input ]);
   // An EXTEND maps element-wise and preserves the sequence, so the order the comparators produce is the
   // same whether the bind is applied below or above them.

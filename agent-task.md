@@ -277,9 +277,12 @@ other row is cardinality-non-increasing, so no gate there.
 **Nothing rises into the query's solution-modifier chain.** The `PROJECT` rise, applied at the query's own
 projection, produces `Extend(Project(…))`: legal algebra that `toAst` cannot render, since SPARQL has
 nowhere to write a `BIND` above a `SELECT` or between it and its `LIMIT`. So the pass walks the chain of
-`ASK`/`CONSTRUCT`/`DESCRIBE`/`PROJECT`/`DISTINCT`/`REDUCED`/`SLICE`/`ORDER_BY`/`FROM` at the top of what
-it is handed and blocks rises out of those nodes — **drops still fire**, which is what keeps the main drop
-site working. Nothing is lost by it: a hoist past the outermost projection has nothing above it to rise
+`ASK`/`CONSTRUCT`/`DESCRIBE`/`PROJECT`/`DISTINCT`/`REDUCED`/`SLICE`/`FROM` at the top of what it is handed
+and blocks rises out of those nodes — **drops still fire**, which is what keeps the main drop site working.
+An `ORDER_BY` is deliberately *not* on that list: it stands below the projection, so the gap a bind rises
+into there is the one a `SELECT` expression is written in, and a query's chain holds no further modifier
+below its ordering, so stopping the walk there loses nothing. That is what lets a bind an ordering no
+longer reads reach the projection that discards it. Nothing is lost by it: a hoist past the outermost projection has nothing above it to rise
 to, and the report says as much ("pointless at the root"). Nothing is lost in the pipeline either,
 `queryTransform` stripping that projection before any transformation runs. A sub-`SELECT` is unaffected,
 except in the degenerate `{ { SELECT … } }` where its `PROJECT` is *itself* on the chain.
@@ -318,8 +321,10 @@ too, which is sound because it only *permutes* a sequence
 ([§18.2.5.2](https://www.w3.org/TR/sparql12-query/#defn_algOrderBy)) and so leaves the same multiset with
 the same scope. `cleanStaticFromOrder` reads the constant variables off the chain below it, which is why
 `ORDER BY ?s ?x ?o` over `BIND(:a AS ?x)` loses its middle comparator without `?x` having to move at all.
-The two rewrites cascade: an `ORDER_BY` that disappears leaves the projection above it looking at an
-`EXTEND` chain, where its drop rule reaches a bind it could not before.
+The rewrites then cascade: a comparator that goes is one fewer reader of `?x`, so the bind rises past the
+ordering, and the projection above — which never asked for `?x` — drops it. `SELECT ?s ?p ?o { ?s ?p ?o .
+BIND(:a AS ?x) } ORDER BY ?s ?x ?o` comes out as `SELECT ?s ?p ?o { ?s ?p ?o } ORDER BY ?s ?o`, bind and
+all, in one post-order pass.
 
 **A `GRAPH` rule cannot be tested through the generator.** `toAst` writes an `EXTEND` at the top of a
 graph pattern as a `SELECT` expression, exactly as it writes one that rose past the `GRAPH` — so the two

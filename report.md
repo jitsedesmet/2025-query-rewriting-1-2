@@ -14,6 +14,10 @@ a scan into one assignment on a smaller intermediate result — or disappears.
 
 One new pass, `lib/transformations/pullUpExtends.ts`, exported as `pullUpExtends(c, op)`.
 
+**Status.** Phase 1 (§9) is implemented; §§2–4 below describe what it does. Where the implementation
+departed from this design, the paragraph says so and `agent-task.md` carries the argument. Phases 2–4 are
+still design.
+
 ## 1. What floats
 
 A **floatable bind** is an `Extend(A, ?x, e)` whose expression `e` is **stable**: a pure function of the
@@ -37,13 +41,15 @@ here, the `bound(?x)` fold of §3; nothing else needs it.
 **Never stable**, so never floats: `RAND`, `UUID`, `STRUUID`, `BNODE` — §17.4.2.14 fixes a blank node per
 solution mapping *and* argument, so a row a join copies gets one node below the join and several above it.
 `NOW` *is* stable, "all calls … in any one query execution must return the same value" (§17.4.5.1), which
-is the one place this predicate parts ways with the `isStaticExpression` already in the repo (§7).
+is the one place this predicate parts ways with the `isStaticExpression` it replaced (§7).
 `ExpressionTypes.NAMED` is opaque and unstable unless allowlisted, `EXTENSION_FUNCTION_BNODE`
 (`internal://blank`, the internal form of the `bnodeConsistent` extension function the README documents)
 being the first entry: "same inputs = same identity" is exactly stability. `ExpressionTypes.EXISTENCE` is
 a **`TODO`**, as it is in the pushdown: it is stable per solution, but it reads `vars(P)` of a nested
 pattern rather than anything visible in the expression tree, and it is evaluated against the active
-graph. Nothing holding an `EXISTS` floats until that is worked out. `AGGREGATE` and `WILDCARD` cannot
+graph. Nothing holding an `EXISTS` floats until that is worked out. Note that this is about a bind
+*holding* one; a bind floating past a `FILTER(EXISTS { … })` that does not read it is a different
+question, and §3 answers it yes. `AGGREGATE` and `WILDCARD` cannot
 occur in a `BIND`.
 
 **The unit is the chain, not the node.** Peel the maximal `EXTEND` chain at the top of a subtree into an
@@ -110,10 +116,14 @@ SPARQL does not distinguish them, and the special forms that handle errors speci
 
 - **`bound(?x)`** reads unboundness instead of propagating it, and takes a bare `Var`, so `bound(e)` is
   not grammatical. It folds to `true` only for a **certain** bind (§1); otherwise the hoist blocks.
-- **A condition holding an `EXISTS` / `NOT EXISTS`** is a barrier, and a `TODO` rather than a rule: `μ`
-  is substituted into the nested *pattern*, where an expression cannot go and an unbound `?x` stays a
-  variable that matches anything. `substituteInExpression` leaves `EXISTENCE` untouched for the same
-  reason — the pushdown does not send assertions through one either, and carries the same `TODO`.
+- **A condition holding an `EXISTS` / `NOT EXISTS` *and reading `?x`*** is a barrier, and a `TODO` rather
+  than a rule: `μ` is substituted into the nested *pattern*, where an expression cannot go and an unbound
+  `?x` stays a variable that matches anything. `substituteInExpression` leaves `EXISTENCE` untouched for
+  the same reason — the pushdown does not send assertions through one either, and carries the same
+  `TODO`. A condition whose `EXISTS` does *not* mention `?x` is no barrier at all, and the implementation
+  says so: the nested pattern is evaluated against a solution mapping that does not hold `?x` either way,
+  so the hoist changes nothing about it. `collectVariableNames` sees into the pattern, so the reads test
+  answers this for free — which is why the relaxation §9 filed under phase 4 arrived with phase 1.
 
 **Wanted only when free.** Substitution is the price of hoisting past a reader, not a bonus. With `k`
 occurrences of `?x` in the reader, one evaluation of `e` per row becomes `k+1` — `k` in the reader plus
@@ -127,6 +137,14 @@ This lands on the existing API rather than fighting it: `AssertionView.resolve` 
 that call rather than by it — an uncertain bind comes back as the ungrammatical `bound(<:a>)`, an `EXISTS`
 comes back untouched. A general substitute-an-expression-for-a-variable helper is one we never write.
 
+**A third precondition the implementation added.** `e` is written into a reader that *stays where it is*,
+so it has to mean down there what it meant up here. If another bind of the same chain is also leaving and
+stood **below** this one, a variable of `V` that it used to supply is unbound at the reader's position,
+and the substitution changes the answer. So: substitute only when no departing bind below this one writes
+a variable `e` reads. Vacuous for a ground `e`, which is the overwhelming majority, and the same fact is
+what makes the *stayers* of a chain need the substitution in the first place (§1, last paragraph) — the
+one place this design under-specified and the implementation had to close.
+
 ## 4. Per-operation rules
 
 (C1) and (C2) have content only where an operation has several inputs; on the single-input rows they hold
@@ -134,21 +152,21 @@ vacuously and what decides is the *readers* — a condition, an ordering express
 
 | Operation | Bind may rise | Licence, beyond (C1)+(C2) |
 | --- | --- | --- |
-| `FILTER` | yes | condition must not mention `?x`, or `e` is a term expression and substitutes in (§3). **A condition holding an `EXISTS` is a barrier (`TODO`, §3).** |
+| `FILTER` | yes | condition must not mention `?x`, or `e` is a term expression and substitutes in (§3). **A condition whose `EXISTS` reads `?x` is a barrier (`TODO`, §3); one that does not is not.** |
 | `EXTEND` | — | not a swap: the chain is one unit, see §1. |
-| `PROJECT` | **drop** if `?x ∉ variables`; else yes | to rise, `V ⊆ variables`, and `?x` is struck from `variables` — not for (C1), which the projection satisfies either way, but so the sub-`SELECT` does not carry an always-unbound column and the metadata stays honest. `pVars` at the swap is unchanged: `(variables \ {?x}) ∪ {?x}`. Pointless at the root, where there is nothing above to rise to. The main drop site. |
+| `PROJECT` | **drop** if `?x ∉ variables`; else yes | to rise, `V ⊆ variables`, and `?x` is struck from `variables` — not for (C1), which the projection satisfies either way, but so the sub-`SELECT` does not carry an always-unbound column and the metadata stays honest. `pVars` at the swap is unchanged: `(variables \ {?x}) ∪ {?x}`. Pointless at the root, where there is nothing above to rise to — and worse than pointless, so the rise is *blocked* there (see below the table). The drop is not. The main drop site. |
 | `GROUP` | **drop** if `?x` is neither a key, nor read by an aggregate, nor an aggregate target; else barrier | second drop site. The reads matter: an `aggregates` entry is a `BoundAggregate`, an `expression` over the input beside the `variable` it writes, so `GROUP BY ?k (SUM(?x) AS ?s)` reads an `?x` that is neither key nor target. A refinement for a constant key is deferred to phase 4. |
 | `DISTINCT` / `REDUCED` | yes | unconditional: `e` is a deterministic function of the row, so the extra column never refines the equivalence classes. |
 | `ORDER_BY` | yes | expressions must not mention `?x` (or substitute, §3). `EXTEND` maps element-wise and preserves the sequence. |
 | `SLICE` | yes | unconditional — `EXTEND` is a bijection on rows and preserves order. One of the few places the pull-up goes where the pushdown may not. |
 | `FROM` | yes | congruent. |
 | `JOIN` | yes | (C1)/(C2) over the siblings, *or* a sibling carries the identical bind (**merge**, below). Cardinality-increasing, so subject to the cost gate below. |
-| `LEFT_JOIN`, from the **LHS** | yes | `R.vRanges.neverBinds(?x)`, or `R` carries the identical bind; the condition is treated like a `FILTER`. Cost gate applies. |
+| `LEFT_JOIN`, from the **LHS** | yes | `R.vRanges.neverBinds(?x)`; the condition is treated like a `FILTER`. Cost gate applies. The "or `R` carries the identical bind" case is the `LEFT_JOIN` merge, which belongs to phase 2 and is not implemented. |
 | `LEFT_JOIN`, from the **RHS** | no | hoisting would bind `?x` on the unmatched left rows, where it must stay unbound. Drop-only (§5). |
 | `MINUS`, from the **LHS** | yes | `R.vRanges.neverBinds(?x)` — an `R` that binds `?x` changes both the compatibility and the domain-disjointness test, though `pVars(Minus) = pVars(L)` means it never reaches the re-planted bind. (C2) is vacuous, as in `UNION`: the output mapping *is* `μ_L`. |
 | `MINUS`, from the **RHS** | no | RHS bindings are out of scope above. Droppable when `L.vRanges.neverBinds(?x)`: then `?x` is in neither test. |
 | `UNION` | only when **every** branch floats the same bind | same `?x`, `e` structurally equal and stable — and no (C2) condition, since a union merges nothing: the solution above *is* the branch solution, so `e` is asked about the same μ either way. Hoisting from one branch alone would bind `?x` in the others' solutions; adding it to the others instead would *grow* `cVars(union)`, a wrong answer rather than a conservative one. Subsumes `pushUpBoundedFromUnion`. |
-| `GRAPH ?g` | yes | `?x ≠ ?g`, and `?g ∉ V` unless `?g ∈ A.cVars` — `?g` is bound by the join *outside* the pattern. |
+| `GRAPH ?g` | yes | `?x ≠ ?g`, and `?g ∉ V` unless `?g ∈ A.cVars` — `?g` is bound by the join *outside* the pattern. A bind *of* `?g` is not merely blocked: that outside join makes it a graph selection, `Graph(?g, Extend(P, ?g, :a)) ≡ Extend(Graph(:a, P), ?g, :a)`, which is phase 4. |
 | `SERVICE` | no | barrier, as in the pushdown: `SILENT` turns endpoint failure into one empty solution, where the hoisted bind would still bind `?x`. Carries a `TODO(future)` in the code, as `pushIntoGraph` does — letting a non-`SILENT` service release a bind is sound and reduces what is shipped to the endpoint. |
 | `BGP`, `PATH`, `VALUES` | — | leaves. |
 
@@ -161,7 +179,8 @@ vacuously and what decides is the *readers* — a condition, an ordering express
 but the join is only enforcing an equality that already holds. Let `S` be the operands carrying a
 structurally equal, stable `BIND(e AS ?x)`. If **`V ⊆ O.cVars` for every `O ∈ S`**, join compatibility
 forces every `?y ∈ V` to one value across the merge, `e` is stable, so every carrier computed the same
-`?x`: that component of the compatibility test is a tautology and the copies collapse into one.
+`?x`: that component of the compatibility test is a tautology and the copies collapse into one. Where the
+survivor goes is the *cost* question, and the gate below answers it.
 
 ```
 Join(Extend(A, ?x, e), Extend(B, ?x, e))  ≡  Extend(Join(A, B), ?x, e)
@@ -176,14 +195,39 @@ half computes `e` on `μ_L` either way, but that half always deserves a second l
 **The cost gate.** A term expression is free to re-evaluate, so its pull-up is a pure win everywhere. A
 `f(?s)` is not: `JOIN` and `LEFT_JOIN` may *increase* cardinality, so a hoisted bind can be evaluated
 more often than the original. Every other operation in the table is cardinality-non-increasing (a
-`GRAPH ?g` evaluates its pattern once per graph either way), so the gate is narrow:
+`GRAPH ?g` evaluates its pattern once per graph either way, and a `UNION` puts the branch solution
+straight through, so `|A| + |B|` evaluations stay `|A| + |B|`), so the gate is narrow:
 
-> Past a `JOIN` or `LEFT_JOIN`, a non-term expression rises only under the **merge** rule, which deletes
-> an evaluation outright. A single carrier stays put.
+> Past a `JOIN` or `LEFT_JOIN`, only a term expression rises.
 
-It is a trade, not a truth: a single-carrier rise wins whenever the join is selective and loses whenever
-it fans out, and nothing in the algebra tells us which. Revisit if cardinality estimates ever reach this
-pass.
+**An earlier draft of this section exempted the merge**, on the grounds that it "deletes an evaluation
+outright". It does not, and the arithmetic is worth writing out. Hoisting a merged bind gives
+`Extend(Join(A, B), ?x, e)`: `|A ⋈ B|` evaluations, against the `|A| + |B|` the two copies cost. That is
+a win on a selective join and a rout on one that fans out — two operands of a thousand rows sharing one
+`?s` join to a million, turning 2 000 evaluations into 1 000 000. The merge is a *better-odds* bet than
+the single-carrier hoist, its budget being `|A| + |B|` rather than `|A|`, but it is the same bet, and the
+policy here is not to take it.
+
+What the merge *can* do at no risk is delete the duplicates and leave the survivor where it stands:
+`|A|` evaluations, better than `|A| + |B|` whatever the join does. So the rule splits by what the
+expression costs rather than by how many carriers there are — a term construction rises, anything else
+collapses in place — and only the *hoist* half needs (C1), nothing being re-planted above the join in the
+other.
+
+It stays a trade rather than a truth, and nothing in the algebra tells us which way a given join goes.
+Revisit if cardinality estimates ever reach this pass.
+
+**Nothing rises into the query's own solution modifiers.** A restriction the implementation had to add,
+and a syntactic one rather than a semantic one: the `PROJECT` rise applied at the query's own projection
+yields `Extend(Project(…))`, which is sound algebra that `toAst` cannot render, SPARQL having nowhere to
+write a `BIND` above a `SELECT` or between it and its `LIMIT`. So the chain of
+`ASK`/`CONSTRUCT`/`DESCRIBE`/`PROJECT`/`DISTINCT`/`REDUCED`/`SLICE`/`ORDER_BY`/`FROM` at the top of
+whatever the pass is handed is sealed against *rises*; *drops* still fire there, which is what keeps the
+main drop site working. It costs nothing: the row above already calls that hoist pointless, and §5's
+`queryTransform` strips the outer projection before any transformation runs, so the sealed chain is
+usually empty. A sub-`SELECT` is untouched by it, so the `PROJECT`, `DISTINCT`, `SLICE` and `ORDER_BY`
+rows are still reachable from a parsed query; `FROM` is the one that is not, SPARQL admitting it only at
+the top of a query, and it is exercised against a hand-built algebra instead.
 
 **`pVars`/`cVars` discipline.** Every hoist is a swap in the sense of §2: `?x` leaves the
 `vRanges`/`cVars` of the operation it rose past, and the re-planted `EXTEND` puts it back before
@@ -245,25 +289,33 @@ an `EXTEND` or strictly decreases its depth, so one bottom-up traversal is a fix
   the time a node is visited its children have already floated everything they can to their own top, so
   the floating list is just the `EXTEND` chain at the top of each input: no custom recursion, and no
   second pass to reach a fixpoint.
-- **New shared util** `lib/utils/extendChain.ts`: `peelExtends(op) → { core, binds }` and
-  `replantExtends(c, op, binds)`. Generalises `directExtensions` (Literal/NamedNode only, loses order)
-  and `deleteVarExtensionsInPlace` (in-place, name-list based) from `lib/utils.ts`. The second dies with
+- **New shared util** `lib/utils/extendChain.ts`: `peelExtends(c, op) → { core, binds }` and
+  `replantExtends(c, core, binds)`. Generalises `directExtensions` (Literal/NamedNode only, loses order)
+  and `deleteVarExtensionsInPlace` (in-place, name-list based) from `lib/utils.ts`. The second died with
   `pushUpBoundedFromUnion`, which is **deleted**, its `UNION` rule being the row in §4; the first stays
-  where it is, `nullifyJoinOverIncompatibleBounds` being its other caller.
+  where it is, `nullifyJoinOverIncompatibleBounds` being its other caller. A `ChainBind` also carries the
+  `EXTEND` node it was read off, which is what lets a licence ask what holds *where the bind is
+  evaluated*: `?y ∈ cVars` of the whole input is also satisfied by a bind further up the chain writing
+  `?y`, and that is precisely a `?y` this bind reads unbound.
 - **Two predicates**, both needing tests of their own since every rule leans on them.
-  `isStableExpression(e)` is the existing `isStaticExpression` without its "no variables" clause: the
+  `isStableExpression(c, e)` is the former `isStaticExpression` without its "no variables" clause: the
   same `bnode`/`rand`/`uuid`/`struuid` walk and the same `NAMED`/`EXISTENCE`/`AGGREGATE`/`WILDCARD`
-  rejections, with `now` off the list (§1) and the `NAMED` allowlist on it. Nothing calls
-  `isStaticExpression` today, so this is a generalisation in place rather than a second predicate.
+  rejections, with `now` off the list (§1) and the `NAMED` allowlist on it. Nothing called
+  `isStaticExpression`, so this is a generalisation in place rather than a second predicate.
   `expressionsEqual(a, b)`, for the merge and the `UNION` rule, is ours: the algebra ships no structural
   equality — `Canonicalizer` only renames blank nodes — so it is a structural walk, not
   generate-and-compare.
-- **Reused as-is:** `withCpVars`/`withoutCpVars`/`CPMeta`/`VRanges` for every licence;
+- **Reused as-is:** `withCpVars`/`withoutCpVars`/`CPMeta`/`VRanges` for every licence - with `cpMetaOf`,
+  the "read it, do not annotate with it" wrapper both passes had grown privately, lifted into
+  `certainlyBoundVars.ts` so that they share one;
   `substituteInExpression` for §3; `collectVariableNames` for "does this expression mention `?x`" and
   for `vars(e)`.
 - **Metadata hygiene:** moving a node invalidates the cached `CPMeta` of everything it moved past. Enter
-  through `withoutCpVars`, delete the metadata of every node this pass rebuilds, and read `cpVars` only
-  off inputs as `mapOperation` hands them back. The likeliest source of a subtle bug; give it a test.
+  through `withoutCpVars`, delete the metadata of every node this pass rebuilds, and read `cpMetaOf` only
+  off inputs as `mapOperation` hands them back. The likeliest source of a subtle bug; give it a test. In
+  the end it needed no deletion at all: everything the pass emits is built fresh through the factory, so
+  the only cached metadata that survives sits on the cores nothing moved, where it is still true — and
+  the test asserts no `metadata` is left on the way out.
 
 ## 8. Pipeline placement
 
@@ -282,7 +334,7 @@ operationTransform → pushDownAssertions → transformFilterFalse
 
 ## 9. Phases and tests
 
-1. **Phase 1** — `peelExtends`/`replantExtends`, `isStableExpression`/`expressionsEqual`, the congruent
+1. **Phase 1, shipped** — `peelExtends`/`replantExtends`, `isStableExpression`/`expressionsEqual`, the congruent
    operations (`FILTER`, `DISTINCT`, `REDUCED`, `ORDER_BY`, `SLICE`, `FROM`, `GRAPH`), `JOIN` with the
    merge rule and the cost gate, `LEFT_JOIN` LHS, `MINUS` LHS, the all-branch `UNION` rule, and the two
    syntactic drop sites. Term and stable operator expressions both. Delete `pushUpBoundedFromUnion`.
@@ -291,7 +343,8 @@ operationTransform → pushDownAssertions → transformFilterFalse
 3. **Phase 3** — transfer and weak assertion, flag-gated, with the idempotence guard.
 4. **Phase 4, edge cases** — the `GROUP`-over-a-constant-key hoist (`Group(A, keys \ {?x}, aggs)`,
    blocked when `keys = {?x}`, since a keyless `GROUP` over the empty input yields one group where
-   `GROUP BY ?x` yields none); `NAMED` allowlisting, and `EXISTS` — in a bind or in a condition (§3);
+   `GROUP BY ?x` yields none); `NAMED` allowlisting, and `EXISTS` in a *bind* (the condition half of it
+   landed with phase 1, §3);
    substituting a non-term `e` where
    `k = 1` and `?x` is dead above, which is break-even and deletes a node but needs §5's analysis.
 
@@ -305,3 +358,9 @@ pullUpExtends`). A **fixpoint check against `pushDownAssertions`**, so the pair 
 oscillate. And evaluation tests in
 `test/eval.test.ts` for `OPTIONAL`, `MINUS`, `UNION` and a sub-`SELECT`, since those are where a wrong
 `cVars` silently changes `SELECT *` without any test on the generated string noticing.
+
+Phase 1 shipped all of that as 60 cases in `test/pullUpExtends.test.ts` and 5 in `test/eval.test.ts`,
+with the scope invariant, idempotence and metadata check folded into the assertion helper so that every
+case pays for them. Two things the generated string cannot show, and which are asserted on the algebra
+instead: the `GRAPH` rules, since `toAst` writes an `EXTEND` at the top of a graph pattern exactly as it
+writes one that rose past the `GRAPH`; and the `FROM` rule, which no parsed query can reach.

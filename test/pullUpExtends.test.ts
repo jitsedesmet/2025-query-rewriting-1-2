@@ -432,6 +432,7 @@ ORDER BY ASC ( ?x )`,
     });
 
     it('merges two carriers of one non-term bind into a single one above the join', ({ expect }) => {
+      // TODO: I would expect not to pull since the expression is too expensive?
       expectTransform(
         expect,
         `SELECT * WHERE {

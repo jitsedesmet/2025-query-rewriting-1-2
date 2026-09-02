@@ -4,7 +4,8 @@
 every `§n` below points into it. `task.md` is the original request.
 
 **How to use this document.** Four phases, four PRs, one agent per PR, in order. Section
-[A. Shared ground](#a-shared-ground) is read by every agent; after that, an agent reads **only its own
+[A. Shared ground](#a-shared-ground), house rules (§A.6) and code style (§A.7) included, is read by every
+agent; after that, an agent reads **only its own
 phase section** and treats the later ones as non-existent. Every phase ends green on its own: it ships
 its own tests and keeps every earlier phase's tests passing. Do not start a later phase inside an earlier
 PR — if you find yourself needing something listed under a later phase, block the case and leave a
@@ -136,12 +137,54 @@ Three things must be decided **before** that call, not by it:
   the tests move with it in the same PR. Leave no compatibility shim and no deprecated alias behind.
 - `yarn test` green — the new tests and every existing suite. `yarn lint` clean. `yarn build` clean.
 - TSDoc with `@param`/`@returns` on every export, and match the comment density of the files around you:
-  this repo explains *why* in prose, not *what*.
-- No `any` beyond the `<'unsafe', T>` pattern the other passes use.
+  this repo explains *why* in prose, not *what*. §A.7 says how much of it goes in the doc block.
 - Every phase's test file must include the **scope invariant helper**: for each case, `withCpVars` of the
   output has the same `cVars` and the same `vRanges` key set at the root as `withCpVars` of the input.
 - Every phase must keep **idempotence** (`pullUpExtends ∘ pullUpExtends = pullUpExtends`) and the
   **no-oscillation** check against `pushDownAssertions` green.
+
+## A.7 Code style
+
+House style, collected from review. `yarn lint` enforces none of it, so it is on the author.
+
+**Naming.** Long, descriptive names for functions, variables, types and fields, over short ones that do
+not say what the thing is. `settle`, `assemble`, `Candidate`, `below`, `group` are the kind to reject;
+`settlePartition`, `assembleRewrittenNode`, `FloatingBind`, `scopeBelowBind`, `mustLeaveWith` are the kind
+to write. This holds even where nearby older code is terser: match the *comment density* of the files
+around you, not their abbreviations.
+
+**Placement.** A function lives in the module most relevant to it, not in whichever file first needed it.
+A generic predicate over an `Algebra.Expression` belongs in `lib/utils/expressionHelpers.ts` even when one
+pass is its only caller today; a helper two passes have each grown privately belongs in `lib/utils/`.
+
+**Doc comments.** A JSDoc block is **1-2 sentences** saying what the thing does, then `@param` for every
+parameter and `@returns`. Not a multi-paragraph essay, however good the essay. The reasoning is not
+deleted, it is relocated: a rule-specific argument becomes a comment in the *body*, directly above the
+decision it justifies, and a pass-wide one belongs in the file's `@fileoverview`, which is a file header
+rather than a symbol's JSDoc and stays as long as it needs to be. An `@example` earns its place where the
+shape of the argument or the return is easier shown than said.
+
+**Control flow.**
+
+- Positive nesting over a guard that jumps: inside a loop body, prefer `if (ok) { … }` to
+  `if (!ok) { continue; } …`. (An early `return` that skips *whole work* — a function that has nothing to
+  do at all — is the different case, and is fine.)
+- An `if`/`else` statement over a multi-line ternary, wherever the ternary would not fit on one line.
+- Two sequential `if`s with the same body are one `if` with a compound condition.
+
+**TypeScript.**
+
+- No `!` non-null assertion. Test the value explicitly, even where the surrounding argument proves it
+  cannot be `undefined`.
+- No `any` beyond the `<'unsafe', T>` pattern the other passes use.
+- Let inference do the work: a callback parameter whose type the signature already fixes is written
+  bare, without a redundant annotation.
+- A `switch` over a closed union is written **exhaustively, with no `default`**, so that a new member of
+  the union becomes a compile error rather than a silent fall-through.
+
+**Comments.** Short ones that name the intent, at the point of the decision, are welcome on top of the
+prose — `// Needed for valid grammar`, `// List of equal groups for a var`. A comment has to state its
+condition the right way round: one that reads as the opposite of the branch it sits on is a defect.
 
 # Phase 1 — the pass
 

@@ -382,8 +382,9 @@ function readerAdmitsSubstitution(
   // `substituteInExpression` leaves EXISTENCE untouched for that reason, and the pushdown carries the
   // same TODO.
   // TODO(phase 4): work out what a substitution into a nested pattern would mean.
-  // TODO: should we differentiate between the Triple/Quad term expression `<<( )>>` and the `TRIPLE()` Operation?
-  //   Maybe we can normalize in place? Or have we normalized already before?
+  //
+  // Read off `constructedTerm` rather than off the expression's own shape, so that `<<( s p o )>>` and the
+  // `TRIPLE(s, p, o)` the parser keeps distinct from it answer this the same way.
   if (floatingBind.constructedTerm === undefined || containsExistenceExpression(reader)) {
     return false;
   }
@@ -716,7 +717,8 @@ function floatThroughProject(c: TransformContext, project: Algebra.Project, seal
       }
     }
   }
-  // TODO: Why can we do isStillLicenced always true while it gets recomputed for the other operations?
+  // `() => true` is exact here rather than a shortcut: a projection owns no reader expression, and that is
+  // the only licence pinning can change - see {@link settlePartition}.
   settlePartition(c, peeled, () => true);
   return noBindLeaves(peeled) ?
     project :

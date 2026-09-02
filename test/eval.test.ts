@@ -123,6 +123,58 @@ describe('evaluation tests', () => {
       expect(original).toHaveLength(expectedRows);
     }
 
+    /**
+     * The rows of a query in the order it returns them, which {@link bindings} deliberately throws away.
+     * @param query - The query to run, prefixes included
+     * @returns one string per row, in sequence
+     */
+    async function sequence(query: string): Promise<string[]> {
+      const rows: RDF.Bindings[] = await arrayifyStream(
+        await engine.queryBindings(query, { sources: [ './test/statics/assertionPushdown.ttl' ]}),
+      );
+      return rows.map(row => [ ...row ].map(([ key, value ]) => `${key.value}=${value.value}`).sort().join('|'));
+    }
+
+    /**
+     * Runs both versions of a query with an `ORDER BY` and compares the sequences, not the sets.
+     * @param expect - The assertion API of the running test
+     * @param query - The query to rewrite, without its prefixes
+     * @param expected - The rows the query returns, in order
+     */
+    async function assertSameSequence(
+      expect: ExpectStatic,
+      query: string,
+      expected: string[],
+    ): Promise<void> {
+      const evalQuery = pullUpPrefixes + query;
+      const rewritten = c.generator.generate(toAst(pullUpExtends(c, parseQuery(c, evalQuery)))).trim();
+      const original = await sequence(evalQuery);
+      expect(await sequence(pullUpPrefixes + rewritten)).toEqual(original);
+      expect(original).toEqual(expected);
+    }
+
+    it('orders the same when the bind rises past the ORDER BY', async({ expect }) => {
+      // The rewrite here is `project(extend(orderby(…)))` - the bind *above* the ordering - which `toAst`
+      // writes as a SELECT expression and a parser reads back as `project(orderby(extend(…)))`. Sound
+      // because an EXTEND is element-wise and order-preserving, and the ordering does not read `?t`; this
+      // is the case a string comparison cannot check, since both trees print the same.
+      await assertSameSequence(expect, 'SELECT * WHERE { VALUES ?v { 3 1 2 } BIND(:tag AS ?t) } ORDER BY ASC(?v)', [
+        't=ex://tag|v=1',
+        't=ex://tag|v=2',
+        't=ex://tag|v=3',
+      ]);
+    });
+
+    it('orders the same when the comparator is the substitution', async({ expect }) => {
+      // `ORDER BY ?x` becomes `ORDER BY ?v` as `?x` rises through it, so a wrong substitution would show
+      // up here as a different order rather than as a different set.
+      await assertSameSequence(expect, 'SELECT ?v WHERE { VALUES ?v { 3 1 2 } BIND(?v AS ?x) } ORDER BY DESC(?x)', [
+        'v=3',
+        'v=2',
+        'v=1',
+      ]);
+    });
+
     it('keeps what an OPTIONAL leaves unbound unbound', async({ expect }) => {
       await assertEquivalent(expect, `SELECT * WHERE {
         { ?x :p ?y BIND(:a AS ?b) }

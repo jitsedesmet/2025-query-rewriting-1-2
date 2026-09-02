@@ -53,9 +53,25 @@ fire there. See §A.7 and the phase-1 deviations in `agent-task.md`.
 The same flattening as entry 1, in the place it belongs. `Project(Extend(OrderBy(P), ?x, e))` prints as
 `SELECT … (e AS ?x) … ORDER BY …`, which re-parses to `Project(OrderBy(Extend(P, ?x, e)))`.
 
-That is faithful rather than lucky: SPARQL's own algebra (§18.2.4.1) applies the `EXTEND`s of the select
-expressions *before* it orders, so an alias is in scope for `ORDER BY` and the two trees agree — an
-`EXTEND` is element-wise and order-preserving, so moving one across an `ORDER BY` that does not read its
-variable changes nothing. It is why `ORDER_BY` is deliberately **not** on the sealed chain of entry 2, and
-why a test whose expected output shows a `BIND` as a `SELECT` expression is not evidence that the bind
-moved. Where the same flattening crosses a `GRAPH` instead, it is entry 1.
+That is faithful rather than lucky, and it is worth knowing *why*, because it looks like entry 1 and is
+not. SPARQL converts the select expressions ([§18.2.4.4](https://www.w3.org/TR/sparql12-query/#selExpr))
+**before** it converts the solution modifiers
+([§18.2.5](https://www.w3.org/TR/sparql12-query/#convertSolMod)), so the `EXTEND`s land *under* the
+`OrderBy` and an alias is in scope for `ORDER BY`. The everyday proof is the idiom nobody disputes:
+
+```sparql
+SELECT ?x (COUNT(*) AS ?c) WHERE { ?x :p ?o } GROUP BY ?x ORDER BY DESC(?c)
+```
+
+`?c` is a select expression like any other, and ordering by it works. Checked against an engine rather
+than only read off the spec — `SELECT ?v ((0 - ?v) AS ?neg) { VALUES ?v { 1 2 3 } } ORDER BY ?neg` returns
+`3, 2, 1` under Comunica, matching the `BIND`-in-`WHERE` spelling and differing from the unordered
+control.
+
+Moving an `EXTEND` *across* an `ORDER BY` is then sound on top of that: an `EXTEND` is element-wise and
+order-preserving, so the swap changes nothing as long as the ordering does not read the variable. This is
+why `ORDER_BY` is deliberately **not** on the sealed chain of entry 2, and why a test whose expected
+output shows a `BIND` as a `SELECT` expression is not evidence that the bind moved — assert on the algebra
+if that is the question. `test/eval.test.ts` carries two order-preserving cases for it, since a string
+comparison cannot see an ordering change. Where the same flattening crosses a `GRAPH` instead, it is
+entry 1, and there it really is a bug.

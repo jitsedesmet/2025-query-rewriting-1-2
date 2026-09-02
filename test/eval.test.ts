@@ -175,6 +175,14 @@ describe('evaluation tests', () => {
       ]);
     });
 
+    it('keeps the value of a bind whose duplicate is deleted', async({ expect }) => {
+      // Both operands compute the same `?x`, so one copy goes; the answer must not notice which.
+      await assertEquivalent(expect, `SELECT * WHERE {
+        { ?x :p ?y BIND(CONCAT(STR(?x), "z") AS ?c) }
+        { ?x :r ?z BIND(CONCAT(STR(?x), "z") AS ?c) }
+      }`, 1);
+    });
+
     it('keeps what an OPTIONAL leaves unbound unbound', async({ expect }) => {
       await assertEquivalent(expect, `SELECT * WHERE {
         { ?x :p ?y BIND(:a AS ?b) }

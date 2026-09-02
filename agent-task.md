@@ -308,13 +308,14 @@ Gate 0 is stability: `isStableExpression(c, e)` or the bind stays. Then (C1), (C
 | `BGP`, `PATH`, `VALUES`, the rest | leaves / barriers, no callback needed. |
 
 **Merge (`JOIN`).** Let `S` be the operands whose chain carries a structurally equal, stable `?x := e`.
-If `V ⊆ O.cVars` for **every** `O ∈ S`, delete the bind from each of them and emit one above the join;
-(C1) is still required of the operands not in `S`. At `|S| = 1` this is the ordinary hoist. Do not merge
-when some carrier does not have all of `V` certainly bound.
+If `V ⊆ O.cVars` for **every** `O ∈ S`, the copies are provably one value and all but one are redundant.
+Where the survivor goes is the cost question below. Do not merge when some carrier does not have all of
+`V` certainly bound.
 
-**Cost gate.** Past a `JOIN` or `LEFT_JOIN`, a bind whose expression is not a term expression
-(`ExpressionTypes.TERM`) rises **only** as part of a merge with `|S| ≥ 2`; a single carrier stays. Every
-other row is cardinality-non-increasing, so no gate there.
+**Cost gate.** Past a `JOIN` or `LEFT_JOIN`, only a term construction rises — see the deviations for why
+`|S| ≥ 2` is *not* the exception an earlier draft made it. A merged non-term instead has its duplicates
+deleted with the survivor left in place, which is the saving without the bet. Every other row is
+cardinality-non-increasing, so no gate there.
 
 ### Deviations
 
@@ -339,6 +340,16 @@ barrier would have taken extra code to be strictly worse. What stays forbidden, 
 `TODO(phase 4)`, is *writing* a term into an `EXISTS`: an unbound `?x` in a nested pattern is a variable
 matching anything, where the term replacing it matches one thing. Phase 4 keeps the rest of its `EXISTS`
 item; only the `FILTER` half of it is already done.
+
+**The merge is not exempt from the cost gate.** The plan lets a non-term expression rise past a `JOIN`
+when `|S| ≥ 2`, because the merge "deletes an evaluation outright". It does not: hoisting a merged bind
+costs `|A ⋈ B|` evaluations against the `|A| + |B|` the two copies cost, which is a win on a selective
+join and a rout on one that fans out — two operands of a thousand rows sharing one `?s` join to a
+million, so 2 000 evaluations become 1 000 000. That is the same bet the single-carrier hoist makes, on a
+larger budget, and the policy is not to take it. So the gate is now *only* about what the expression
+costs: a term construction rises, anything else does not. What the merge still does for a non-term is
+delete the duplicates and leave the survivor where it stands — `|A|` evaluations rather than `|A| + |B|`,
+better whatever the join does, and needing no (C1) since nothing is re-planted above the join.
 
 **One construction, two spellings.** The parser keeps `<<( s p o )>>` and `TRIPLE(s, p, o)` apart — the
 first is a term expression holding a Quad, the second an operator expression — and `constantFoldOperator`

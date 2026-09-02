@@ -431,17 +431,38 @@ ORDER BY ASC ( ?x )`,
       );
     });
 
-    it('merges two carriers of one non-term bind into a single one above the join', ({ expect }) => {
-      // TODO: I would expect not to pull since the expression is too expensive?
+    it('deletes the duplicate of a non-term bind but leaves the survivor in place', ({ expect }) => {
+      // The copies are provably one value, so one of them is redundant - but hoisting the survivor would
+      // trade `|A| + |B|` evaluations for `|A ⋈ B|`, which a join that fans out makes far worse. Deleting
+      // the duplicate and leaving the rest alone is the half of that with no downside.
       expectTransform(
         expect,
         `SELECT * WHERE {
           { ?s :p ?o BIND(CONCAT(STR(?s), "z") AS ?x) }
           { ?s :q ?w BIND(CONCAT(STR(?s), "z") AS ?x) }
         }`,
-        `SELECT ?o ?s ?w ( CONCAT( STR( ?s ) , "z" ) AS ?x ) WHERE {
-  ?s <ex://p> ?o .
+        `SELECT ?o ?s ?w ?x WHERE {
+  {
+    ?s <ex://p> ?o .
+    BIND( CONCAT( STR( ?s ) , "z" ) AS ?x )
+  }
   ?s <ex://q> ?w .
+}`,
+      );
+    });
+
+    it('hoists the survivor when re-evaluating it is free', ({ expect }) => {
+      // A construction costs nothing to ask again, so there is no cardinality bet to lose and the
+      // survivor goes all the way up.
+      expectTransform(
+        expect,
+        `SELECT * WHERE {
+          { ?s :p ?o BIND(<<( ?s :q ?s )>> AS ?x) }
+          { ?s :r ?w BIND(<<( ?s :q ?s )>> AS ?x) }
+        }`,
+        `SELECT ?o ?s ?w ( <<( ?s <ex://q> ?s )>> AS ?x ) WHERE {
+  ?s <ex://p> ?o .
+  ?s <ex://r> ?w .
 }`,
       );
     });

@@ -814,25 +814,29 @@ function floatThroughJoin(c: TransformContext, join: Algebra.Join): Algebra.Oper
     if (floatingBind.expressionIsStable && floatingBind.disposition === 'stay') {
       const carriers = floatingBind.mustLeaveWith;
       if (carriers.length > 1) {
-        // The merge: `Join(Extend(A, ?x, e), Extend(B, ?x, e)) ≡ Extend(Join(A, B), ?x, e)` whenever every
-        // carrier has all of `V` certainly bound, since join compatibility then forces every `?y ∈ V` to one
-        // value across the merge and `e` is stable, so every carrier computed the same `?x`: that component
-        // of the compatibility test is a tautology and the copies collapse into one. Multiplicity is
-        // untouched, no pair of rows having been rejected on `?x` - and a carrier short of `V` keeps its own
-        // copy, the values `e` is asked about not being the ones the merged row holds.
+        // Every carrier computes the same `?x`: join compatibility forces every `?y ∈ V` to one value
+        // across the merge, and `e` is stable. So that component of the compatibility test is a tautology
+        // and all but one of the copies are redundant. A carrier short of `V` keeps its own copy, the
+        // values `e` is asked about not being the ones the merged row holds.
         if (carriers.every(carrier =>
-          [ ...carrier.bind.reads ].every(readVariable => carrier.scopeBelowBind.cVars.has(readVariable))) &&
-            nothingElseBindsTheVariable(floatingBind, carriers, operands)) {
-          letGroupLeave(carriers);
+          [ ...carrier.bind.reads ].every(readVariable => carrier.scopeBelowBind.cVars.has(readVariable)))) {
+          // Where it lands is the cost question, and the two answers differ in *risk* rather than in
+          // saving. Hoisting is `Extend(Join(A, B), ?x, e)`: `|A ⋈ B|` evaluations against the `|A| + |B|`
+          // the two copies cost, which is a win on a selective join and a rout on one that fans out - two
+          // operands of 1000 rows sharing one `?s` join to a million, so 2000 evaluations become
+          // 1 000 000. Keeping the representative where it is deletes the *other* copies and nothing else:
+          // `|A|` evaluations, better than `|A| + |B|` whatever the join does. So a construction, free to
+          // re-evaluate, rises; anything else collapses in place.
+          const mayRise = floatingBind.constructedTerm !== undefined &&
+            nothingElseBindsTheVariable(floatingBind, carriers, operands);
+          collapseGroup(carriers, mayRise ? 'rise' : 'stay');
         }
       } else {
-        // A single carrier: (C1) over the siblings, (C2) per variable of `e`, and the cost gate. The gate: a
-        // term expression is free to re-evaluate, so its pull-up is a pure win, but a join may *increase*
-        // cardinality, so anything else can end up evaluated more often than the original. Past a join a
-        // non-term expression therefore rises only under the merge above, which deletes an evaluation
-        // outright. It is a trade rather than a truth - a single-carrier rise wins whenever the join is
-        // selective and loses whenever it fans out, and nothing in the algebra says which - so it is worth
-        // revisiting if cardinality estimates ever reach this pass.
+        // A single carrier: (C1) over the siblings, (C2) per variable of `e`, and the cost gate. The gate
+        // is the same one the merge above answers: a construction is free to re-evaluate, so its pull-up
+        // is a pure win, but a join may *increase* cardinality, so anything else can end up evaluated more
+        // often than it was. Nothing rises past a join that is not free to re-evaluate - there is no
+        // second copy to delete here, so not even the merge's consolation applies.
         const readsSameValuesAbove = [ ...floatingBind.bind.reads ].every(readVariable =>
           floatingBind.scopeBelowBind.cVars.has(readVariable) ||
             noOtherOperandBinds(readVariable, floatingBind.inputIndex, operands));
@@ -956,7 +960,7 @@ function floatThroughUnion(c: TransformContext, union: Algebra.Union): Algebra.O
   for (const floatingBind of peeled.allBinds) {
     if (floatingBind.disposition === 'stay' && floatingBind.expressionIsStable &&
       floatingBind.mustLeaveWith.length === union.input.length) {
-      letGroupLeave(floatingBind.mustLeaveWith);
+      collapseGroup(floatingBind.mustLeaveWith, 'rise');
     }
   }
   settlePartition(c, peeled, () => true);
@@ -992,13 +996,14 @@ function groupIdenticalBinds(c: TransformContext, peeled: PeeledInputs): void {
 }
 
 /**
- * Lets a whole group leave: its first member is written out above the operation, the rest are absorbed
- * into that one copy.
- * @param group - The group to mark
+ * Collapses a group of identical binds onto its first member, the rest being absorbed into that one copy.
+ * @param group - The group to collapse
+ * @param representative - What becomes of the copy that survives: `rise` to write it out above the
+ * operation, `stay` to leave it where it stands and delete only the duplicates
  */
-function letGroupLeave(group: FloatingBind[]): void {
+function collapseGroup(group: FloatingBind[], representative: 'rise' | 'stay'): void {
   for (const [ index, member ] of group.entries()) {
-    member.disposition = index === 0 ? 'rise' : 'absorb';
+    member.disposition = index === 0 ? representative : 'absorb';
   }
 }
 

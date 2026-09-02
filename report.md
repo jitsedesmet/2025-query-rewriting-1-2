@@ -179,7 +179,8 @@ vacuously and what decides is the *readers* — a condition, an ordering express
 but the join is only enforcing an equality that already holds. Let `S` be the operands carrying a
 structurally equal, stable `BIND(e AS ?x)`. If **`V ⊆ O.cVars` for every `O ∈ S`**, join compatibility
 forces every `?y ∈ V` to one value across the merge, `e` is stable, so every carrier computed the same
-`?x`: that component of the compatibility test is a tautology and the copies collapse into one.
+`?x`: that component of the compatibility test is a tautology and the copies collapse into one. Where the
+survivor goes is the *cost* question, and the gate below answers it.
 
 ```
 Join(Extend(A, ?x, e), Extend(B, ?x, e))  ≡  Extend(Join(A, B), ?x, e)
@@ -194,14 +195,27 @@ half computes `e` on `μ_L` either way, but that half always deserves a second l
 **The cost gate.** A term expression is free to re-evaluate, so its pull-up is a pure win everywhere. A
 `f(?s)` is not: `JOIN` and `LEFT_JOIN` may *increase* cardinality, so a hoisted bind can be evaluated
 more often than the original. Every other operation in the table is cardinality-non-increasing (a
-`GRAPH ?g` evaluates its pattern once per graph either way), so the gate is narrow:
+`GRAPH ?g` evaluates its pattern once per graph either way, and a `UNION` puts the branch solution
+straight through, so `|A| + |B|` evaluations stay `|A| + |B|`), so the gate is narrow:
 
-> Past a `JOIN` or `LEFT_JOIN`, a non-term expression rises only under the **merge** rule, which deletes
-> an evaluation outright. A single carrier stays put.
+> Past a `JOIN` or `LEFT_JOIN`, only a term expression rises.
 
-It is a trade, not a truth: a single-carrier rise wins whenever the join is selective and loses whenever
-it fans out, and nothing in the algebra tells us which. Revisit if cardinality estimates ever reach this
-pass.
+**An earlier draft of this section exempted the merge**, on the grounds that it "deletes an evaluation
+outright". It does not, and the arithmetic is worth writing out. Hoisting a merged bind gives
+`Extend(Join(A, B), ?x, e)`: `|A ⋈ B|` evaluations, against the `|A| + |B|` the two copies cost. That is
+a win on a selective join and a rout on one that fans out — two operands of a thousand rows sharing one
+`?s` join to a million, turning 2 000 evaluations into 1 000 000. The merge is a *better-odds* bet than
+the single-carrier hoist, its budget being `|A| + |B|` rather than `|A|`, but it is the same bet, and the
+policy here is not to take it.
+
+What the merge *can* do at no risk is delete the duplicates and leave the survivor where it stands:
+`|A|` evaluations, better than `|A| + |B|` whatever the join does. So the rule splits by what the
+expression costs rather than by how many carriers there are — a term construction rises, anything else
+collapses in place — and only the *hoist* half needs (C1), nothing being re-planted above the join in the
+other.
+
+It stays a trade rather than a truth, and nothing in the algebra tells us which way a given join goes.
+Revisit if cardinality estimates ever reach this pass.
 
 **Nothing rises into the query's own solution modifiers.** A restriction the implementation had to add,
 and a syntactic one rather than a semantic one: the `PROJECT` rise applied at the query's own projection

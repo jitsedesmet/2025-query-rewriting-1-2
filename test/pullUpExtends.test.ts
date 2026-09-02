@@ -331,6 +331,7 @@ ORDER BY ASC ( ?x )`,
 
     it('stays when it writes the graph variable itself', ({ expect }) => {
       // (C1) with the operation as the other binder: the GRAPH puts `?g` in every solution above it.
+      // TODO: this is an assertion that we should handle in a next phase.
       expectTransformGraphOperation(
         expect,
         'SELECT * WHERE { GRAPH ?g { ?s :p ?o BIND(:a AS ?g) } }',

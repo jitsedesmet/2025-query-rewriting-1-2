@@ -3,6 +3,7 @@ import { toAst } from '@traqula/algebra-sparql-1-2';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { VAR_PREFIX_USER_QUERY } from './consts.js';
 import { rewriteSinglePattern } from './transformations/index.js';
+import type { PullUpOptions } from './transformations/pullUpExtends.js';
 import type { TransformContext } from './transformContext.js';
 import { prefixVarsInOperation, parseQuery } from './transformContext.js';
 import { collectVariableNames, renameVariables } from './utils.js';
@@ -36,8 +37,9 @@ function hasGroupInTopLevelChain(op: Algebra.Operation): boolean {
  * for query rewriting.
  *
  * It parses the query, strips any outer SLICE (LIMIT/OFFSET), DISTINCT/REDUCED and the Project, prefixes the
- * user query variables with `uq_`, applies each transformation in order, and then wraps the result back up:
- * an EXTEND per original variable name, the Project, and the stripped modifiers.
+ * user query variables with `uq_`, applies each transformation in order - passing the projected `uq_`
+ * variables as the root boundary so a transformation may drop what the query never selects - and then wraps
+ * the result back up: an EXTEND per original variable name, the Project, and the stripped modifiers.
  * @param c - The transformation context containing the mapping and the factories
  * @param input - The SPARQL query string to transform
  * @param transformations - Transformation functions to apply in order
@@ -48,7 +50,7 @@ function hasGroupInTopLevelChain(op: Algebra.Operation): boolean {
 export function queryTransform(
   c: TransformContext,
   input: string,
-  transformations: ((c: TransformContext, op: Algebra.Operation) => Algebra.Operation)[],
+  transformations: ((c: TransformContext, op: Algebra.Operation, options?: PullUpOptions) => Algebra.Operation)[],
 ): string {
   const algebra = parseQuery(c, input);
 
@@ -68,8 +70,14 @@ export function queryTransform(
     transformedAlgebra = innerAlgebra.input;
   }
   transformedAlgebra = prefixVarsInOperation(c, transformedAlgebra, VAR_PREFIX_USER_QUERY);
+  // What the wrapper below reads off the transformed root: the `uq_` copy of every selected variable, and
+  // nothing more, so a bind of anything else at the root is dead. Left undefined for a query with no
+  // projection, where every variable in scope has to survive.
+  const projected = innerAlgebra.type === 'project' ?
+    innerAlgebra.variables.map(variable => `${VAR_PREFIX_USER_QUERY}${variable.value}`) :
+    undefined;
   for (const transformation of transformations) {
-    transformedAlgebra = transformation(c, transformedAlgebra);
+    transformedAlgebra = transformation(c, transformedAlgebra, { projected });
   }
 
   if (innerAlgebra.type === 'project') {

@@ -209,6 +209,34 @@ export function withoutCpVars<T extends Algebra.Operation>(op: T): T {
 }
 
 /**
+ * Deletes cached {@link CPMeta} from `op` and everything below it, in place. Needed because the algebra's
+ * copying walk shallow-clones a cached `metadata` through `Object.create(Set.prototype)`, which yields a
+ * `Set` without its internal data - so a tree that must survive that walk (an analysis reusing it as the
+ * transform source) has to be handed over clean rather than carrying metadata for the clone to corrupt.
+ * @param op - The operation whose subtree to strip
+ */
+export function stripCachedMetadataInPlace(op: Algebra.Operation): void {
+  function walk(node: unknown): void {
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        walk(item);
+      }
+      return;
+    }
+    if (node === null || typeof node !== 'object') {
+      return;
+    }
+    const record = <Record<string, unknown>> node;
+    // Delete before recursing so the metadata's own `Set`/`VRanges` are never descended into.
+    delete record.metadata;
+    for (const key of Object.keys(record)) {
+      walk(record[key]);
+    }
+  }
+  walk(op);
+}
+
+/**
  * Whether constructing this triple term is guaranteed to yield a term rather than an evaluation error.
  * @param term - The triple term being constructed
  * @param vRanges - What the input binds

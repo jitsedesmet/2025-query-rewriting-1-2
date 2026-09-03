@@ -3,7 +3,7 @@
 `report.md` is the design: it carries the *why*, the soundness arguments and the spec references, and
 every `§n` below points into it. `task.md` is the original request.
 
-**How to use this document.** Four phases, four PRs, one agent per PR, in order. Section
+**How to use this document.** Five phases, five PRs, one agent per PR, in order. Section
 [A. Shared ground](#a-shared-ground), house rules (§A.6) and code style (§A.7) included, is read by every
 agent; after that, an agent reads **only its own
 phase section** and treats the later ones as non-existent. Every phase ends green on its own: it ships
@@ -22,6 +22,7 @@ to do; it is a licence to improve the codebase, not to leave it inconsistent.
 | 2 | [Phase 2](#phase-2--the-needed-analysis-and-general-dropping) | open | the top-down `needed` analysis, dropping anywhere, the `LEFT_JOIN` RHS drop, the `LEFT_JOIN` merge. |
 | 3 | [Phase 3](#phase-3--transfer-and-weak-assertion) | open | transfer and weak assertion into a sibling, flag-gated, with the idempotence guard. |
 | 4 | [Phase 4](#phase-4--edge-cases) | open | the `GROUP`-over-a-constant-key hoist, `EXISTS`, the `NAMED` allowlist, substituting a non-term `e`. |
+| 5 | [Phase 5](#phase-5--binding-by-renaming) | open | a bind of a bare variable whose source is dead becomes a rename of that source in the input. Needs only phase 2. |
 
 **The goal in one line.** `pushDownAssertions` leaves a `BIND` behind at every leaf it rewrites
 (`bindAssertedTerms`); this pass floats those binds back up the plan and drops the ones nothing reads,
@@ -513,7 +514,7 @@ what `floatThroughJoin` merges with, and neither is specific to a `JOIN`. The an
 # Phase 3 — transfer and weak assertion
 
 **Goal.** Two moves for the case phase 1 gives up on: a `JOIN` sibling `B` has `?x` in scope and does
-not carry the identical bind (§6). Phase 1 covers it with `nothingElseBindsTheVariable`, which simply
+not carry the identical bind (§7). Phase 1 covers it with `nothingElseBindsTheVariable`, which simply
 pins the bind.
 
 **Prerequisite.** Phases 1–2.
@@ -521,7 +522,7 @@ pins the bind.
 ### Work
 
 Add `transferIntoSiblings?: boolean` to `PullUpOptions`, **default `false`**. Nothing changes for
-existing callers, and the pipeline of §7 stays as it is.
+existing callers, and the pipeline of §9 stays as it is.
 
 - **Transfer (strong).** If `?x ∈ B.cVars`, `B` supplies `?x` on every solution and join compatibility
   already forces it to equal `e`: `Join(Extend(A, ?x, e), B) ≡ Join(A, σ_{?x ≡ e}(B))`. The `EXTEND` is
@@ -590,3 +591,142 @@ every `metadata` on the way out — and skip when the assertion is already there
   `e` cheap, which is the cardinality estimation §4 of the report defers.
 
 Each item ships with the three checks of §A.6.
+
+# Phase 5 — binding by renaming
+
+**Goal.** Make a bind of a *bare variable* disappear by renaming its source instead of moving its target:
+`Extend(A, ?x, ?y)` becomes `A[?y ↦ ?x]` wherever nothing above reads `?y` (§6). It is what turns the
+pass's own output on a multi-pattern query,
+
+```sparql
+-- SELECT ?g_0 { ?g_0 :a ?x . ?g_0 :b ?y . ?g_0 :c ?z }, printed after removeProjections
+SELECT ( ?uq_g_0 AS ?g_0 ) WHERE {
+  { ?v_1 <ex://a> ?v_0 . BIND( ?v_1 AS ?uq_g_0 ) BIND( ?v_0 AS ?uq_x ) }
+  { ?v_3 <ex://b> ?v_2 . BIND( ?v_3 AS ?uq_g_0 ) BIND( ?v_2 AS ?uq_y ) }
+  { ?v_5 <ex://c> ?v_4 . BIND( ?v_5 AS ?uq_g_0 ) BIND( ?v_4 AS ?uq_z ) }
+}
+```
+
+into the user's own query back, modulo the `uq_` prefix:
+
+```sparql
+SELECT ( ?uq_g_0 AS ?g_0 ) WHERE {
+  ?uq_g_0 <ex://a> ?uq_x .
+  ?uq_g_0 <ex://b> ?uq_y .
+  ?uq_g_0 <ex://c> ?uq_z .
+}
+```
+
+Both are real output, the second from a throwaway prototype of the rule run in the standard chain; the 26
+cases of `test/integration.test.ts`, which compare results rather than strings, stayed green with it in.
+
+**Prerequisite.** Phase 2, for `needed`. **Independent of phases 3 and 4** — it touches neither the
+transfer flag nor any of the edge cases — so it may be taken before either, and the table's order is not a
+dependency here.
+
+### Files
+
+**Modified** — `lib/transformations/pullUpExtends.ts`, `lib/utils/expressionHelpers.ts` (one predicate),
+`test/pullUpExtends.test.ts`, `test/eval.test.ts`, and `report.md` §6 if the implementation departs from it.
+`test/rewriting.test.ts` gains the end-to-end case below; it runs `operationTransform` alone today, so
+nothing in it changes on its own, and `test/integration.test.ts` compares results rather than strings and
+should need no edit at all — if one of its expectations moves, that is the bug, not the fixture. No new
+module: the rename is a disposition of the existing machinery, and `renameVariables` already lives in
+`lib/utils.ts`.
+
+### Work
+
+**1. The predicate.** `sourceVariableOf(expression): RDF.Variable | undefined` in
+`lib/utils/expressionHelpers.ts` — the variable a bare `TERM` expression names, `undefined` for everything
+else, `constructedTermOf`'s narrower sibling. A triple-term construction is *not* one: it has no single
+source to rename.
+
+**2. A fifth `Disposition`, `'rename'`.** It is a `drop` that leaves something behind, so it follows the
+drop everywhere the drop already goes — every operation, the `LEFT_JOIN`/`MINUS` right-hand sides included,
+and the sealed solution-modifier chain, which blocks rises and not drops.
+
+Decide it inside `deadChainBinds`, which already walks a chain top-down carrying the `live` set. At bind
+`k`, once `?x_k` has been found live and removed from `live` but *before* its own reads are added back:
+
+- the expression is a bare variable `?y` (`sourceVariableOf`), and `?y ≠ ?x_k`;
+- **(R2)** `?y ∉ live` — nothing above the operation, no sibling's `pVars`, no chain-mate above this bind;
+- **(R1)** `?x_k` does not *occur* in what stands below the bind — the core and the binds below it in the
+  chain. `collectVariableNames` over the subtree, not `vRanges.neverBinds`: the legality of
+  `Extend(A, ?x, ?y)` already gives that `A` never binds `?x`, and what is left to exclude is a read of an
+  unbound `?x` down there and an `?x` hidden inside a nested scope. Test the cheap thing first — the bind
+  is only a candidate at all once (R2) holds — since this is a subtree walk per candidate;
+- **(R3)** no `EXTENSION_FUNCTION_BNODE` call below the bind takes `?y` as an argument. See the hazard
+  below; a `named` walk over the subtree, folded into the same pass as (R1).
+
+When it fires, `live` is left as it is: `?x_k` stays out (the core supplies it now) and `?y` never goes in.
+
+**3. Applying it.** Collect the chain's renames into one `Record<string, RDF.Variable>` and hand them to
+`renameVariables` **once**, simultaneously, rather than one after another — sequential renames compose
+wrongly where a target of one is a source of another, and `renameVariables` is a single `transformObject`
+walk with a lookup, so it is already the simultaneous one. Two renames of one chain cannot share a target
+(a chain never binds a variable twice) and a target cannot be another rename's source (that source is read
+below, where the target is not yet bound), so the map is well formed by construction.
+
+`assembleRewrittenNode` is where it lands: it currently re-plants the stayers on `chain.core` untouched, and
+now has to rename the core and the stayers standing below the renamed bind first. Everything it builds is
+fresh, so the metadata discipline of §A.5 is unchanged — but the renamed core is a *rewritten* node, so its
+cached `CPMeta` has to go with it. `renameVariables` walks it through `transformObject`; check whether that
+copies `metadata` across and strip it if it does.
+
+`dropUnreadRootBinds` gets the same treatment for the chain at the very top of the plan, which no callback
+sees.
+
+**4. The soundness argument**, for the `@fileoverview`. `Extend(A, ?x, ?y)` yields
+`{ μ ∪ {?x ↦ μ(?y)} : μ ∈ ⟦A⟧ }`, with `?x` unbound wherever `?y` is; `A[?y ↦ ?x]` yields that same
+multiset with the column renamed. They agree row for row on every variable but `?y`, so this is §5's drop
+with the source deleted in place of the target, and `?y ∉ needed` is the whole licence. It needs no
+certainty (an unbound `?y` gives an unbound `?x` either way), no stability (nothing is re-evaluated), and
+neither (C1) nor (C2), nothing being re-planted. Under (R1) the rename is an ordinary alpha-renaming —
+uniform, onto a name fresh in `A` — so an occurrence a nested scope hides is renamed consistently with the
+ones that reach `A`'s output, and no scope-aware walk is needed.
+
+**5. The hazard worth knowing (R3).** `internalBnodeAsSpecialLiteral`/`internalBnodeAsSpecialIri` build a
+blank node's identity by concatenating the arguments of `EXTENSION_FUNCTION_BNODE` **sorted by variable
+name** (`lib/transformations/bnodeMapAsLiteral.ts`). A rename that moves one argument past another changes
+the identity that call produces — uniformly within the operand, but the same mapping unfolded in a sibling
+is *not* renamed, and two blank nodes that have to be equal stop being so. It is the one place in the
+pipeline where a variable's name is semantically load-bearing, and it is only reachable because
+`isStableExpression` allowlists that function. Block on it, and leave a
+`TODO(future)`: making the concatenation canonical in argument position rather than in names retires (R3)
+and makes every renaming pass safe by construction.
+
+### Rules
+
+| Where | Phase-5 behaviour |
+| --- | --- |
+| every operation with a floating chain | a bind passing (R1)–(R3) is `rename`d rather than kept; the drop of §5 still wins where `?x` itself is dead |
+| `LEFT_JOIN` / `MINUS` RHS | same, the rename being a drop and those already dropping |
+| the sealed modifier chain | same: the seal stops rises, not drops |
+| the root chain | `dropUnreadRootBinds` renames as well as drops |
+| a ground or constructed `e` | nothing to do — no source variable to rename |
+
+### Tests — `test/pullUpExtends.test.ts`
+
+- The worked example above, end to end through the standard chain, as a new case in
+  `test/rewriting.test.ts`: the three-pattern join becomes three patterns on one variable.
+- Positive, minimal: `Extend(A, ?x, ?y)` under a `PROJECT` that lists `?x` and not `?y`.
+- Negative, one per condition: `?y` read by the projection too (R2); `?y` read by a chain-mate above the
+  bind (R2, the `BIND(?y AS ?x1) BIND(?y AS ?x2)` shape); `?x` occurring in a `FILTER` inside `A` while
+  unbound there (R1); `?x` bound inside a sub-`SELECT` of `A` that does not project it (R1); an
+  `EXTENSION_FUNCTION_BNODE` below the bind reading `?y` (R3); a ground `BIND(:a AS ?x)`, which has no
+  source.
+- Both liveness rows against each other: `?x` dead → the §5 drop, not a rename; both dead → drop.
+- A chain renaming twice at once (`BIND(?mi_s AS ?uq_g_0) BIND(?mi_o AS ?uq_x)`), to pin the simultaneous
+  application.
+- Renaming into a `UNION` — the prototype pushed one `?uq_t` into both branches — and into an
+  `OPTIONAL`'s right-hand side.
+- **Evaluation tests** in `test/eval.test.ts`: the rename changes `pVars` below the anchor, so a wrong
+  `needed` shows up as a missing or extra column in `SELECT *` that no string comparison catches. `OPTIONAL`
+  and `UNION` at least.
+- The three checks of §A.6, and every earlier phase's tests green.
+
+### Done
+
+House rules (§A.6), plus: the worked example transforms exactly as written above; `test/integration.test.ts`
+green, which is the real soundness check, since it compares *results* on mapped data rather than strings;
+and the `TODO(future)` of (R3) left at the site.

@@ -433,6 +433,67 @@ ORDER BY ASC ( ?x )`,
     });
   });
 
+  describe('the needed analysis', () => {
+    it('drops a bind deep in an OPTIONAL a projection above never reads', ({ expect }) => {
+      // The top-down `needed` analysis is what the direct-child `PROJECT` rule cannot see: the projection
+      // wants only `?a`, so nothing reaches the `BIND` inside the OPTIONAL and it is deleted.
+      expectTransform(
+        expect,
+        'SELECT ?a WHERE { ?a :p ?b OPTIONAL { ?b :q ?c . BIND(:v AS ?x) } }',
+        `SELECT ?a WHERE {
+  ?a <ex://p> ?b .
+  OPTIONAL {
+    ?b <ex://q> ?c .
+  }
+}`,
+      );
+    });
+
+    it('keeps a bind an OPTIONAL introduces when the projection does read it', ({ expect }) => {
+      // Now `?x` is projected, so it is needed above the OPTIONAL and stays where it is - the right of an
+      // OPTIONAL never being a place a bind rises out of.
+      expectTransform(
+        expect,
+        'SELECT ?x WHERE { ?a :p ?b OPTIONAL { ?b :q ?c . BIND(:v AS ?x) } }',
+        `SELECT ?x WHERE {
+  ?a <ex://p> ?b .
+  OPTIONAL {
+    {
+      ?b <ex://q> ?c .
+      BIND( <ex://v> AS ?x )
+    }
+  }
+}`,
+      );
+    });
+
+    it('keeps a bind whose variable a join sibling needs as a key', ({ expect }) => {
+      // The projection wants only `?a`, but `?x` is bound by the other operand too, where it silently acts
+      // as a join key - the `⋃ pVars(sibling)` term of the analysis keeps it despite the projection.
+      expectTransform(
+        expect,
+        'SELECT ?a WHERE { { ?a :p ?b BIND(:v AS ?x) } { ?c :q ?x } }',
+        `SELECT ?a WHERE {
+  {
+    ?a <ex://p> ?b .
+    BIND( <ex://v> AS ?x )
+  }
+  ?c <ex://q> ?x .
+}`,
+      );
+    });
+
+    it('drops a root bind the projected boundary does not include', ({ expect }) => {
+      // What `queryTransform` does: it strips the outer projection and hands the pass the `uq_` variables
+      // it will re-read as the boundary, so a root bind of anything outside that set is dead. Here the
+      // boundary stands in for the projection, and the assertion reads the top chain directly - a root
+      // drop narrows `pVars`, which the string-level scope invariant would (correctly) flag.
+      const stripped = (<Algebra.Project> parseQuery(c, `${prefixes}SELECT * WHERE { ?s :p ?o BIND(:a AS ?x) }`)).input;
+      expect(bindsAtTopOf(pullUpExtends(c, stripped, { projected: [ 's', 'o' ]}))).toEqual([]);
+      expect(bindsAtTopOf(pullUpExtends(c, stripped, { projected: [ 's', 'o', 'x' ]}))).toEqual([ 'x' ]);
+    });
+  });
+
   describe('joins', () => {
     it('rises out of the one operand that binds the variable - the worked example', ({ expect }) => {
       expectTransform(
@@ -680,6 +741,42 @@ ORDER BY ASC ( ?x )`,
       );
     });
 
+    it('merges a bind both sides of an OPTIONAL carry, hoisting the term above it', ({ expect }) => {
+      // Both operands write the same ground `?x`, and the survivor is the left copy, so the anti-join
+      // half keeps its binding either way: the construction rises above the whole OPTIONAL.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { { ?s :p ?o BIND(:v AS ?x) } OPTIONAL { ?s :q ?w BIND(:v AS ?x) } }',
+        `SELECT ?o ?s ?w ( <ex://v> AS ?x ) WHERE {
+  ?s <ex://p> ?o .
+  OPTIONAL {
+    ?s <ex://q> ?w .
+  }
+}`,
+      );
+    });
+
+    it('does not merge across an OPTIONAL when the right does not certainly bind what it reads', ({ expect }) => {
+      // The right side reads `?o` for `?x`, but the right of an OPTIONAL does not certainly bind `?o`, so
+      // `V ⊆ cVars(L) ∩ cVars(R)` fails and each side keeps its own copy.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { { ?s :p ?o BIND(?o AS ?x) } OPTIONAL { ?s :q ?w BIND(?o AS ?x) } }',
+        `SELECT ?o ?s ?w ?x WHERE {
+  {
+    ?s <ex://p> ?o .
+    BIND( ?o AS ?x )
+  }
+  OPTIONAL {
+    {
+      ?s <ex://q> ?w .
+      BIND( ?o AS ?x )
+    }
+  }
+}`,
+      );
+    });
+
     it('rises out of the left of a MINUS', ({ expect }) => {
       expectTransform(
         expect,
@@ -711,16 +808,33 @@ ORDER BY ASC ( ?x )`,
       );
     });
 
-    it('never rises out of the right of a MINUS', ({ expect }) => {
+    it('drops a bind out of the right of a MINUS the left can never bind', ({ expect }) => {
+      // The right of a MINUS contributes no binding above it, and `?x` is a variable the left never binds,
+      // so it plays no part in the disjointness test either: the bind is dead and deleted.
       expectTransform(
         expect,
         'SELECT * WHERE { ?s :p ?o MINUS { ?s :q ?w BIND(:a AS ?x) } }',
         `SELECT ?o ?s WHERE {
   ?s <ex://p> ?o .
   MINUS {
+    ?s <ex://q> ?w .
+  }
+}`,
+      );
+    });
+
+    it('keeps a bind on the right of a MINUS the left can bind', ({ expect }) => {
+      // `?w` *is* a variable the left binds, so the right's binding of it drives the disjointness test and
+      // may not be dropped; nor may it rise, the right of a MINUS contributing nothing above.
+      expectTransform(
+        expect,
+        'SELECT * WHERE { ?s :p ?w MINUS { ?s :q ?o BIND(:a AS ?w) } }',
+        `SELECT ?s ?w WHERE {
+  ?s <ex://p> ?w .
+  MINUS {
     {
-      ?s <ex://q> ?w .
-      BIND( <ex://a> AS ?x )
+      ?s <ex://q> ?o .
+      BIND( <ex://a> AS ?w )
     }
   }
 }`,

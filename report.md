@@ -14,8 +14,8 @@ a scan into one assignment on a smaller intermediate result — or disappears.
 
 One new pass, `lib/transformations/pullUpExtends.ts`, exported as `pullUpExtends(c, op)`.
 
-**Status.** Phase 1 (§9) is implemented; §§2–4 below describe what it does. Where the implementation
-departed from this design, the paragraph says so and `agent-task.md` carries the argument. Phases 2–4 are
+**Status.** Phase 1 (§10) is implemented; §§2–4 below describe what it does. Where the implementation
+departed from this design, the paragraph says so and `agent-task.md` carries the argument. Phases 2–5 are
 still design.
 
 ## 1. What floats
@@ -41,7 +41,7 @@ here, the `bound(?x)` fold of §3; nothing else needs it.
 **Never stable**, so never floats: `RAND`, `UUID`, `STRUUID`, `BNODE` — §17.4.2.14 fixes a blank node per
 solution mapping *and* argument, so a row a join copies gets one node below the join and several above it.
 `NOW` *is* stable, "all calls … in any one query execution must return the same value" (§17.4.5.1), which
-is the one place this predicate parts ways with the `isStaticExpression` it replaced (§7).
+is the one place this predicate parts ways with the `isStaticExpression` it replaced (§8).
 `ExpressionTypes.NAMED` is opaque and unstable unless allowlisted, `EXTENSION_FUNCTION_BNODE`
 (`internal://blank`, the internal form of the `bnodeConsistent` extension function the README documents)
 being the first entry: "same inputs = same identity" is exactly stability. `ExpressionTypes.EXISTENCE` is
@@ -123,7 +123,7 @@ SPARQL does not distinguish them, and the special forms that handle errors speci
   `TODO`. A condition whose `EXISTS` does *not* mention `?x` is no barrier at all, and the implementation
   says so: the nested pattern is evaluated against a solution mapping that does not hold `?x` either way,
   so the hoist changes nothing about it. `collectVariableNames` sees into the pattern, so the reads test
-  answers this for free — which is why the relaxation §9 filed under phase 4 arrived with phase 1.
+  answers this for free — which is why the relaxation §10 filed under phase 4 arrived with phase 1.
 
 **Wanted only when free.** Substitution is the price of hoisting past a reader, not a bonus. With `k`
 occurrences of `?x` in the reader, one evaluation of `e` per row becomes `k+1` — `k` in the reader plus
@@ -254,14 +254,134 @@ This is the paper's projection pushing (§III) read as an analysis rather than a
 the right of a `MINUS`, because a variable bound in one operand silently acts as a join key with the
 other and because `MINUS`' disjointness test reads the *domain*, not the values. A floating bind with
 `?x ∉ needed` is dropped wherever it stands, including the `LEFT_JOIN` and `MINUS` right-hand sides.
-Phase 2.
+Phase 2. The same analysis licenses a second, non-obvious drop — of the bind's *source* rather than of its
+target, where the expression is a bare variable — which is §6.
 
 The "unless the caller says otherwise" is a loose end: `queryTransform` strips the query's outer `PROJECT`
 before running any transformation and re-adds it afterwards, so a bind that floats to the root is always
 re-planted, never dropped, even when the final `SELECT ?a ?b` discards it. Passing `pullUpExtends` that
 variable list closes it.
 
-## 6. When the pull is blocked: transfer and weak assertion
+## 6. Binding by renaming — the other way a bind disappears
+
+The pass's own output on a three-pattern query over a pass-through mapping, printed after
+`removeProjections`:
+
+```sparql
+-- SELECT ?g_0 { ?g_0 :a ?x . ?g_0 :b ?y . ?g_0 :c ?z }
+SELECT ( ?uq_g_0 AS ?g_0 ) WHERE {
+  { ?v_1 <ex://a> ?v_0 . BIND( ?v_1 AS ?uq_g_0 ) BIND( ?v_0 AS ?uq_x ) }
+  { ?v_3 <ex://b> ?v_2 . BIND( ?v_3 AS ?uq_g_0 ) BIND( ?v_2 AS ?uq_y ) }
+  { ?v_5 <ex://c> ?v_4 . BIND( ?v_5 AS ?uq_g_0 ) BIND( ?v_4 AS ?uq_z ) }
+}
+```
+
+Nothing in §§1–5 touches a line of it. (C1) blocks every hoist, each sibling binding `?uq_g_0`; the merge
+rule (§4) wants the expressions structurally equal and they are three *different* variables; and no bind is
+dead where the pass sees it — `?uq_g_0` is the one column the query selects, and the three beside it are
+listed by the sub-`SELECT`s that `removeProjections` has since taken out of the printing. What the join says,
+though, is that on every solution it keeps `?v_1 = ?v_3 = ?v_5 = ?uq_g_0` — the three binds are one clique,
+communicated through the join, and the query reads only one member of it. It looks like it wants a rule
+about joins. It does not, and that is the useful part.
+
+**The identity.** For a bind whose expression is a bare variable,
+
+```
+Extend(A, ?x, ?y)  ≡  A[?y ↦ ?x]      modulo ?y
+```
+
+The left is `{ μ ∪ {?x ↦ μ(?y)} : μ ∈ ⟦A⟧ }`, with `?x` left unbound wherever `?y` is; the right is that
+same multiset with the column called `?x` instead of `?y`. Row for row they agree on every variable except
+`?y`, which the right does not bind at all — which is exactly the difference §5 licenses when
+`?y ∉ needed`. **So this is a drop**, and it is the drop of a bind's *source* rather than of its target:
+one bind deleted, `pVars` changed only at the operation that discards `?y`, and phase 2's analysis is the
+whole licence. `cVars` follows for free — `?x ∈ cVars` on the left iff `?y ∈ cVars(A)` iff `?x ∈ cVars` on
+the right — and so does the range of the new column, which is the old one's.
+
+Note what it does **not** need. Not certainty: an `A` that leaves `?y` unbound on some solutions leaves
+`?x` unbound on exactly those, before and after. Not stability, there being no expression left to
+re-evaluate. Not (C1) or (C2), nothing being re-planted anywhere. Not a term expression — this is the one
+rule that wants a variable and refuses a ground term, `BIND(:a AS ?x)` having no source to rename.
+
+So the two liveness facts about a bind of a variable decide it between them:
+
+| `?x` read above | `?y` read above | what happens |
+| --- | --- | --- |
+| no | — | the bind is dropped, §5 |
+| yes | no | **its source is renamed away** — the rule here |
+| yes | yes | both columns are wanted: it stays, and floats by §4 if it can |
+
+Applied to the plan above once per operand, with no reference to the join at all, and again to the
+`?uq_x`/`?uq_y`/`?uq_z` binds beside them, the whole scaffolding goes:
+
+```sparql
+SELECT ( ?uq_g_0 AS ?g_0 ) WHERE {
+  ?uq_g_0 <ex://a> ?uq_x .
+  ?uq_g_0 <ex://b> ?uq_y .
+  ?uq_g_0 <ex://c> ?uq_z .
+}
+```
+
+which is the user's own query back, modulo the `uq_` prefix. Three `BIND`s of a computed join key become
+three patterns on one variable, and an engine that could only hash-join the branches on a column it had to
+compute gets a plain BGP. That is the best output this pass could produce on a pass-through mapping, and
+no rule before this one reaches it.
+
+**Where it fires, which is not at the join.** `operationTransform` writes each pattern as
+`Project(Extend(…), [?uq_…])`, so when the pull-up runs the binds still sit *inside* the sub-`SELECT`s and
+cannot rise past their own projection — the rise wants `V ⊆ variables` and `?v_1` is not in it. They do not
+need to. The rule is local to one bind and one input, and a `PROJECT` is precisely an operation that
+discards a variable: `needed(input of Project) = needed(Project) ∪ variables` already says `?v_1` is dead
+there. All the join contributes is that the three independent renames happen to land on the same target.
+
+**Three conditions.**
+
+- **(R1) the target is fresh below.** `?x` must not *occur* anywhere in `A` — occur, not `neverBinds`:
+  renaming `?y` onto a name `A` already uses conflates the two. `Extend(A, ?x, ?y)` being legal already
+  says `A` never binds `?x`, so what is left to rule out is a read of an `?x` that is unbound down there,
+  and an `?x` hidden inside a nested scope. `collectVariableNames` over `A` answers both at once, and once
+  it has, the rename is an ordinary alpha-renaming: uniform, onto a name fresh in `A`, so an occurrence a
+  sub-`SELECT` inside `A` hides is renamed consistently with the ones that reach `A`'s output and nothing
+  observable changes. The blunt `renameVariables` of `lib/utils.ts` is exactly the right tool — `VALUES`
+  binding keys included — and no scope-aware walk is needed.
+- **(R2) the source is dead.** `?y ∉ needed` read at the bind's **own** node, which through
+  `deadChainBinds`' walk down the chain means: nothing above the operation reads it, no sibling of a
+  `JOIN`/`LEFT_JOIN`/`MINUS` has it in `pVars`, and no chain-mate standing above this bind reads it either.
+  That last clause is what stops `BIND(?y AS ?x1) BIND(?y AS ?x2)` from renaming away a source the other
+  bind still wants, and it costs no special case.
+- **(R3) no `internal://blank` reads the source.** `internalBnodeAsSpecialLiteral`/`…Iri` build a blank
+  node's identity by concatenating the arguments of `EXTENSION_FUNCTION_BNODE` **sorted by variable name**,
+  so a rename that moves one argument past another changes the identity that call produces. It changes it
+  uniformly *within* the operand — but the same mapping unfolded in a sibling is not renamed, and two blank
+  nodes that have to be equal stop being so. This is the one place in the pipeline where a variable's
+  *name* is semantically load-bearing, and the honest fix is upstream: make that concatenation canonical in
+  something other than the names — argument position, say — at which point (R3) can go. Until then it is a
+  blocking condition, and `isStableExpression` allowlisting `EXTENSION_FUNCTION_BNODE` (§1) is what makes
+  the case reachable.
+
+**Why not fix it upstream instead.** The natural reading of the example — "let `?uq_g_0` be chosen as the
+representative of the clique" — points at where the bind is *made*. It is not made by the pushdown's clique
+substitution: `rewriteSinglePattern` writes it structurally, one `Extend` per pattern variable on top of a
+sub-`SELECT` over the mapping body (`bindPatternTerms`), so "choose the representative" would have to become
+"rename the mapping variable into the user-query variable inside the body". Three reasons that is the worse
+home:
+
+- it needs the same liveness fact and cannot have it. `?p0_mi_s` is dead *here*, but the same mapping
+  variable is alive wherever a second pattern variable is read off it — `?p0_mi_t` beside
+  `SUBJECT(?p0_mi_t)` — and `rewriteSinglePattern` sees one pattern, never the query around it;
+- the rule is not about mappings. `?o ?p ?o . BIND(?o AS ?s)`, the clique substitution's own output as the
+  README writes it, is the same shape and gets the same treatment for free;
+- the pushdown's representative *is* name-ordered, and load-bearing: `refinesTerm` terminates the assertion
+  fixpoint on the representative only ever moving earlier in one fixed total order. Re-ordering it to prefer
+  `uq_` is possible — that is still a total order — but it means re-proving termination for a case the
+  pull-up already owns the analysis for.
+
+**What is left over.** Where `?x` and `?y` are *both* read above, the join still says they are equal and
+nothing here spends it. The move would be §7's transfer with a variable in place of the term —
+`Join(Extend(A, ?x, ?y), B)` with `?x ∈ B.cVars` asserting `sameTerm(?x, ?y)` into `B` — which buys little,
+the join enforcing it already, and inherits §7's re-materialisation guard. Not proposed.
+
+## 7. When the pull is blocked: transfer and weak assertion
 
 Two moves remain when a `JOIN` sibling `B` has `?x` in scope and does not carry the identical bind.
 
@@ -282,7 +402,7 @@ idempotence guard: `collectAssertions` over `B`'s top filter chain, read back ou
 **Phase 1 ships neither.** Pure pull-up plus drop has no loop risk at all: every rewrite either deletes
 an `EXTEND` or strictly decreases its depth, so one bottom-up traversal is a fixpoint.
 
-## 7. Architecture and reuse
+## 8. Architecture and reuse
 
 - **Traversal:** the post-order `algebraUtils.mapOperation` with a per-type `transform`, which runs
   after the children — leaves first, working up, the mirror of the pushdown's `mapOperationPreOrder`. By
@@ -317,7 +437,7 @@ an `EXTEND` or strictly decreases its depth, so one bottom-up traversal is a fix
   the only cached metadata that survives sits on the cores nothing moved, where it is still true — and
   the test asserts no `metadata` is left on the way out.
 
-## 8. Pipeline placement
+## 9. Pipeline placement
 
 The chain the tests and the benchmark run, with `pullUpExtends` inserted in front of its last step:
 
@@ -332,7 +452,7 @@ operationTransform → pushDownAssertions → transformFilterFalse
 - **Before `transformExtendsToValues`** wherever a caller adds it — it is not in that chain — since it
   turns `Extend(BGP([]), ?x, t)` into a `VALUES` this pass no longer recognises as a bind.
 
-## 9. Phases and tests
+## 10. Phases and tests
 
 1. **Phase 1, shipped** — `peelExtends`/`replantExtends`, `isStableExpression`/`expressionsEqual`, the congruent
    operations (`FILTER`, `DISTINCT`, `REDUCED`, `ORDER_BY`, `SLICE`, `FROM`, `GRAPH`), `JOIN` with the
@@ -347,6 +467,9 @@ operationTransform → pushDownAssertions → transformFilterFalse
    landed with phase 1, §3);
    substituting a non-term `e` where
    `k = 1` and `?x` is dead above, which is break-even and deletes a node but needs §5's analysis.
+5. **Phase 5** — binding by renaming (§6): a bind of a bare variable whose source nothing above reads
+   becomes a rename of that source inside the input, deleting the bind rather than moving it. Needs phase
+   2's `needed` and nothing else, so it may be taken before phases 3 and 4.
 
 Tests, mirroring `test/pushDownAssertions.test.ts`: a case per row of §4, the *negative* ones included —
 a sibling with `?x` in scope carrying a different expression, a `UNION` branch that does not carry the

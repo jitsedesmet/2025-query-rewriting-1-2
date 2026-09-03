@@ -9,8 +9,7 @@ import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { ComponentsManager } from 'componentsjs';
 import type { TransformContext } from '../transformContext.js';
-import { collectVariableNames } from '../utils.js';
-import { isStableExpression } from './expressionHelpers.js';
+import { isStaticExpression } from './expressionHelpers.js';
 
 /**
  * @fileoverview Folds fully static expressions through Comunica's Expression Evaluator.
@@ -26,8 +25,8 @@ import { isStableExpression } from './expressionHelpers.js';
 /** The IRI the default Comunica configuration gives its runner. */
 const RUNNER_IRI = 'urn:comunica:default:Runner';
 
-/** An expression carrying the id this pass tags it with while collecting foldable subtrees. */
-type TaggedExpression = Algebra.Expression & { metadata?: { staticId?: number }};
+/** An expression carrying the metadata this pass memoizes on it: static-ness and a collected-subtree id. */
+type TaggedExpression = Algebra.Expression & { metadata?: { isStatic?: boolean; staticId?: number }};
 
 let factoryPromise: Promise<ActorExpressionEvaluatorFactory> | undefined;
 
@@ -65,7 +64,7 @@ async function getExpressionEvaluatorFactory(): Promise<ActorExpressionEvaluator
 }
 
 /**
- * Whether an operator expression reads `NOW()` anywhere within it.
+ * Whether an expression reads `NOW()` anywhere within it.
  * @param expression - The expression to inspect
  * @returns whether the current time is read
  */
@@ -79,21 +78,6 @@ function readsCurrentTime(expression: Algebra.Expression): boolean {
     return {};
   } }}});
   return readsNow;
-}
-
-/**
- * Whether an expression folds to a single term while rewriting: it is a stable function of no variables (the
- * codebase's notion of a static expression) whose value is already known now.
- * @param c - The transformation context
- * @param expression - The expression to inspect
- * @returns whether it may be evaluated to a constant term
- */
-function isRewriteConstant(c: TransformContext, expression: Algebra.Expression): boolean {
-  // `isStableExpression` counts `NOW()` as stable - it is fixed per execution - but its value is only known
-  // at execution time, not while rewriting, so a subtree reading it may not be folded away.
-  return isStableExpression(c, expression) &&
-    collectVariableNames(c.astTransformer, expression).size === 0 &&
-    !readsCurrentTime(expression);
 }
 
 /**
@@ -125,6 +109,19 @@ async function prepareStaticEvaluator(
   };
 }
 
+/** Removes this pass's bookkeeping from an expression, dropping the metadata object once it is empty. */
+function clearPassMetadata(expression: TaggedExpression): void {
+  const { metadata } = expression;
+  if (metadata === undefined) {
+    return;
+  }
+  delete metadata.isStatic;
+  delete metadata.staticId;
+  if (Object.keys(metadata).length === 0) {
+    delete expression.metadata;
+  }
+}
+
 /**
  * Folds every static expression in an operation through the Comunica Expression Evaluator, replacing each
  * maximal static operator subtree with the term it evaluates to.
@@ -138,13 +135,14 @@ export async function simplifyStaticExpressions<T extends Algebra.Operation>(
 ): Promise<T> {
   const evaluate = await prepareStaticEvaluator(c);
 
-  // Pass 1: collect the maximal static operator expressions, tagging each with a primitive id that survives
-  // the tree copy so pass 2 can recognise it.
+  // Pass 1: memoize static-ness bottom-up (so each operator only reads its arguments' cached flag) and
+  // collect the maximal static operator expressions, tagging each with a primitive id that survives the
+  // tree copy so pass 2 can recognise it.
   const pending = new Map<number, Algebra.Expression>();
   let nextStaticId = 0;
   const tagged = algebraUtils.mapOperation<'unsafe', T>(operation, {
     expression: { transform: (expression) => {
-      if (expression.subType === Algebra.ExpressionTypes.OPERATOR && isRewriteConstant(c, expression)) {
+      if (expression.subType === Algebra.ExpressionTypes.OPERATOR && isStaticExpression(expression, true)) {
         for (const argument of expression.args) {
           const argumentId = (<TaggedExpression> argument).metadata?.staticId;
           // A static argument was tagged during its own visit; only the outermost static operator folds.
@@ -160,21 +158,31 @@ export async function simplifyStaticExpressions<T extends Algebra.Operation>(
     } },
   });
 
-  // Evaluate the collected expressions in parallel; a raising one yields no term and is left standing.
+  // Evaluate the collected expressions in parallel. `NOW()` is static but its value is only known at
+  // execution time, so a subtree reading it is left standing, as is one that raises.
   const foldedTerms = new Map<number, RDF.Term>();
   await Promise.all([ ...pending ].map(async([ id, expression ]) => {
+    if (readsCurrentTime(expression)) {
+      return;
+    }
     const term = await evaluate(expression);
     if (term !== undefined) {
       foldedTerms.set(id, term);
     }
   }));
 
-  // Pass 2: replace every tagged-and-evaluated expression with the term it evaluated to.
+  // Pass 2: replace every tagged-and-evaluated expression with its term, and strip the bookkeeping left on
+  // the expressions that stayed.
   return algebraUtils.mapOperation<'unsafe', T>(tagged, {
     expression: { transform: (expression) => {
-      const id = (<TaggedExpression> expression).metadata?.staticId;
+      const annotated = <TaggedExpression> expression;
+      const id = annotated.metadata?.staticId;
       const term = id === undefined ? undefined : foldedTerms.get(id);
-      return term === undefined ? expression : c.AF.createTermExpression(term);
+      if (term !== undefined) {
+        return c.AF.createTermExpression(term);
+      }
+      clearPassMetadata(annotated);
+      return expression;
     } },
   });
 }

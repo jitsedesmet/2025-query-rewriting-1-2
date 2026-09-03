@@ -5,6 +5,7 @@ import { objectRange, predicateRange, subjectRange } from '../RangeSet.js';
 import type { TransformContext } from '../transformContext.js';
 import { termFalse, termTrue } from './operationhelpers.js';
 import { DF } from './rdfDatatypes.js';
+import { termIsStaticTerm } from './typeGuards.js';
 
 /**
  * Splits a filter expression on top level logical conjunctions (`&&`), implementing (SDecompI):
@@ -116,6 +117,42 @@ export function isStableExpression(c: TransformContext, expression: Algebra.Expr
     wildcard: neverStable,
   }});
   return isStable;
+}
+
+/**
+ * Whether an expression is static: it reads no variable and evaluates to one and the same term in every
+ * solution. This is {@link isStableExpression} of a variable-free expression, computed bottom-up so a
+ * memoized subexpression is never revisited.
+ * @param expression - The expression to inspect
+ * @param memoize - Whether to cache the result on `expression.metadata.isStatic` and reuse it
+ * @returns whether the expression is static
+ */
+export function isStaticExpression(expression: Algebra.Expression, memoize = false): boolean {
+  const annotated = <Algebra.Expression & { metadata?: { isStatic?: boolean }}> expression;
+  if (memoize && annotated.metadata?.isStatic !== undefined) {
+    return annotated.metadata.isStatic;
+  }
+  let isStatic: boolean;
+  switch (expression.subType) {
+    case Algebra.ExpressionTypes.TERM:
+      isStatic = termIsStaticTerm(expression.term);
+      break;
+    case Algebra.ExpressionTypes.OPERATOR:
+      isStatic = !unstableOperators.has(expression.operator) &&
+        expression.args.every(argument => isStaticExpression(argument, memoize));
+      break;
+    case Algebra.ExpressionTypes.NAMED:
+      isStatic = stableNamedFunctions.has(expression.name.value) &&
+        expression.args.every(argument => isStaticExpression(argument, memoize));
+      break;
+    default:
+      // An EXISTS, aggregate, or wildcard is not a function of its arguments alone.
+      isStatic = false;
+  }
+  if (memoize) {
+    (annotated.metadata ??= {}).isStatic = isStatic;
+  }
+  return isStatic;
 }
 
 /**

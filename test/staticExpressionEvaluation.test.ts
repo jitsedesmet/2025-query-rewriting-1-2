@@ -51,4 +51,9 @@ describe('simplifyStaticExpressions', () => {
     const out = await simplify('SELECT * WHERE { ?s ?p ?o . BIND(UUID() AS ?x) }');
     expect(out.toLowerCase()).toContain('uuid');
   });
+
+  it('does not fold NOW(), whose value is only known at execution time', async({ expect }) => {
+    const out = await simplify('SELECT * WHERE { ?s ?p ?o . BIND(NOW() AS ?x) }');
+    expect(out.toLowerCase()).toContain('now');
+  });
 });

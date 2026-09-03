@@ -9,7 +9,8 @@ import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { ComponentsManager } from 'componentsjs';
 import type { TransformContext } from '../transformContext.js';
-import { termIsStaticTerm } from './typeGuards.js';
+import { collectVariableNames } from '../utils.js';
+import { isStableExpression } from './expressionHelpers.js';
 
 /**
  * @fileoverview Folds fully static expressions through Comunica's Expression Evaluator.
@@ -22,14 +23,11 @@ import { termIsStaticTerm } from './typeGuards.js';
  * a standalone pass rather than a fold inside the synchronous substitution.
  */
 
-/** Operators whose value is not a pure function of their arguments and so may never be folded away. */
-const NON_DETERMINISTIC_OPERATORS = new Set([ 'rand', 'uuid', 'struuid', 'bnode', 'now' ]);
-
 /** The IRI the default Comunica configuration gives its runner. */
 const RUNNER_IRI = 'urn:comunica:default:Runner';
 
-/** An expression carrying the metadata this pass memoizes on it. */
-type MetadataExpression = Algebra.Expression & { metadata?: { isStatic?: boolean; staticId?: number }};
+/** An expression carrying the id this pass tags it with while collecting foldable subtrees. */
+type TaggedExpression = Algebra.Expression & { metadata?: { staticId?: number }};
 
 let factoryPromise: Promise<ActorExpressionEvaluatorFactory> | undefined;
 
@@ -67,34 +65,35 @@ async function getExpressionEvaluatorFactory(): Promise<ActorExpressionEvaluator
 }
 
 /**
- * Whether an expression is static: it reads nothing from a binding and computes the same value every time.
+ * Whether an operator expression reads `NOW()` anywhere within it.
  * @param expression - The expression to inspect
- * @param memoize - Whether to read and write the result on `expression.metadata.isStatic`
- * @returns whether the expression may be evaluated statically
+ * @returns whether the current time is read
  */
-export function isStaticExpression(expression: Algebra.Expression, memoize = false): boolean {
-  const annotated = <MetadataExpression> expression;
-  if (memoize && annotated.metadata?.isStatic !== undefined) {
-    return annotated.metadata.isStatic;
-  }
-  let result: boolean;
-  switch (expression.subType) {
-    case Algebra.ExpressionTypes.TERM:
-      result = termIsStaticTerm(expression.term);
-      break;
-    case Algebra.ExpressionTypes.OPERATOR:
-      // Deterministic operator over static arguments only; a single non-static argument taints the tree.
-      result = !NON_DETERMINISTIC_OPERATORS.has(expression.operator.toLowerCase()) &&
-        expression.args.every(argument => isStaticExpression(argument, memoize));
-      break;
-    default:
-      // EXISTS, aggregates, and NAMED functions read state beyond their arguments.
-      result = false;
-  }
-  if (memoize) {
-    (annotated.metadata ??= {}).isStatic = result;
-  }
-  return result;
+function readsCurrentTime(expression: Algebra.Expression): boolean {
+  let readsNow = false;
+  algebraUtils.visitOperationSub(expression, {}, { expression: { operator: { preVisitor: (operator) => {
+    if (operator.operator === 'now') {
+      readsNow = true;
+      return { shortcut: true };
+    }
+    return {};
+  } }}});
+  return readsNow;
+}
+
+/**
+ * Whether an expression folds to a single term while rewriting: it is a stable function of no variables (the
+ * codebase's notion of a static expression) whose value is already known now.
+ * @param c - The transformation context
+ * @param expression - The expression to inspect
+ * @returns whether it may be evaluated to a constant term
+ */
+function isRewriteConstant(c: TransformContext, expression: Algebra.Expression): boolean {
+  // `isStableExpression` counts `NOW()` as stable - it is fixed per execution - but its value is only known
+  // at execution time, not while rewriting, so a subtree reading it may not be folded away.
+  return isStableExpression(c, expression) &&
+    collectVariableNames(c.astTransformer, expression).size === 0 &&
+    !readsCurrentTime(expression);
 }
 
 /**
@@ -139,22 +138,22 @@ export async function simplifyStaticExpressions<T extends Algebra.Operation>(
 ): Promise<T> {
   const evaluate = await prepareStaticEvaluator(c);
 
-  // Pass 1: memoize static-ness bottom-up and collect the maximal static operator expressions, tagging each
-  // with a primitive id that survives the tree copy so pass 2 can recognise it.
+  // Pass 1: collect the maximal static operator expressions, tagging each with a primitive id that survives
+  // the tree copy so pass 2 can recognise it.
   const pending = new Map<number, Algebra.Expression>();
   let nextStaticId = 0;
   const tagged = algebraUtils.mapOperation<'unsafe', T>(operation, {
     expression: { transform: (expression) => {
-      if (expression.subType === Algebra.ExpressionTypes.OPERATOR && isStaticExpression(expression, true)) {
+      if (expression.subType === Algebra.ExpressionTypes.OPERATOR && isRewriteConstant(c, expression)) {
         for (const argument of expression.args) {
-          const argumentId = (<MetadataExpression> argument).metadata?.staticId;
-          // A static argument was queued during its own visit; only the outermost static operator folds.
+          const argumentId = (<TaggedExpression> argument).metadata?.staticId;
+          // A static argument was tagged during its own visit; only the outermost static operator folds.
           if (argumentId !== undefined) {
             pending.delete(argumentId);
           }
         }
         const id = nextStaticId++;
-        ((<MetadataExpression> expression).metadata ??= {}).staticId = id;
+        ((<TaggedExpression> expression).metadata ??= {}).staticId = id;
         pending.set(id, expression);
       }
       return expression;
@@ -173,7 +172,7 @@ export async function simplifyStaticExpressions<T extends Algebra.Operation>(
   // Pass 2: replace every tagged-and-evaluated expression with the term it evaluated to.
   return algebraUtils.mapOperation<'unsafe', T>(tagged, {
     expression: { transform: (expression) => {
-      const id = (<MetadataExpression> expression).metadata?.staticId;
+      const id = (<TaggedExpression> expression).metadata?.staticId;
       const term = id === undefined ? undefined : foldedTerms.get(id);
       return term === undefined ? expression : c.AF.createTermExpression(term);
     } },

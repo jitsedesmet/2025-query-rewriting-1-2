@@ -5583,7 +5583,7 @@ comment-parser@1.4.1:
   resolved "https://registry.npmjs.org/comment-parser/-/comment-parser-1.4.1.tgz"
   integrity sha512-buhp5kePrmda3vhc5B9t7pUQXAb2Tnd0qgpkIhPhkHXxJpiPJ11H0ZEU0oBpJ2QztSbzG/ZxMj/CHsYJqRHmyg==
 
-componentsjs@^6.2.0:
+componentsjs@^6.2.0, componentsjs@^6.4.0:
   version "6.4.0"
   resolved "https://registry.npmjs.org/componentsjs/-/componentsjs-6.4.0.tgz"
   integrity sha512-H3AmzWARyQB5V/XJ7brjnFVfqywedjVFX3n528GKjEpQvNY4HXu5CBOAWDADjeSC42cufVc7C+J+cGTsgeKRzg==

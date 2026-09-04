@@ -25,9 +25,6 @@ import { isStaticExpression } from './expressionHelpers.js';
 /** The IRI the default Comunica configuration gives its runner. */
 const RUNNER_IRI = 'urn:comunica:default:Runner';
 
-/** An expression carrying the metadata this pass memoizes on it: static-ness and a collected-subtree id. */
-type TaggedExpression = Algebra.Expression & { metadata?: { isStatic?: boolean; staticId?: number }};
-
 let factoryPromise: Promise<ActorExpressionEvaluatorFactory> | undefined;
 
 /**
@@ -109,19 +106,6 @@ async function prepareStaticEvaluator(
   };
 }
 
-/** Removes this pass's bookkeeping from an expression, dropping the metadata object once it is empty. */
-function clearPassMetadata(expression: TaggedExpression): void {
-  const { metadata } = expression;
-  if (metadata === undefined) {
-    return;
-  }
-  delete metadata.isStatic;
-  delete metadata.staticId;
-  if (Object.keys(metadata).length === 0) {
-    delete expression.metadata;
-  }
-}
-
 /**
  * Folds every static expression in an operation through the Comunica Expression Evaluator, replacing each
  * maximal static operator subtree with the term it evaluates to.
@@ -135,54 +119,20 @@ export async function simplifyStaticExpressions<T extends Algebra.Operation>(
 ): Promise<T> {
   const evaluate = await prepareStaticEvaluator(c);
 
-  // Pass 1: memoize static-ness bottom-up (so each operator only reads its arguments' cached flag) and
-  // collect the maximal static operator expressions, tagging each with a primitive id that survives the
-  // tree copy so pass 2 can recognise it.
-  const pending = new Map<number, Algebra.Expression>();
-  let nextStaticId = 0;
-  const tagged = algebraUtils.mapOperation<'unsafe', T>(operation, {
-    expression: { transform: (expression) => {
-      if (expression.subType === Algebra.ExpressionTypes.OPERATOR && isStaticExpression(expression, true)) {
-        for (const argument of expression.args) {
-          const argumentId = (<TaggedExpression> argument).metadata?.staticId;
-          // A static argument was tagged during its own visit; only the outermost static operator folds.
-          if (argumentId !== undefined) {
-            pending.delete(argumentId);
-          }
+  // A pre-order walk visits an operator before its arguments, so the first static operator it meets is the
+  // maximal one: folding it and halting the descent (`continue: false`) leaves its arguments unvisited.
+  // `NOW()` is static but its value is only known at execution time, so a subtree reading it is left
+  // standing, as is one that raises (its evaluation yields `undefined`).
+  return algebraUtils.mapOperationPreOrderAsync<'unsafe', T>(operation, {
+    [Algebra.Types.EXPRESSION]: async(expression) => {
+      if (expression.subType === Algebra.ExpressionTypes.OPERATOR &&
+        isStaticExpression(expression) && !readsCurrentTime(expression)) {
+        const term = await evaluate(expression);
+        if (term !== undefined) {
+          return { newValue: c.AF.createTermExpression(term), continue: false };
         }
-        const id = nextStaticId++;
-        ((<TaggedExpression> expression).metadata ??= {}).staticId = id;
-        pending.set(id, expression);
       }
-      return expression;
-    } },
-  });
-
-  // Evaluate the collected expressions in parallel. `NOW()` is static but its value is only known at
-  // execution time, so a subtree reading it is left standing, as is one that raises.
-  const foldedTerms = new Map<number, RDF.Term>();
-  await Promise.all([ ...pending ].map(async([ id, expression ]) => {
-    if (readsCurrentTime(expression)) {
-      return;
-    }
-    const term = await evaluate(expression);
-    if (term !== undefined) {
-      foldedTerms.set(id, term);
-    }
-  }));
-
-  // Pass 2: replace every tagged-and-evaluated expression with its term, and strip the bookkeeping left on
-  // the expressions that stayed.
-  return algebraUtils.mapOperation<'unsafe', T>(tagged, {
-    expression: { transform: (expression) => {
-      const annotated = <TaggedExpression> expression;
-      const id = annotated.metadata?.staticId;
-      const term = id === undefined ? undefined : foldedTerms.get(id);
-      if (term !== undefined) {
-        return c.AF.createTermExpression(term);
-      }
-      clearPassMetadata(annotated);
-      return expression;
-    } },
+      return { newValue: expression };
+    },
   });
 }

@@ -4,6 +4,10 @@
   "version": "0.0.0",
   "private": "true",
   "packageManager": "yarn@1.22.22",
+  "workspaces": [
+    "traqula/packages/*",
+    "traqula/engines/*"
+  ],
   "description": "Query rewriting for a SPARQL 1.2 query on RDF 1.1 data ",
   "lsd:module": true,
   "license": "MIT",

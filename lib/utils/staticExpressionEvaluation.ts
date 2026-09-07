@@ -9,7 +9,7 @@ import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { ComponentsManager } from 'componentsjs';
 import type { TransformContext } from '../transformContext.js';
-import { isStaticExpression } from './expressionHelpers.js';
+import { foldsToConstantTerm } from './expressionHelpers.js';
 
 /**
  * @fileoverview Folds fully static expressions through Comunica's Expression Evaluator.
@@ -61,23 +61,6 @@ async function getExpressionEvaluatorFactory(): Promise<ActorExpressionEvaluator
 }
 
 /**
- * Whether an expression reads `NOW()` anywhere within it.
- * @param expression - The expression to inspect
- * @returns whether the current time is read
- */
-function readsCurrentTime(expression: Algebra.Expression): boolean {
-  let readsNow = false;
-  algebraUtils.visitOperationSub(expression, {}, { expression: { operator: { preVisitor: (operator) => {
-    if (operator.operator === 'now') {
-      readsNow = true;
-      return { shortcut: true };
-    }
-    return {};
-  } }}});
-  return readsNow;
-}
-
-/**
  * Prepares a function that evaluates a static expression over a fresh, shared Comunica action context.
  * @param c - The transformation context, for its data factory
  * @returns an evaluator returning the resulting term, or `undefined` when evaluation raises
@@ -108,7 +91,7 @@ async function prepareStaticEvaluator(
 
 /**
  * Folds every static expression in an operation through the Comunica Expression Evaluator, replacing each
- * maximal static operator subtree with the term it evaluates to.
+ * static operator subtree with the term it evaluates to.
  * @param c - The transformation context
  * @param operation - The operation to simplify
  * @returns a copy of the operation with its static expressions folded
@@ -119,20 +102,19 @@ export async function simplifyStaticExpressions<T extends Algebra.Operation>(
 ): Promise<T> {
   const evaluate = await prepareStaticEvaluator(c);
 
-  // A pre-order walk visits an operator before its arguments, so the first static operator it meets is the
-  // maximal one: folding it and halting the descent (`continue: false`) leaves its arguments unvisited.
-  // `NOW()` is static but its value is only known at execution time, so a subtree reading it is left
-  // standing, as is one that raises (its evaluation yields `undefined`).
-  return algebraUtils.mapOperationPreOrderAsync<'unsafe', T>(operation, {
-    [Algebra.Types.EXPRESSION]: async(expression) => {
-      if (expression.subType === Algebra.ExpressionTypes.OPERATOR &&
-        isStaticExpression(expression) && !readsCurrentTime(expression)) {
+  // A post-order walk visits an operator after its arguments, so a static argument has already been folded
+  // to a term by the time its operator is seen: {@link foldsToConstantTerm} then decides staticness from
+  // the direct arguments alone. A raising expression yields `undefined` and is left standing; because
+  // `NOW()` never folds, anything reading it keeps a non-constant argument and is left standing too.
+  return algebraUtils.mapOperationAsync<'unsafe', T>(operation, {
+    [Algebra.Types.EXPRESSION]: { transform: async(expression) => {
+      if (foldsToConstantTerm(expression)) {
         const term = await evaluate(expression);
         if (term !== undefined) {
-          return { newValue: c.AF.createTermExpression(term), continue: false };
+          return c.AF.createTermExpression(term);
         }
       }
-      return { newValue: expression };
-    },
+      return expression;
+    } },
   });
 }

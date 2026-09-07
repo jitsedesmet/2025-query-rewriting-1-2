@@ -120,22 +120,24 @@ export function isStableExpression(c: TransformContext, expression: Algebra.Expr
 }
 
 /**
- * Whether an expression is static: it reads no variable and evaluates to one and the same term in every
- * solution. This is {@link isStableExpression} of a variable-free expression, decided bottom-up from the
- * expression's arguments.
+ * Whether an expression is a stable, rewrite-time function of constant arguments, so it evaluates to one
+ * constant term. Meant for a bottom-up pass: a static argument is by then already such a term, so this is
+ * decided from the direct arguments without recursing. `NOW` is excluded - it is constant per execution but
+ * its value is only fixed at execution time, not at rewrite time.
  * @param expression - The expression to inspect
- * @returns whether the expression is static
+ * @returns whether the expression folds to a constant term
  */
-export function isStaticExpression(expression: Algebra.Expression): boolean {
+export function foldsToConstantTerm(expression: Algebra.Expression): boolean {
+  const argumentsAreConstant = (args: Algebra.Expression[]): boolean => args.every(argument =>
+    argument.subType === Algebra.ExpressionTypes.TERM && termIsStaticTerm(argument.term));
   switch (expression.subType) {
-    case Algebra.ExpressionTypes.TERM:
-      return termIsStaticTerm(expression.term);
     case Algebra.ExpressionTypes.OPERATOR:
-      return !unstableOperators.has(expression.operator) && expression.args.every(isStaticExpression);
+      return expression.operator !== 'now' && !unstableOperators.has(expression.operator) &&
+        argumentsAreConstant(expression.args);
     case Algebra.ExpressionTypes.NAMED:
-      return stableNamedFunctions.has(expression.name.value) && expression.args.every(isStaticExpression);
+      return stableNamedFunctions.has(expression.name.value) && argumentsAreConstant(expression.args);
     default:
-      // An EXISTS, aggregate, or wildcard is not a function of its arguments alone.
+      // A term already is a constant; an EXISTS, aggregate, or wildcard never folds to one.
       return false;
   }
 }

@@ -128,8 +128,9 @@ export function isStableExpression(c: TransformContext, expression: Algebra.Expr
  * @returns whether the expression folds to a constant term
  */
 export function foldsToConstantTerm(expression: Algebra.Expression): boolean {
-  const argumentsAreConstant = (args: Algebra.Expression[]): boolean => args.every(argument =>
-    argument.subType === Algebra.ExpressionTypes.TERM && termIsStaticTerm(argument.term));
+  function argumentsAreConstant(args: Algebra.Expression[]): boolean {
+    return args.every(argument => argument.subType === Algebra.ExpressionTypes.TERM && termIsStaticTerm(argument.term));
+  }
   switch (expression.subType) {
     case Algebra.ExpressionTypes.OPERATOR:
       return expression.operator !== 'now' && !unstableOperators.has(expression.operator) &&

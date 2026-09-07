@@ -107,14 +107,16 @@ export async function simplifyStaticExpressions<T extends Algebra.Operation>(
   // the direct arguments alone. A raising expression yields `undefined` and is left standing; because
   // `NOW()` never folds, anything reading it keeps a non-constant argument and is left standing too.
   return algebraUtils.mapOperationAsync<'unsafe', T>(operation, {
-    [Algebra.Types.EXPRESSION]: { transform: async(expression) => {
-      if (foldsToConstantTerm(expression)) {
-        const term = await evaluate(expression);
-        if (term !== undefined) {
-          return c.AF.createTermExpression(term);
+    [Algebra.Types.EXPRESSION]: {
+      transform: async(expression) => {
+        if (foldsToConstantTerm(expression)) {
+          const term = await evaluate(expression);
+          if (term !== undefined) {
+            return c.AF.createTermExpression(term);
+          }
         }
-      }
-      return expression;
-    } },
+        return expression;
+      },
+    },
   });
 }

@@ -12,7 +12,7 @@ import { operationTransform, queryTransform } from '../lib/transformBgp.js';
 import type { TransformContext } from '../lib/transformContext.js';
 import { createPartialContext, parseQuery, transformContextFromConstructs } from '../lib/transformContext.js';
 import { createFilterFalse } from '../lib/utils/operationhelpers.js';
-import { nonReificationTripleConstruct, rdfReificationConstruct } from './queryConsts.js';
+import { nonReificationTripleConstruct, nonTripleTermConstruct, rdfReificationConstruct } from './queryConsts.js';
 
 // Crazy workaround to support both CJS and ESM
 const arrayifyStream =
@@ -22,126 +22,196 @@ const prefixes = `PREFIX : <ex://>
 PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 `;
 
+const engine = new QueryEngine();
+
+/** The solutions of a query as sorted `name=value` strings, so two queries compare by what they return. */
+async function sortedBindingsOf(query: string, source: string): Promise<string[]> {
+  const rows: any[] = await arrayifyStream(await engine.queryBindings(query, { sources: [ source ]}));
+  return rows
+    .map(row => [ ...row ].map(([ key, value ]: [any, any]) => `${key.value}=${value.value}`).sort().join('|'))
+    .sort();
+}
+
+/** The variables a query's result exposes - its header, which is where a change of scope would show. */
+async function exposedVariablesOf(query: string, source: string): Promise<string[]> {
+  const result = <any> await engine.query(query, { sources: [ source ]});
+  const metadata = await result.metadata();
+  const variableNames: string[] = metadata.variables.map((variable: { value: string }) => variable.value);
+  return variableNames.sort();
+}
+
 describe('transformFilterFalse', () => {
   // The pass only ever reads AF / DF / generator off the context, never the mapping.
   const c = <TransformContext> createPartialContext();
 
   /** The pass over algebra built by hand, which is how the sub-SELECT shapes are reached exactly. */
-  function transform(op: Algebra.Operation): Algebra.Operation {
+  function transformAlgebra(op: Algebra.Operation): Algebra.Operation {
     return transformFilterFalse(c, op);
   }
 
   /** The pass over a parsed query, back as SPARQL. */
-  function transformQuery(query: string): string {
+  function transformQueryString(query: string): string {
     return c.generator.generate(toAst(transformFilterFalse(c, parseQuery(c, prefixes + query)))).trim();
   }
 
-  /** The `SELECT` clause of a generated query: what it exposes, which no rewrite here may change. */
-  function selectClauseOf(query: string): string {
-    return query.split('\n')[0];
+  function extendWithConstant(input: Algebra.Operation): Algebra.Extend {
+    return c.AF.createExtend(input, c.DF.variable('b'), c.AF.createTermExpression(c.DF.namedNode('ex://b')));
   }
 
-  const scan = c.AF.createBgp([
+  const tripleScan = c.AF.createBgp([
     c.AF.createPattern(c.DF.variable('s'), c.DF.variable('p'), c.DF.variable('o')),
   ]);
-  /** `{ SELECT ?a WHERE { FILTER(false) } }`: the shape `operationTransform` leaves an empty branch in. */
-  const emptySubSelect = c.AF.createProject(createFilterFalse(c), [ c.DF.variable('a') ]);
+  /**
+   * `{ SELECT ?a WHERE { ?a :p ?b FILTER(false) } }`, shaped the way the pushdown leaves an empty branch: its
+   * `FILTER(FALSE)` stands over the operation it replaced, so `?b` is still in scope below the projection.
+   */
+  const emptySubSelect = c.AF.createProject(
+    createFilterFalse(c, c.AF.createBgp([
+      c.AF.createPattern(c.DF.variable('a'), c.DF.namedNode('ex://p'), c.DF.variable('b')),
+    ])),
+    [ c.DF.variable('a') ],
+  );
+  const countAll = c.AF.createBoundAggregate(c.DF.variable('n'), 'count', c.AF.createWildcardExpression(), false);
+
+  /** A sub-SELECT's modifiers over nothing, each of which is still nothing. */
+  const emptyModifiedSubSelects: [string, Algebra.Operation][] = [
+    [ 'DISTINCT', c.AF.createDistinct(emptySubSelect) ],
+    [ 'REDUCED', c.AF.createReduced(emptySubSelect) ],
+    [ 'LIMIT', c.AF.createSlice(emptySubSelect, 0, 10) ],
+    [ 'OFFSET', c.AF.createSlice(emptySubSelect, 5) ],
+    [ 'DISTINCT with LIMIT and OFFSET', c.AF.createSlice(c.AF.createDistinct(emptySubSelect), 5, 10) ],
+  ];
 
   describe('emptiness through a sub-SELECT', () => {
     it('drops a UNION branch whose EXTEND stands over an empty sub-SELECT', ({ expect }) => {
-      const extended = c.AF.createExtend(
-        emptySubSelect,
-        c.DF.variable('b'),
-        c.AF.createTermExpression(c.DF.namedNode('ex://b')),
-      );
-      expect(transform(c.AF.createUnion([ scan, extended ], false))).toEqual(scan);
+      expect(transformAlgebra(c.AF.createUnion([ tripleScan, extendWithConstant(emptySubSelect) ], false)))
+        .toEqual(tripleScan);
     });
 
     it('empties a JOIN over an empty sub-SELECT', ({ expect }) => {
-      expect(transform(c.AF.createJoin([ scan, emptySubSelect ], false))).toEqual(createFilterFalse(c));
+      expect(transformAlgebra(c.AF.createJoin([ tripleScan, emptySubSelect ], false))).toEqual(createFilterFalse(c));
     });
 
     it('reduces a MINUS whose right operand is an empty sub-SELECT to its left', ({ expect }) => {
-      expect(transform(c.AF.createMinus(scan, emptySubSelect))).toEqual(scan);
+      expect(transformAlgebra(c.AF.createMinus(tripleScan, emptySubSelect))).toEqual(tripleScan);
     });
 
     it('reduces a LEFT JOIN whose right operand is an empty sub-SELECT to its left', ({ expect }) => {
-      expect(transform(c.AF.createLeftJoin(scan, emptySubSelect))).toEqual(scan);
+      expect(transformAlgebra(c.AF.createLeftJoin(tripleScan, emptySubSelect))).toEqual(tripleScan);
     });
 
-    it('sees through the modifiers of an empty sub-SELECT', ({ expect }) => {
-      // DISTINCT, REDUCED and LIMIT/OFFSET over nothing are still nothing.
-      const modified = c.AF.createSlice(c.AF.createDistinct(emptySubSelect), 0, 10);
-      expect(transform(c.AF.createJoin([ scan, modified ], false))).toEqual(createFilterFalse(c));
-    });
+    for (const [ modifierName, modifiedSubSelect ] of emptyModifiedSubSelects) {
+      it(`sees through the ${modifierName} of an empty sub-SELECT`, ({ expect }) => {
+        expect(transformAlgebra(c.AF.createJoin([ tripleScan, modifiedSubSelect ], false)))
+          .toEqual(createFilterFalse(c));
+      });
+    }
   });
 
   describe('the projection of an empty sub-SELECT', () => {
-    it('collapses when it is nested', ({ expect }) => {
-      const extended = c.AF.createExtend(
-        emptySubSelect,
-        c.DF.variable('b'),
-        c.AF.createTermExpression(c.DF.namedNode('ex://b')),
-      );
-      expect(transform(extended)).toEqual(createFilterFalse(c));
+    it('collapses into a fresh FILTER(FALSE) when it is nested', ({ expect }) => {
+      // Fresh, not the pushdown's FILTER(FALSE) lifted out of the projection: that one still carries the ?b
+      // the projection hid, and bringing it back into scope could clash with a BIND(… AS ?b) beside it.
+      expect(transformAlgebra(extendWithConstant(emptySubSelect))).toEqual(createFilterFalse(c));
     });
 
     it('is kept when it is the query\'s own projection', ({ expect }) => {
-      expect(transform(emptySubSelect)).toEqual(emptySubSelect);
+      expect(transformAlgebra(emptySubSelect)).toEqual(emptySubSelect);
     });
 
     it('leaves a GROUP over it alone, an aggregate over nothing still answering', ({ expect }) => {
-      const count = c.AF.createBoundAggregate(c.DF.variable('n'), 'count', c.AF.createWildcardExpression(), false);
-      const grouped = c.AF.createGroup(emptySubSelect, [], [ count ]);
+      const grouped = c.AF.createGroup(emptySubSelect, [], [ countAll ]);
       // The sub-SELECT inside collapses; the GROUP over it, and the JOIN over that, do not.
-      expect(transform(c.AF.createJoin([ scan, grouped ], false)))
-        .toEqual(c.AF.createJoin([ scan, c.AF.createGroup(createFilterFalse(c), [], [ count ]) ], false));
+      expect(transformAlgebra(c.AF.createJoin([ tripleScan, grouped ], false)))
+        .toEqual(c.AF.createJoin([ tripleScan, c.AF.createGroup(createFilterFalse(c), [], [ countAll ]) ], false));
     });
   });
 
-  describe('the query the caller reads its answer off', () => {
+  describe('the query\'s own solution modifiers', () => {
     it('keeps an outermost projection over an empty input', ({ expect }) => {
-      expect(transformQuery('SELECT ?a ?b WHERE { ?a :p ?b FILTER(false) }'))
+      expect(transformQueryString('SELECT ?a ?b WHERE { ?a :p ?b FILTER(false) }'))
         .toContain('SELECT ?a ?b WHERE');
     });
 
     it('keeps an outermost DISTINCT and LIMIT over an empty input', ({ expect }) => {
-      const transformed = transformQuery('SELECT DISTINCT ?a ?b WHERE { ?a :p ?b FILTER(false) } LIMIT 10');
+      const transformed = transformQueryString('SELECT DISTINCT ?a ?b WHERE { ?a :p ?b FILTER(false) } LIMIT 10');
       expect(transformed).toContain('SELECT DISTINCT ?a ?b WHERE');
       expect(transformed).toContain('LIMIT 10');
     });
 
-    it('exposes the same variables when a sub-SELECT of a SELECT * goes empty', ({ expect }) => {
-      const query = 'SELECT * WHERE { ?s :q ?r { SELECT ?a WHERE { ?a :p ?o FILTER(false) } } }';
-      expect(selectClauseOf(transformQuery(query)))
-        .toEqual(selectClauseOf(c.generator.generate(toAst(parseQuery(c, prefixes + query))).trim()));
+    // In a parsed query every modifier stands over the projection, which is sealed by itself; built by hand
+    // without one is the only way to see that the modifiers are sealed in their own right.
+    it('keeps an outermost SLICE and DISTINCT that have no projection below them', ({ expect }) => {
+      const sliced = c.AF.createSlice(c.AF.createDistinct(createFilterFalse(c)), 0, 10);
+      expect(transformAlgebra(sliced)).toEqual(sliced);
     });
 
-    it('leaves an aggregate without a GROUP BY over an empty input alone', ({ expect }) => {
+    it('keeps an outermost FROM and REDUCED that have no projection below them', ({ expect }) => {
+      const fromGraph = c.AF.createFrom(c.AF.createReduced(createFilterFalse(c)), [ c.DF.namedNode('ex://g') ], []);
+      expect(transformAlgebra(fromGraph)).toEqual(fromGraph);
+    });
+  });
+
+  describe('the answer of a rewritten query', () => {
+    const source = './test/statics/multipleRdfReifiedTriples.ttl';
+
+    // The pass-through mapping leaves every pattern as it was, so the output only shows what
+    // transformFilterFalse itself did.
+    function rewriteWithFilterFalse(query: string): string {
+      const passThroughContext = transformContextFromConstructs([ nonTripleTermConstruct ]);
+      return queryTransform(passThroughContext, query, [ transformFilterFalse ]);
+    }
+
+    it('exposes the same variables and rows when a SELECT * loses an empty sub-SELECT', async({ expect }) => {
+      // `?a` is only in scope through the branch that is dropped, so it is what a lost scope would lose.
+      const query = `${prefixes}SELECT * WHERE { { ?s :knows ?o } UNION { SELECT ?a WHERE { ?a :p ?b FILTER(false) } } }`;
+      const rewritten = rewriteWithFilterFalse(query);
+      expect(rewritten).not.toContain('FILTER ( FALSE )');
+      expect(await exposedVariablesOf(rewritten, source)).toEqual(await exposedVariablesOf(query, source));
+      expect(await exposedVariablesOf(rewritten, source)).toContain('a');
+      const originalBindings = await sortedBindingsOf(query, source);
+      // Sanity: the query actually returns something, so the comparison is not two empty lists.
+      expect(originalBindings.length).toBeGreaterThan(0);
+      expect(await sortedBindingsOf(rewritten, source)).toEqual(originalBindings);
+    });
+
+    it('still returns the single row of an aggregate over an empty input', async({ expect }) => {
       // COUNT(*) of nothing is 0, one row - so this query is not empty and may not be collapsed.
-      expect(transformQuery('SELECT (COUNT(*) AS ?n) WHERE { ?s :p ?o FILTER(false) }'))
-        .toEqual(c.generator.generate(toAst(parseQuery(
-          c,
-          `${prefixes}SELECT (COUNT(*) AS ?n) WHERE { ?s :p ?o FILTER(false) }`,
-        ))).trim());
+      const query = `${prefixes}SELECT (COUNT(*) AS ?n) WHERE { ?s :knows ?o FILTER(false) }`;
+      expect(await sortedBindingsOf(query, source)).toEqual([ 'n=0' ]);
+      expect(await sortedBindingsOf(rewriteWithFilterFalse(query), source)).toEqual([ 'n=0' ]);
     });
   });
 
   describe('idempotence', () => {
     const shapes: [string, Algebra.Operation][] = [
-      [ 'a UNION with an empty branch', c.AF.createUnion([
-        scan,
-        c.AF.createExtend(emptySubSelect, c.DF.variable('b'), c.AF.createTermExpression(c.DF.namedNode('ex://b'))),
-      ], false) ],
-      [ 'a JOIN over an empty sub-SELECT', c.AF.createJoin([ scan, emptySubSelect ], false) ],
+      [ 'a UNION with an empty branch', c.AF.createUnion([ tripleScan, extendWithConstant(emptySubSelect) ], false) ],
+      [ 'a JOIN over an empty sub-SELECT', c.AF.createJoin([ tripleScan, emptySubSelect ], false) ],
+      [ 'a MINUS against an empty sub-SELECT', c.AF.createMinus(tripleScan, emptySubSelect) ],
+      [ 'a LEFT JOIN over an empty sub-SELECT', c.AF.createLeftJoin(tripleScan, emptySubSelect) ],
+      [ 'a GROUP over an empty sub-SELECT', c.AF.createGroup(emptySubSelect, [], [ countAll ]) ],
       [ 'an empty sub-SELECT on its own', emptySubSelect ],
-      [ 'an empty outermost projection', parseQuery(c, `${prefixes}SELECT ?a WHERE { ?a :p ?o FILTER(false) }`) ],
+      ...emptyModifiedSubSelects.map(([ modifierName, modifiedSubSelect ]): [string, Algebra.Operation] =>
+        [ `a JOIN over the ${modifierName} of an empty sub-SELECT`, c.AF.createJoin([ tripleScan, modifiedSubSelect ], false) ]),
+      [ 'an outermost projection', parseQuery(c, `${prefixes}SELECT ?a WHERE { ?a :p ?o FILTER(false) }`) ],
+      [ 'an outermost DISTINCT and LIMIT', parseQuery(
+        c,
+        `${prefixes}SELECT DISTINCT ?a WHERE { ?a :p ?o FILTER(false) } LIMIT 10`,
+      ) ],
+      [ 'a SELECT * losing a sub-SELECT', parseQuery(
+        c,
+        `${prefixes}SELECT * WHERE { { ?s :knows ?o } UNION { SELECT ?a WHERE { ?a :p ?b FILTER(false) } } }`,
+      ) ],
+      [ 'an aggregate over an empty input', parseQuery(
+        c,
+        `${prefixes}SELECT (COUNT(*) AS ?n) WHERE { ?s :knows ?o FILTER(false) }`,
+      ) ],
     ];
 
-    for (const [ name, shape ] of shapes) {
-      it(`runs to a fixed point on ${name}`, ({ expect }) => {
-        const once = transform(shape);
-        expect(transform(once)).toEqual(once);
+    for (const [ shapeName, shape ] of shapes) {
+      it(`runs to a fixed point on ${shapeName}`, ({ expect }) => {
+        const transformedOnce = transformAlgebra(shape);
+        expect(transformAlgebra(transformedOnce)).toEqual(transformedOnce);
       });
     }
   });
@@ -149,6 +219,7 @@ describe('transformFilterFalse', () => {
 
 describe('transformFilterFalse over a reification mapping', () => {
   const mappers = [ rdfReificationConstruct, nonReificationTripleConstruct ];
+  const source = './test/statics/bkrReifiedStatements.ttl';
 
   // A constant in the quoted triple is what lets the pushdown prove the pass-through branch empty; a
   // fully variable << ?s ?p ?o >> leaves nothing to decide.
@@ -180,31 +251,21 @@ SELECT ?o ?source WHERE { << bkr:META_C0040300-INST bkr_sn:PART_OF ?o >> proveni
     pullUpExtends,
   ];
 
-  function rewrite(pipeline: readonly ((c: TransformContext, op: Algebra.Operation) => Algebra.Operation)[]):
-  string {
+  function rewriteWithPipeline(
+    pipeline: readonly ((c: TransformContext, op: Algebra.Operation) => Algebra.Operation)[],
+  ): string {
     return queryTransform(transformContextFromConstructs(mappers), query, [ ...pipeline ]);
   }
 
   it('leaves no dead branch in the pushdown pipeline', ({ expect }) => {
-    expect(rewrite(pushdownPipeline)).not.toContain('FILTER ( FALSE )');
+    expect(rewriteWithPipeline(pushdownPipeline)).not.toContain('FILTER ( FALSE )');
   });
 
   it('leaves no dead branch in the pullUpExtends pipeline', ({ expect }) => {
-    expect(rewrite(pullUpPipeline)).not.toContain('FILTER ( FALSE )');
+    expect(rewriteWithPipeline(pullUpPipeline)).not.toContain('FILTER ( FALSE )');
   });
 
   describe('the rewritten query still answers', () => {
-    const engine = new QueryEngine();
-
-    async function bindings(toRun: string): Promise<string[]> {
-      const rows: any[] = await arrayifyStream(await engine.queryBindings(toRun, {
-        sources: [ './test/statics/bkrReifiedStatements.ttl' ],
-      }));
-      return rows
-        .map(row => [ ...row ].map(([ key, value ]: [any, any]) => `${key.value}=${value.value}`).sort().join('|'))
-        .sort();
-    }
-
     // What the mapping means over RDF 1.1 data, written out by hand: the reifying pattern can only be
     // answered by the reification structure, never by the pass-through branch the pushdown empties.
     const expectedOverRdf11 = `
@@ -221,14 +282,15 @@ SELECT ?o ?source WHERE {
 }`;
 
     it('agrees with the mapping, run through the pushdown pipeline', async({ expect }) => {
-      const expected = await bindings(expectedOverRdf11);
+      const expectedBindings = await sortedBindingsOf(expectedOverRdf11, source);
       // Sanity: the data actually answers, so the comparison is not two empty lists.
-      expect(expected).toHaveLength(2);
-      expect(await bindings(rewrite(pushdownPipeline))).toEqual(expected);
+      expect(expectedBindings).toHaveLength(2);
+      expect(await sortedBindingsOf(rewriteWithPipeline(pushdownPipeline), source)).toEqual(expectedBindings);
     });
 
     it('agrees with the mapping, run through the pullUpExtends pipeline', async({ expect }) => {
-      expect(await bindings(rewrite(pullUpPipeline))).toEqual(await bindings(expectedOverRdf11));
+      expect(await sortedBindingsOf(rewriteWithPipeline(pullUpPipeline), source))
+        .toEqual(await sortedBindingsOf(expectedOverRdf11, source));
     });
   });
 });

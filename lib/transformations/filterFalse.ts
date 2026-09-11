@@ -24,6 +24,8 @@ import { solutionModifierChainOf } from '../utils/solutionModifierChain.js';
  * nodes are sealed ({@link utils/solutionModifierChain!solutionModifierChainOf}) - `queryTransform` strips
  * them before a pass and puts them back afterwards, but this pass is exported publicly, and an empty
  * `SELECT DISTINCT ?a ?b LIMIT 10` handed to it directly is still a `SELECT DISTINCT ?a ?b LIMIT 10`.
+ * Inside `queryTransform` the root is the query's WHERE clause instead, so a sub-SELECT that makes up the
+ * whole of it is sealed too; that costs nothing, its answer being the query's answer.
  */
 
 /**
@@ -34,7 +36,8 @@ import { solutionModifierChainOf } from '../utils/solutionModifierChain.js';
  * - PROJECT/EXTEND/DISTINCT/etc. over FILTER(FALSE) becomes FILTER(FALSE), so emptiness climbs out of a
  *   sub-SELECT
  * - MINUS/LEFT JOIN whose right operand is FILTER(FALSE) becomes its left operand
- * - GROUP is where emptiness stops, and so is the query's own solution-modifier chain
+ * - GROUP is not absorbing, since an aggregate over nothing still returns a row
+ * - the query's own solution modifiers (its PROJECT, DISTINCT, LIMIT, ...) are left in place
  * @param c - The transformation context
  * @param op - The operation to transform
  * @returns the simplified operation
@@ -95,7 +98,8 @@ export function transformFilterFalse(c: TransformContext, op: Algebra.Operation)
  * @param c - The transformation context
  * @param single - A single-input operation
  * @param isSealed - Whether it is part of the query's own solution-modifier chain
- * @returns FILTER(FALSE) if the input is empty, otherwise the original operation
+ * @returns FILTER(FALSE) if the input is empty and the operation is not sealed, otherwise the original
+ * operation
  */
 function absorbingSingle(
   c: TransformContext,

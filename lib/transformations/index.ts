@@ -4,9 +4,9 @@
  * Optimization and transformation passes applied in sequence after the core BGP rewriting:
  *
  * - **transformFilterFalse**: removes FILTER(FALSE) patterns and the structures containing them (UNION
- *   identity, JOIN absorbing element). Emptiness climbs out of a sub-SELECT through its PROJECT; a GROUP
- *   stops it, an aggregate over nothing still answering, and so does the query's own solution-modifier
- *   chain.
+ *   identity, JOIN absorbing element). Emptiness climbs out of a sub-SELECT through its PROJECT. It stops at
+ *   a GROUP, since an aggregate over nothing still returns a row, and at the query's own solution modifiers,
+ *   which are left in place.
  * - **nullifyJoinOverIncompatibleBounds**: detects joins whose branches bind a variable to incompatible
  *   terms and replaces them with FILTER(FALSE).
  * - **nullifyUnbindableVars**: the same one level up, for incompatible term *types* rather than terms.

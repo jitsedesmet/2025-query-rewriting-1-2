@@ -113,6 +113,18 @@ describe('transformFilterFalse', () => {
     }
   });
 
+  describe('a FILTER(FALSE)', () => {
+    it('drops what it stands over, even where nothing above absorbs it', ({ expect }) => {
+      expectTransform(
+        expect,
+        'SELECT (COUNT(*) AS ?n) WHERE { ?s :p ?o FILTER(false) }',
+        `SELECT ( COUNT( * ) AS ?n ) WHERE {
+  FILTER ( FALSE )
+}`,
+      );
+    });
+  });
+
   describe('the projection of an empty sub-SELECT', () => {
     it('collapses into a fresh FILTER(FALSE), without bringing its hidden variables back', ({ expect }) => {
       // The sub-SELECT hides ?b, which is what makes the BIND beside it legal.
@@ -149,7 +161,6 @@ describe('transformFilterFalse', () => {
         expect,
         'SELECT ?a WHERE { ?a :p ?b FILTER(false) }',
         `SELECT ?a WHERE {
-  ?a <ex://p> ?b .
   FILTER ( FALSE )
 }`,
       );
@@ -160,7 +171,6 @@ describe('transformFilterFalse', () => {
         expect,
         'SELECT DISTINCT ?a WHERE { ?a :p ?b FILTER(false) } LIMIT 10',
         `SELECT DISTINCT ?a WHERE {
-  ?a <ex://p> ?b .
   FILTER ( FALSE )
 }
 LIMIT 10`,
@@ -172,7 +182,6 @@ LIMIT 10`,
         expect,
         'SELECT REDUCED ?a WHERE { ?a :p ?b FILTER(false) } OFFSET 5',
         `SELECT REDUCED ?a WHERE {
-  ?a <ex://p> ?b .
   FILTER ( FALSE )
 }
 OFFSET 5`,
@@ -184,7 +193,6 @@ OFFSET 5`,
         expect,
         'SELECT ?a FROM <ex://g> WHERE { ?a :p ?b FILTER(false) }',
         `SELECT ?a FROM <ex://g> WHERE {
-  ?a <ex://p> ?b .
   FILTER ( FALSE )
 }`,
       );

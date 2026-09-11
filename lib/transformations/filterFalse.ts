@@ -8,7 +8,8 @@ import { solutionModifierChainOf } from '../utils/solutionModifierChain.js';
  *
  * In SPARQL algebra `FILTER(FALSE)` represents the empty solution multiset, so the operations around one
  * simplify by the algebraic identities of that multiset - absorbing for JOIN, identity for UNION. The
- * traversal is bottom-up, so a rule only has to check whether an input *is* `FILTER(FALSE)`.
+ * traversal is bottom-up, so a rule only has to check whether an input *is* `FILTER(FALSE)`, which is
+ * always kept over the empty BGP so that no engine evaluates what it discards.
  *
  * Dropping an empty operation drops its scope too, which is sound: nothing in it is bound, and SPARQL's
  * scope rules only forbid a variable already in scope (`BIND(… AS ?v)`), so removing variables breaks none.
@@ -25,6 +26,7 @@ import { solutionModifierChainOf } from '../utils/solutionModifierChain.js';
  *
  * - JOIN over FILTER(FALSE) becomes FILTER(FALSE) (absorbing element)
  * - UNION over FILTER(FALSE) drops that branch (identity element)
+ * - FILTER(FALSE) over anything becomes FILTER(FALSE) over the empty BGP, so no engine evaluates its input
  * - PROJECT/EXTEND/DISTINCT/etc. over FILTER(FALSE) becomes FILTER(FALSE), sub-SELECTs included
  * - MINUS/LEFT JOIN whose right operand is FILTER(FALSE) becomes its left operand
  * - GROUP and the query's own solution modifiers are left in place
@@ -46,7 +48,7 @@ export function transformFilterFalse(c: TransformContext, op: Algebra.Operation)
       [Algebra.Types.EXTEND]: absorbSingle,
       [Algebra.Types.FROM]: absorbSingle,
       [Algebra.Types.DISTINCT]: absorbSingle,
-      [Algebra.Types.FILTER]: absorbSingle,
+      [Algebra.Types.FILTER]: { transform: (filter, original) => absorbFilter(c, filter, sealed.has(original)) },
       // TODO: wrong in case of silent!!!
       [Algebra.Types.SERVICE]: absorbSingle,
       [Algebra.Types.REDUCED]: absorbSingle,
@@ -99,6 +101,21 @@ function absorbingSingle(
     return createFilterFalse(c);
   }
   return single;
+}
+
+/**
+ * Handles a FILTER: one over `FILTER(FALSE)` is empty, and so is a `FILTER(FALSE)` over anything.
+ * @param c - The transformation context
+ * @param filter - The FILTER operation
+ * @param isSealed - Whether it is part of the query's own solution-modifier chain
+ * @returns FILTER(FALSE) over the empty BGP if the filter is empty, otherwise the original filter
+ */
+function absorbFilter(c: TransformContext, filter: Algebra.Filter, isSealed: boolean): Algebra.Single {
+  // Its input can go even where nothing above absorbs the filter: an engine may still evaluate it.
+  if (isFilterFalse(c, filter)) {
+    return createFilterFalse(c);
+  }
+  return absorbingSingle(c, filter, isSealed);
 }
 
 /**

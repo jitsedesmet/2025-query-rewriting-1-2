@@ -1102,8 +1102,8 @@ function empty(c: TransformContext, replaced: Algebra.Operation): PreOrderMappin
 /**
  * Builds the empty solution multiset that replaces an operation the assertions rule out.
  * @param c - The transformation context
- * @param replaced - The operation being replaced, kept as the input so that the node carries its `pVars` and
- * the metadata `keepMetadata` carries through the traversal still describes the tree
+ * @param replaced - The operation being replaced, kept as the input so that the metadata the traversal
+ * carries still describes the tree
  * @returns the `FILTER(FALSE)` that is this codebase's empty operation, which
  * {@link transformFilterFalse} normalises structurally afterwards
  */

@@ -175,9 +175,8 @@ export function pullUpExtends<T extends Algebra.Operation>(c: TransformContext, 
   // what `withCpVars` hands us describes the plan as it is now - and it is cleared again on the way out
   // for the same reason, the rewrites having since invalidated what the licences cached.
   const entered = withoutCpVars(op);
-  // The chain is sealed against a rise because SPARQL has nowhere to write a `BIND` there. An
-  // `ORDER_BY` is not part of it, which is what lets a bind an ordering no longer reads reach the
-  // projection that discards it.
+  // SPARQL has nowhere to write a `BIND` in the chain. It excludes `ORDER_BY`, so a bind can still rise
+  // past an ordering to the projection that discards it.
   const sealed = solutionModifierChainOf(entered);
   return withoutCpVars(algebraUtils.mapOperation<'unsafe', T>(entered, {
     [Algebra.Types.FILTER]: {

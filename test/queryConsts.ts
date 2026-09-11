@@ -404,9 +404,8 @@ SELECT ( ?uq_name AS ?name ) ( ?uq_o AS ?o ) ( ?uq_o1 AS ?o1 ) ( ?uq_p AS ?p ) (
 }`;
 
 /**
- * Maps RDF 1.1 reification - the `rdf:subject` / `rdf:predicate` / `rdf:object` vocabulary of the
- * standard, where {@link tripleTermConstruct} uses the capitalised spelling of the REF benchmark - to
- * triple terms reified by the statement node.
+ * Maps standard RDF 1.1 reification (`rdf:subject`, not the capitalised spelling of
+ * {@link tripleTermConstruct}) to triple terms reified by the statement node.
  */
 export const rdfReificationConstruct = `
 PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
@@ -420,10 +419,7 @@ CONSTRUCT {
 }
 `;
 
-/**
- * Passes through every triple that is not part of the reification structure
- * {@link rdfReificationConstruct} maps, so the two together cover the whole graph exactly once.
- */
+/** Passes through every triple that is not reification structure, complementing {@link rdfReificationConstruct}. */
 export const nonReificationTripleConstruct = `
 PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 CONSTRUCT {

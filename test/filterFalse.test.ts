@@ -24,7 +24,7 @@ PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 
 const engine = new QueryEngine();
 
-/** The solutions of a query as sorted `name=value` strings, so two queries compare by what they return. */
+/** The solutions of a query as sorted `name=value` strings. */
 async function sortedBindingsOf(query: string, source: string): Promise<string[]> {
   const rows: any[] = await arrayifyStream(await engine.queryBindings(query, { sources: [ source ]}));
   return rows
@@ -32,7 +32,7 @@ async function sortedBindingsOf(query: string, source: string): Promise<string[]
     .sort();
 }
 
-/** The variables a query's result exposes - its header, which is where a change of scope would show. */
+/** The variables a query's result exposes. */
 async function exposedVariablesOf(query: string, source: string): Promise<string[]> {
   const result = <any> await engine.query(query, { sources: [ source ]});
   const metadata = await result.metadata();
@@ -44,7 +44,7 @@ describe('transformFilterFalse', () => {
   // The pass only ever reads AF / DF / generator off the context, never the mapping.
   const c = <TransformContext> createPartialContext();
 
-  /** The pass over algebra built by hand, which is how the sub-SELECT shapes are reached exactly. */
+  /** The pass over hand-built algebra. */
   function transformAlgebra(op: Algebra.Operation): Algebra.Operation {
     return transformFilterFalse(c, op);
   }
@@ -61,10 +61,7 @@ describe('transformFilterFalse', () => {
   const tripleScan = c.AF.createBgp([
     c.AF.createPattern(c.DF.variable('s'), c.DF.variable('p'), c.DF.variable('o')),
   ]);
-  /**
-   * `{ SELECT ?a WHERE { ?a :p ?b FILTER(false) } }`, shaped the way the pushdown leaves an empty branch: its
-   * `FILTER(FALSE)` stands over the operation it replaced, so `?b` is still in scope below the projection.
-   */
+  /** `{ SELECT ?a WHERE { ?a :p ?b FILTER(false) } }`, built the way the pushdown builds it. */
   const emptySubSelect = c.AF.createProject(
     createFilterFalse(c, c.AF.createBgp([
       c.AF.createPattern(c.DF.variable('a'), c.DF.namedNode('ex://p'), c.DF.variable('b')),
@@ -73,7 +70,7 @@ describe('transformFilterFalse', () => {
   );
   const countAll = c.AF.createBoundAggregate(c.DF.variable('n'), 'count', c.AF.createWildcardExpression(), false);
 
-  /** A sub-SELECT's modifiers over nothing, each of which is still nothing. */
+  /** Sub-SELECT modifiers over an empty input, each still empty. */
   const emptyModifiedSubSelects: [string, Algebra.Operation][] = [
     [ 'DISTINCT', c.AF.createDistinct(emptySubSelect) ],
     [ 'REDUCED', c.AF.createReduced(emptySubSelect) ],
@@ -110,8 +107,7 @@ describe('transformFilterFalse', () => {
 
   describe('the projection of an empty sub-SELECT', () => {
     it('collapses into a fresh FILTER(FALSE) when it is nested', ({ expect }) => {
-      // Fresh, not the pushdown's FILTER(FALSE) lifted out of the projection: that one still carries the ?b
-      // the projection hid, and bringing it back into scope could clash with a BIND(… AS ?b) beside it.
+      // Not the pushdown's FILTER(FALSE), which would bring the hidden ?b back into scope.
       expect(transformAlgebra(extendWithConstant(emptySubSelect))).toEqual(createFilterFalse(c));
     });
 
@@ -139,8 +135,7 @@ describe('transformFilterFalse', () => {
       expect(transformed).toContain('LIMIT 10');
     });
 
-    // In a parsed query every modifier stands over the projection, which is sealed by itself; built by hand
-    // without one is the only way to see that the modifiers are sealed in their own right.
+    // A parsed query always has a projection below its modifiers, so only hand-built algebra tests these.
     it('keeps an outermost SLICE and DISTINCT that have no projection below them', ({ expect }) => {
       const sliced = c.AF.createSlice(c.AF.createDistinct(createFilterFalse(c)), 0, 10);
       expect(transformAlgebra(sliced)).toEqual(sliced);
@@ -155,15 +150,14 @@ describe('transformFilterFalse', () => {
   describe('the answer of a rewritten query', () => {
     const source = './test/statics/multipleRdfReifiedTriples.ttl';
 
-    // The pass-through mapping leaves every pattern as it was, so the output only shows what
-    // transformFilterFalse itself did.
+    // The pass-through mapping leaves every pattern as it was.
     function rewriteWithFilterFalse(query: string): string {
       const passThroughContext = transformContextFromConstructs([ nonTripleTermConstruct ]);
       return queryTransform(passThroughContext, query, [ transformFilterFalse ]);
     }
 
     it('exposes the same variables and rows when a SELECT * loses an empty sub-SELECT', async({ expect }) => {
-      // `?a` is only in scope through the branch that is dropped, so it is what a lost scope would lose.
+      // `?a` is only in scope through the dropped branch.
       const query = `${prefixes}SELECT * WHERE { { ?s :knows ?o } UNION { SELECT ?a WHERE { ?a :p ?b FILTER(false) } } }`;
       const rewritten = rewriteWithFilterFalse(query);
       expect(rewritten).not.toContain('FILTER ( FALSE )');
@@ -176,7 +170,7 @@ describe('transformFilterFalse', () => {
     });
 
     it('still returns the single row of an aggregate over an empty input', async({ expect }) => {
-      // COUNT(*) of nothing is 0, one row - so this query is not empty and may not be collapsed.
+      // COUNT(*) of nothing is one row, 0.
       const query = `${prefixes}SELECT (COUNT(*) AS ?n) WHERE { ?s :knows ?o FILTER(false) }`;
       expect(await sortedBindingsOf(query, source)).toEqual([ 'n=0' ]);
       expect(await sortedBindingsOf(rewriteWithFilterFalse(query), source)).toEqual([ 'n=0' ]);
@@ -221,8 +215,7 @@ describe('transformFilterFalse over a reification mapping', () => {
   const mappers = [ rdfReificationConstruct, nonReificationTripleConstruct ];
   const source = './test/statics/bkrReifiedStatements.ttl';
 
-  // A constant in the quoted triple is what lets the pushdown prove the pass-through branch empty; a
-  // fully variable << ?s ?p ?o >> leaves nothing to decide.
+  // The constant subject is what lets the pushdown prove the pass-through branch empty.
   const query = `
 PREFIX bkr: <http://mor.nlm.nih.gov/bkr/>
 PREFIX bkr_sn: <http://mor.nlm.nih.gov/bkr/SEMNET_>
@@ -266,8 +259,7 @@ SELECT ?o ?source WHERE { << bkr:META_C0040300-INST bkr_sn:PART_OF ?o >> proveni
   });
 
   describe('the rewritten query still answers', () => {
-    // What the mapping means over RDF 1.1 data, written out by hand: the reifying pattern can only be
-    // answered by the reification structure, never by the pass-through branch the pushdown empties.
+    // The query's meaning over the RDF 1.1 data, written by hand.
     const expectedOverRdf11 = `
 PREFIX bkr: <http://mor.nlm.nih.gov/bkr/>
 PREFIX bkr_sn: <http://mor.nlm.nih.gov/bkr/SEMNET_>

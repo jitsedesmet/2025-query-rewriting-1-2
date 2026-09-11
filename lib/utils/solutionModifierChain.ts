@@ -3,21 +3,14 @@ import { Algebra } from '@traqula/algebra-transformations-1-2';
 /**
  * @fileoverview The chain of solution modifiers at the top of a query.
  *
- * What a pass is handed at its root is a whole query as often as it is a subtree, and the operations
- * between that root and the pattern the query is about - its `PROJECT`, its `DISTINCT`, its `LIMIT` - are
- * what decides the query's *answer*: which columns it exposes, in what form, and how many rows of it. A
- * subtree may be rewritten into anything with the same solutions; those nodes may not, because a caller
- * reads the result off them. So passes seal them, each for its own reason - nothing rises into them
- * ({@link transformations/pullUpExtends!pullUpExtends}), nothing collapses them
- * ({@link transformations/filterFalse!transformFilterFalse}) - and the chain itself is shared.
+ * The `PROJECT`, `DISTINCT`, `LIMIT`, … between a query's root and its pattern decide its answer, so passes
+ * leave them alone: {@link transformations/pullUpExtends!pullUpExtends} floats nothing into them, and
+ * {@link transformations/filterFalse!transformFilterFalse} collapses none of them.
  */
 
 /**
- * The operation types that make up a query's solution-modifier chain.
- *
- * An `ORDER_BY` is deliberately absent. It stands *below* the projection, so what a pass does there is
- * still inside the pattern rather than to the query's answer, and stopping the walk at one costs nothing:
- * a query's chain holds no further modifier below its ordering.
+ * The operation types that make up a query's solution-modifier chain. `ORDER_BY` stands below the
+ * projection, inside the pattern, so it is not one of them.
  */
 const solutionModifierTypes = new Set<string>([
   Algebra.Types.ASK,

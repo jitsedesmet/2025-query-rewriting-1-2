@@ -11,7 +11,7 @@ import { removeProjections } from '../lib/transformations/removeProjections.js';
 import { operationTransform, queryTransform } from '../lib/transformBgp.js';
 import type { TransformContext } from '../lib/transformContext.js';
 import { createPartialContext, parseQuery, transformContextFromConstructs } from '../lib/transformContext.js';
-import { createFilterFalse, isEmptyOperation } from '../lib/utils/operationhelpers.js';
+import { createFilterFalse } from '../lib/utils/operationhelpers.js';
 import { nonReificationTripleConstruct, rdfReificationConstruct } from './queryConsts.js';
 
 // Crazy workaround to support both CJS and ESM
@@ -77,23 +77,25 @@ describe('transformFilterFalse', () => {
   });
 
   describe('the projection of an empty sub-SELECT', () => {
-    it('is recognised as empty', ({ expect }) => {
-      expect(isEmptyOperation(c, emptySubSelect)).toBe(true);
+    it('collapses when it is nested', ({ expect }) => {
+      const extended = c.AF.createExtend(
+        emptySubSelect,
+        c.DF.variable('b'),
+        c.AF.createTermExpression(c.DF.namedNode('ex://b')),
+      );
+      expect(transform(extended)).toEqual(createFilterFalse(c));
     });
 
-    it('is kept as it stands, so that its columns stay in scope', ({ expect }) => {
-      // `pVars(Empty_S) := S`: replacing it by a FILTER(FALSE) over the empty BGP would take ?a out of
-      // scope for whatever reads the sub-SELECT.
+    it('is kept when it is the query\'s own projection', ({ expect }) => {
       expect(transform(emptySubSelect)).toEqual(emptySubSelect);
     });
 
     it('leaves a GROUP over it alone, an aggregate over nothing still answering', ({ expect }) => {
-      const grouped = c.AF.createGroup(emptySubSelect, [], [
-        c.AF.createBoundAggregate(c.DF.variable('n'), 'count', c.AF.createWildcardExpression(), false),
-      ]);
-      expect(isEmptyOperation(c, grouped)).toBe(false);
+      const count = c.AF.createBoundAggregate(c.DF.variable('n'), 'count', c.AF.createWildcardExpression(), false);
+      const grouped = c.AF.createGroup(emptySubSelect, [], [ count ]);
+      // The sub-SELECT inside collapses; the GROUP over it, and the JOIN over that, do not.
       expect(transform(c.AF.createJoin([ scan, grouped ], false)))
-        .toEqual(c.AF.createJoin([ scan, grouped ], false));
+        .toEqual(c.AF.createJoin([ scan, c.AF.createGroup(createFilterFalse(c), [], [ count ]) ], false));
     });
   });
 

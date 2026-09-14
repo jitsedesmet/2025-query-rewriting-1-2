@@ -3,10 +3,10 @@ import { toAst } from '@traqula/algebra-sparql-1-2';
 import { describe, it } from 'vitest';
 import { VAR_PREFIX_MERGED_HEAD } from '../lib/consts.js';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
-import { createPartialContext } from '../lib/transformContext.js';
+import { createTransformationContext } from '../lib/transformContext.js';
 import type { Mapping } from '../lib/types.js';
 
-const { generator } = createPartialContext();
+const { generator } = createTransformationContext();
 
 /** How a head term reads, recursing into a triple term. */
 function headTermAsString(term: RDF.Term): string {

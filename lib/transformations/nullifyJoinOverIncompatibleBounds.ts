@@ -1,6 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
-import type { TransformContext } from '../transformContext.js';
+import type { TransformationContext } from '../transformContext.js';
+import type { QueryTransformation } from '../types.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
 import { termIsStaticTerm } from '../utils/typeGuards.js';
 import { directExtensions } from '../utils.js';
@@ -45,7 +46,7 @@ import { VariableSet } from './variableSet.js';
  * @returns The transformed operation with incompatible branches eliminated
  */
 export function nullifyJoinOverIncompatibleBounds<T extends Algebra.Operation>(
-  c: TransformContext,
+  c: TransformationContext,
   op: T,
 ): T {
   return algebraUtils.mapOperation<'unsafe', typeof op>(
@@ -74,7 +75,7 @@ export function nullifyJoinOverIncompatibleBounds<T extends Algebra.Operation>(
  * @param join - The JOIN to modify
  * @param varSets - Map of variable names to their possible values
  */
-function restrictOperations(c: TransformContext, join: Algebra.Join, varSets: Record<string, VariableSet>): void {
+function restrictOperations(c: TransformationContext, join: Algebra.Join, varSets: Record<string, VariableSet>): void {
   const { AF } = c;
   const mappingVarsToScope: Record<string, VariableSet> = {};
   const recurse = (op: Algebra.Operation): Algebra.Operation => {
@@ -111,7 +112,7 @@ function restrictOperations(c: TransformContext, join: Algebra.Join, varSets: Re
 }
 
 function restrictProjectUsingValues(
-  c: TransformContext,
+  c: TransformationContext,
   project: Algebra.Project,
   mappingVarsToScope: Record<string, VariableSet>,
 ): Algebra.Operation {
@@ -137,7 +138,7 @@ function restrictProjectUsingValues(
 }
 
 function _restrictProjectUsingBindOrFilter(
-  c: TransformContext,
+  c: TransformationContext,
   op: Algebra.Project,
   mappingVarsToScope: Record<string, VariableSet>,
 ): Algebra.Operation {
@@ -187,7 +188,7 @@ function _restrictProjectUsingBindOrFilter(
 }
 
 function createFilterBound(
-  c: TransformContext,
+  c: TransformationContext,
   input: Algebra.Operation,
   mappingVarsToScope: Record<string, VariableSet>,
 ): Algebra.Filter | Algebra.Operation {
@@ -278,4 +279,12 @@ function directExtensionOverUnions(union: Algebra.Union): Record<string, Variabl
     }
   }
   return varSets;
+}
+
+/**
+ * The pipeline step replacing a join whose branches bind one variable to incompatible terms by `FILTER(FALSE)`.
+ * @returns the transformation
+ */
+export function nullifyJoinOverIncompatibleBoundsTransformation(): QueryTransformation {
+  return nullifyJoinOverIncompatibleBounds;
 }

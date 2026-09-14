@@ -1,10 +1,10 @@
 import { toAst } from '@traqula/algebra-sparql-1-2';
 import { beforeAll, describe, it } from 'vitest';
-import { createPartialContext, type TransformContext, parseQuery } from '../lib/transformContext.js';
-import { simplifyStaticExpressions } from '../lib/utils/staticExpressionEvaluation.js';
+import { simplifyStaticExpressions } from '../lib/transformations/staticExpressionEvaluation.js';
+import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
 
 describe('simplifyStaticExpressions', () => {
-  const c = <TransformContext> createPartialContext();
+  const c = createTransformationContext();
 
   async function simplify(query: string): Promise<string> {
     const operation = parseQuery(c, query);

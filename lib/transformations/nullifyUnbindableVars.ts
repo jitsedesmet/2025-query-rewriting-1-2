@@ -1,6 +1,7 @@
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import type { PreOrderMappingReturn } from '@traqula/core';
-import type { TransformContext } from '../transformContext.js';
+import type { TransformationContext } from '../transformContext.js';
+import type { QueryTransformation } from '../types.js';
 import { withCpVars, withoutCpVars } from '../utils/certainlyBoundVars.js';
 import { createFilterFalse } from '../utils/operationhelpers.js';
 
@@ -34,7 +35,7 @@ const keepMetadata = { shallowKeys: new Set([ 'metadata' ]) };
  * // Before: SELECT * WHERE { GRAPH ?g { { VALUES ?g { "l" } } } }
  * // After:  the GRAPH replaced by FILTER(false), since no graph is named by a literal.
  */
-export function nullifyUnbindableVars<T extends Algebra.Operation>(c: TransformContext, op: T): T {
+export function nullifyUnbindableVars<T extends Algebra.Operation>(c: TransformationContext, op: T): T {
   const callbacks: Parameters<typeof algebraUtils.mapOperationPreOrder<'unsafe', T>>[1] = Object.fromEntries(
     Object.values(Algebra.Types).map(type => [ type, (copy: Algebra.Operation) => nullifyIfProvenEmpty(c, copy) ]),
   );
@@ -52,7 +53,7 @@ export function nullifyUnbindableVars<T extends Algebra.Operation>(c: TransformC
  * @returns the traversal's instruction; it stops descending once it has replaced something, nothing under
  * an operation without solutions being able to contribute any
  */
-function nullifyIfProvenEmpty(c: TransformContext, op: Algebra.Operation): PreOrderMappingReturn {
+function nullifyIfProvenEmpty(c: TransformationContext, op: Algebra.Operation): PreOrderMappingReturn {
   const { cVars, vRanges } = withCpVars(op).metadata;
   for (const name of cVars) {
     if (vRanges.neverBinds(name)) {
@@ -60,4 +61,12 @@ function nullifyIfProvenEmpty(c: TransformContext, op: Algebra.Operation): PreOr
     }
   }
   return { ...keepMetadata, newValue: op };
+}
+
+/**
+ * The pipeline step replacing an operation that binds a variable to nothing its type range admits by `FILTER(FALSE)`.
+ * @returns the transformation
+ */
+export function nullifyUnbindableVarsTransformation(): QueryTransformation {
+  return nullifyUnbindableVars;
 }

@@ -8,8 +8,8 @@ import {
   VAR_PREFIX_MAPPING,
   VAR_PREFIX_MERGED_HEAD,
 } from './consts.js';
-import type { TransformContext } from './transformContext.js';
-import { createPartialContext, parseQuery, prefixVarsInOperation } from './transformContext.js';
+import type { TransformationContext } from './transformContext.js';
+import { createTransformationContext, parseQuery, prefixVarsInOperation } from './transformContext.js';
 import type { Mapping, MappingHead } from './types.js';
 import { withCpVars } from './utils/certainlyBoundVars.js';
 import { unstableOperators } from './utils/expressionHelpers.js';
@@ -41,7 +41,7 @@ import { collectVariableNames } from './utils.js';
  */
 
 /** The factories building a mapping needs; the solver and the generator of a full context play no part. */
-type MappingConstructionTools = Pick<TransformContext, 'parser' | 'AF' | 'DF' | 'astTransformer'>;
+type MappingConstructionTools = Pick<TransformationContext, 'parser' | 'AF' | 'DF' | 'astTransformer'>;
 
 /** The term types each position of a mapping head admits, in subject / predicate / object order. */
 const admissibleHeadTermTypes: [
@@ -209,7 +209,7 @@ function mergeMappingsOverGenericHead(
  * ]);
  */
 export function mappingFromConstructQueries(constructQueries: readonly string[]): Mapping {
-  const tools = createPartialContext();
+  const tools = createTransformationContext();
   const mappings = constructQueries
     .flatMap(constructQuery => mappingsOfConstructQuery(tools, constructQuery))
     .map(mapping => prefixVarsInOperation(tools, mapping, VAR_PREFIX_MAPPING));

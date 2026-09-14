@@ -6,8 +6,7 @@ import type { expect as Expect } from 'vitest';
 import { describe, it } from 'vitest';
 import { transformFilterFalse } from '../lib/transformations/filterFalse.js';
 import { pushDownAssertions } from '../lib/transformations/pushDownAssertions.js';
-import type { TransformContext } from '../lib/transformContext.js';
-import { createPartialContext, parseQuery } from '../lib/transformContext.js';
+import { createTransformationContext, parseQuery } from '../lib/transformContext.js';
 
 // Crazy workaround to support both CJS and ESM
 const arrayifyStream =
@@ -20,7 +19,7 @@ PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 describe('pushDownAssertions', () => {
   // PushDownAssertions only uses AF / DF / astTransformer / generator from the context, never the
   // mapping, so a mapping-less partial context is sufficient here.
-  const c = <TransformContext> createPartialContext();
+  const c = createTransformationContext();
 
   function transform(query: string): string {
     const transformed = pushDownAssertions(c, parseQuery(c, prefixes + query));

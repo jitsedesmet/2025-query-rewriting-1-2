@@ -1,11 +1,10 @@
-import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { describe, it } from 'vitest';
 import type { expect as Expect } from 'vitest';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
-import { transformExtendsToValues } from '../lib/transformations/extendsToValues.js';
-import { operationTransform, queryTransform } from '../lib/transformBgp.js';
-import type { TransformContext } from '../lib/transformContext.js';
-import { createPartialContext } from '../lib/transformContext.js';
+import { createQueryRewriter } from '../lib/queryRewriter.js';
+import { extendsToValuesTransformation } from '../lib/transformations/extendsToValues.js';
+import { unfoldingTransformation } from '../lib/transformations/unfolding.js';
+import type { QueryTransformation } from '../lib/types.js';
 import {
   expectedQuery,
   expectedQueryToValues,
@@ -16,23 +15,27 @@ import {
 } from './queryConsts.js';
 
 describe('dummy', () => {
-  function transformQueryUsingConstructs(
+  /** Rewrites a query with the unfolding of the given mappings, followed by the given pipeline. */
+  async function transformQueryUsingConstructs(
     userQuery: string,
     mappers: string[],
-    transformations: ((c: TransformContext, op: Algebra.Operation) => Algebra.Operation)[] = [ operationTransform ],
-  ): string {
-    const transformerContext = { ...createPartialContext(), mapping: mappingFromConstructQueries(mappers) };
-    return queryTransform(transformerContext, userQuery, transformations);
+    afterUnfolding: readonly QueryTransformation[] = [],
+  ): Promise<string> {
+    const rewriter = createQueryRewriter([
+      unfoldingTransformation(mappingFromConstructQueries(mappers)),
+      ...afterUnfolding,
+    ]);
+    return rewriter.rewriteQuery(userQuery);
   }
 
-  function testConstructMappers(
+  async function testConstructMappers(
     expect: typeof Expect,
     userQuery: string,
     expectedQuery: string,
     mappers: string[],
-    transformations: ((c: TransformContext, op: Algebra.Operation) => Algebra.Operation)[] = [ operationTransform ],
-  ): void {
-    expect(transformQueryUsingConstructs(userQuery, mappers, transformations).trim())
+    afterUnfolding: readonly QueryTransformation[] = [],
+  ): Promise<void> {
+    expect((await transformQueryUsingConstructs(userQuery, mappers, afterUnfolding)).trim())
       .toEqual(expectedQuery.trim());
 
     // Const _expectedAst = parser.parse(expectedQuery);
@@ -138,7 +141,7 @@ LIMIT 10`,
     testQuery,
     expectedQueryToValues,
     [ tripleTermConstruct, nonTripleTermConstruct ],
-    [ operationTransform, transformExtendsToValues ],
+    [ extendsToValuesTransformation() ],
   ));
 
   // It('simple & optimizeBinds', ({ expect }) => testConstructMappers(

@@ -4,26 +4,32 @@
  * Rewrites SPARQL 1.2 queries - which may contain triple terms and other RDF 1.2 features - into equivalent
  * SPARQL 1.1 queries that can be executed against RDF 1.1 data sources.
  *
- * **Mappings** are SPARQL CONSTRUCT queries defining how RDF 1.2 data is represented in RDF 1.1: the
- * template (head) shows the RDF 1.2 pattern, the WHERE clause (body) the equivalent RDF 1.1
- * representation. Each triple pattern of the user query is then rewritten to a UNION of subselects, one per
- * mapping that could produce matching data.
- * @module query-rewriting-1-2
+ * A **mapping** is one or more SPARQL CONSTRUCT queries: the template (head) shows the RDF 1.2 pattern, the
+ * WHERE clause (body) the equivalent RDF 1.1 representation. A **pipeline** of transformations is then run
+ * over the user query, the first of which unfolds that mapping into every triple pattern and the rest of
+ * which optimise what comes out.
+ * @module traqula-sparql-1-2-rewriter
  * @see {@link https://w3c.github.io/rdf-interop/spec/} RDF 1.2 Interoperability Spec
  * @example
- * import { createPartialContext, mappingFromConstructQueries, operationTransform, queryTransform }
- *   from 'traqula-sparql-1-2-rewriter';
+ * import {
+ *   createQueryRewriter,
+ *   filterFalseTransformation,
+ *   mappingFromConstructQueries,
+ *   unfoldingTransformation,
+ * } from 'traqula-sparql-1-2-rewriter';
  *
- * const context = { ...createPartialContext(), mapping: mappingFromConstructQueries([
- *   'CONSTRUCT { ?t rdf:reifies <<( ?s ?p ?o )>> } WHERE { ... RDF 1.1 pattern ... }'
- * ]) };
- * const rewrittenQuery =
- *   queryTransform(context, 'SELECT * WHERE { ?x rdf:reifies <<( ?s ?p ?o )>> }', [ operationTransform ]);
+ * const rewriter = createQueryRewriter([
+ *   unfoldingTransformation(mappingFromConstructQueries([
+ *     'CONSTRUCT { ?t rdf:reifies <<( ?s ?p ?o )>> } WHERE { ... RDF 1.1 pattern ... }',
+ *   ])),
+ *   filterFalseTransformation(),
+ * ]);
+ * const sparql11Query = await rewriter.rewriteQuery('SELECT * WHERE { ?x rdf:reifies <<( ?s ?p ?o )>> }');
  */
-export { operationTransform, queryTransform } from './transformBgp.js';
+export * from './consts.js';
 export { mappingFromConstructQueries } from './mapping.js';
-export { createPartialContext } from './transformContext.js';
-export type { TransformContext } from './transformContext.js';
-export type { Mapping, MappingHead } from './types.js';
-export { simplifyStaticExpressions } from './utils/staticExpressionEvaluation.js';
+export { createQueryRewriter } from './queryRewriter.js';
+export type { QueryRewriter } from './queryRewriter.js';
+export type { TransformationContext } from './transformContext.js';
+export type { Mapping, MappingHead, QueryTransformation } from './types.js';
 export * from './transformations/index.js';

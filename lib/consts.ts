@@ -24,7 +24,7 @@ export const EXTENSION_FUNCTION_BNODE_PUBLIC = 'https://sparql-extension.knows.i
 export const IRI_PREFIX_BNODE = 'https://myInternalBnode.example.org/';
 
 /**
- * Prefix every variable of the user query is renamed with before rewriting, by `queryTransform`.
+ * Prefix every variable of the user query is renamed with before rewriting, by the pipeline runner.
  *
  * This is the *only* prefix the rewriting classifies on: a variable in a cluster carries it exactly when it
  * came from the user query, and every other variable in that cluster belongs to the mapping. Both

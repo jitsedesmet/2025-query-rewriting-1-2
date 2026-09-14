@@ -4,7 +4,7 @@ import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { ClusterSolver } from '../ClusterSolver.js';
 import { isTriplePosition, triplePositions } from '../datastructures/TermClusterSet.js';
 import { rangeOfPosition } from '../RangeSet.js';
-import type { TransformContext } from '../transformContext.js';
+import type { TransformationContext } from '../transformContext.js';
 import type { Mapping, MappingHead } from '../types.js';
 import { isRdfQuad, isRdfVar } from '../utils/typeGuards.js';
 
@@ -29,7 +29,7 @@ import { isRdfQuad, isRdfVar } from '../utils/typeGuards.js';
  * @param expression - The expression reading the value that triple term has to match
  */
 function registerPatternQuadAgainstExpression(
-  c: TransformContext,
+  c: TransformationContext,
   tPVars: Record<string, RDF.Variable>,
   quad: RDF.BaseQuad,
   expression: Alg.Expression,
@@ -60,7 +60,7 @@ function registerPatternQuadAgainstExpression(
  * @param pattern - The triple pattern to iterate
  */
 function iterateMappingHead(
-  c: TransformContext,
+  c: TransformationContext,
   mHVars: Record<string, RDF.Variable>,
   tPVars: Record<string, RDF.Variable>,
   head: MappingHead,
@@ -110,7 +110,7 @@ function collectTriplePatternBinds({
   clusterSolver: ClusterSolver;
   triplePatternVars: Record<string, RDF.Variable>;
   expressionFilters: Alg.Expression[];
-} & Pick<TransformContext, 'AF' | 'DF'>): Record<string, Alg.Expression> {
+} & Pick<TransformationContext, 'AF' | 'DF'>): Record<string, Alg.Expression> {
   const triplePatternBinds: Record<string, Alg.Expression> = {};
   for (const tpVariable of Object.values(triplePatternVars)) {
     const cluster = clusterSolver.getCluster(tpVariable);
@@ -152,7 +152,7 @@ function collectTriplePatternBinds({
 function collectMappingHeadBindsAndFilters({ clusterSolver, mappingHeadVars, AF }: {
   clusterSolver: ClusterSolver;
   mappingHeadVars: Record<string, RDF.Variable>;
-} & Pick<TransformContext, 'AF'>): Alg.Expression[] {
+} & Pick<TransformationContext, 'AF'>): Alg.Expression[] {
   const termEqualityFilter: Alg.Expression[] = [];
   const headUnificationFilter: Alg.Expression[] = [];
   const remainderFilter: Alg.Expression[] = [];
@@ -216,7 +216,7 @@ function collectMappingHeadBindsAndFilters({ clusterSolver, mappingHeadVars, AF 
 function wrapOperationInProject({ triplePatternBinds, operation, DF, AF }: {
   triplePatternBinds: Record<string, Alg.Expression>;
   operation: Alg.Operation;
-} & Pick<TransformContext, 'DF' | 'AF'>): Alg.Project {
+} & Pick<TransformationContext, 'DF' | 'AF'>): Alg.Project {
   let buildOperation = operation;
   // All variables required from subselect -- recursive search needed for triple terms
   const variablesToSelect = Object.keys(triplePatternBinds).map(x => DF.variable(x));
@@ -246,7 +246,7 @@ function wrapOperationInProject({ triplePatternBinds, operation, DF, AF }: {
 function bindPatternTerms({ operation, AF, DF, triplePatternBinds }: {
   operation: Alg.Operation;
   triplePatternBinds: Record<string, Alg.Expression>;
-} & Pick<TransformContext, 'DF' | 'AF'>): Alg.Operation {
+} & Pick<TransformationContext, 'DF' | 'AF'>): Alg.Operation {
   let buildOperation: Alg.Operation = operation;
   // Finally add the binds after the subselect - Sort to create stable tests
   for (const [ variable, expression ] of Object.entries(triplePatternBinds).sort((a, b) => a[0].localeCompare(b[0]))) {
@@ -271,7 +271,7 @@ function bindPatternTerms({ operation, AF, DF, triplePatternBinds }: {
  * @param expression - The expression a pattern variable gets bound to
  * @returns the conditions to assert, innermost argument first
  */
-function bindEvaluationGuards(c: TransformContext, expression: Alg.Expression): Alg.Expression[] {
+function bindEvaluationGuards(c: TransformationContext, expression: Alg.Expression): Alg.Expression[] {
   if (expression.subType !== Algebra.ExpressionTypes.OPERATOR || !isTriplePosition(expression.operator)) {
     return [];
   }
@@ -291,7 +291,7 @@ function bindEvaluationGuards(c: TransformContext, expression: Alg.Expression): 
  * @returns the subselect over the mapping body, with the pattern's variables bound on top of it
  */
 export function rewriteSinglePattern(
-  c: TransformContext,
+  c: TransformationContext,
   pattern: Alg.Pattern,
   mapping: Mapping,
 ): Alg.Project | Alg.Extend {

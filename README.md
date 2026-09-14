@@ -1,13 +1,13 @@
-# Traqula SPARQL 1.2 rewriter
+# SPARQL view unfolding
 
-[![CI](https://github.com/jitsedesmet/2025-query-rewriting-1-2/actions/workflows/ci.yml/badge.svg)](https://github.com/jitsedesmet/2025-query-rewriting-1-2/actions/workflows/ci.yml)
+[![CI](https://github.com/jitsedesmet/sparql-view-unfold/actions/workflows/ci.yml/badge.svg)](https://github.com/jitsedesmet/sparql-view-unfold/actions/workflows/ci.yml)
 
 Runs SPARQL 1.2 queries — triple terms and all — against RDF 1.1 data, by rewriting them.
 
-You describe how your RDF 1.1 data represents RDF 1.2 with a SPARQL CONSTRUCT query, the **mapping**; the
-rewriter unfolds that mapping into every triple pattern of a user query and hands you back a plain SPARQL
-1.1 query any engine can answer. A pipeline of optimisations then cuts the result down to something worth
-executing.
+You describe how your RDF 1.1 data represents RDF 1.2 with a SPARQL CONSTRUCT query. That CONSTRUCT is a
+**view** over your data — a GAV mapping — and the rewriter *unfolds* it into every triple pattern of a user
+query, handing you back a plain SPARQL 1.1 query any engine can answer. A pipeline of optimisations then
+cuts the result down to something worth executing.
 
 The idea is explained in our [under review, in works paper targeting AMW](https://2026-amw-rewriting.jitsedesmet.be/)
 and in an [under review demo paper targeting SEMANTiCS](https://2026-semantics-rewriting.jitsedesmet.be/),
@@ -16,13 +16,13 @@ based on a previous version of this repository. [ARCHITECTURE.md](ARCHITECTURE.m
 ## Installation
 
 ```bash
-npm install traqula-sparql-1-2-rewriter
+npm install sparql-view-unfold
 ```
 
 or
 
 ```bash
-yarn add traqula-sparql-1-2-rewriter
+yarn add sparql-view-unfold
 ```
 
 ## Import
@@ -30,13 +30,13 @@ yarn add traqula-sparql-1-2-rewriter
 Either through ESM import:
 
 ```typescript
-import { createQueryRewriter } from 'traqula-sparql-1-2-rewriter';
+import { createQueryRewriter } from 'sparql-view-unfold';
 ```
 
 _or_ CJS require:
 
 ```typescript
-const createQueryRewriter = require('traqula-sparql-1-2-rewriter').createQueryRewriter;
+const createQueryRewriter = require('sparql-view-unfold').createQueryRewriter;
 ```
 
 ## Usage
@@ -49,7 +49,7 @@ import {
   createDefaultTransformationPipeline,
   createQueryRewriter,
   mappingFromConstructQueries,
-} from 'traqula-sparql-1-2-rewriter';
+} from 'sparql-view-unfold';
 
 const mapping = mappingFromConstructQueries([
   // Every RDF 1.1 reification is a triple term reified by its statement node.
@@ -85,7 +85,7 @@ import {
   pushDownAssertionsTransformation,
   rewriteNonRecursivePathsTransformation,
   unfoldingTransformation,
-} from 'traqula-sparql-1-2-rewriter';
+} from 'sparql-view-unfold';
 
 const rewriter = createQueryRewriter([
   rewriteNonRecursivePathsTransformation(),

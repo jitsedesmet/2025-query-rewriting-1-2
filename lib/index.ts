@@ -8,7 +8,7 @@
  * WHERE clause (body) the equivalent RDF 1.1 representation. A **pipeline** of transformations is then run
  * over the user query, the first of which unfolds that mapping into every triple pattern and the rest of
  * which optimise what comes out.
- * @module traqula-sparql-1-2-rewriter
+ * @module sparql-view-unfold
  * @see {@link https://w3c.github.io/rdf-interop/spec/} RDF 1.2 Interoperability Spec
  * @example
  * import {
@@ -16,7 +16,7 @@
  *   filterFalseTransformation,
  *   mappingFromConstructQueries,
  *   unfoldingTransformation,
- * } from 'traqula-sparql-1-2-rewriter';
+ * } from 'sparql-view-unfold';
  *
  * const rewriter = createQueryRewriter([
  *   unfoldingTransformation(mappingFromConstructQueries([

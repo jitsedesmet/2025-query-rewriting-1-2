@@ -1,5 +1,5 @@
 {
-  "name": "traqula-sparql-1-2-rewriter",
+  "name": "sparql-view-unfold",
   "out": "documentation",
   "theme": "default",
   "entryPointStrategy": "expand",

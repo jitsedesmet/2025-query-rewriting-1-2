@@ -222,3 +222,25 @@ export function mappingFromConstructQueries(constructQueries: readonly string[])
   }
   return mergeMappingsOverGenericHead(tools, mappings);
 }
+
+/**
+ * Makes a mapping denote a *set* of triples rather than a bag, by deduplicating its body over the head's
+ * own variables.
+ *
+ * Those variables are the triple the head constructs, the head being injective in them, so deduplicating
+ * them is deduplicating the triples the mapping produces - including a triple two merged mappings both
+ * produce, the merged head being the three variables every branch binds. It is **hugely costly**: the
+ * whole body of every unfolded pattern is materialised and sorted, where the unfolding otherwise streams.
+ * @param context - Object containing the algebra factory
+ * @param mapping - The mapping to deduplicate
+ * @returns the mapping, its body producing each triple once
+ */
+export function withDeduplicatedBody(
+  { AF }: Pick<TransformationContext, 'AF'>,
+  mapping: Mapping,
+): Mapping {
+  return {
+    head: mapping.head,
+    body: AF.createProject(AF.createDistinct(mapping.body), mapping.body.variables),
+  };
+}

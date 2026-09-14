@@ -6,7 +6,8 @@
  * anything to configure, and it is the only one taking arguments.
  *
  * - **unfoldingTransformation**: the rewriting proper - every triple pattern replaced by the mapping body
- *   producing the triples it could match. Takes the mapping it unfolds.
+ *   producing the triples it could match. Takes the mapping it unfolds, and whether to preserve
+ *   cardinality.
  * - **rewriteNonRecursivePathsTransformation**: expands non-recursive property paths into equivalent BGPs
  *   and UNIONs, so the unfolding sees individual triple patterns. Belongs *before* the unfolding.
  * - **filterFalseTransformation**: removes FILTER(FALSE) patterns, what they stand over, and the structures
@@ -52,4 +53,5 @@ export { pushDownAssertionsTransformation } from './pushDownAssertions.js';
 export { removeProjectionsTransformation } from './removeProjections.js';
 export { serviceCallPushUpTransformation } from './serviceCallMerge.js';
 export { simplifyStaticExpressionsTransformation } from './staticExpressionEvaluation.js';
+export type { UnfoldingOptions } from './unfolding.js';
 export { unfoldingTransformation } from './unfolding.js';

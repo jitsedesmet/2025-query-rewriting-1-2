@@ -1,6 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import { Algebra, algebraUtils } from '@traqula/algebra-transformations-1-2';
 import { VAR_PREFIX_USER_QUERY } from '../consts.js';
+import { withDeduplicatedBody } from '../mapping.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { Mapping, QueryTransformation } from '../types.js';
 import { collectVariableNames, renameVariables } from '../utils.js';
@@ -15,6 +16,17 @@ import { rewriteSinglePattern } from './rewriteSinglePattern.js';
  * mapping travels in the closure rather than in the {@link TransformationContext}, so that two rewriters
  * over two mappings cannot read each other's.
  */
+
+/** What an unfolding may be configured with. */
+export interface UnfoldingOptions {
+  /**
+   * Whether the unfolded query counts a triple two solutions of the mapping body both produce once, the way
+   * the mapped graph - a set - does, rather than twice. **Hugely costly**: it deduplicates the whole body
+   * of every unfolded pattern, where the unfolding otherwise streams. Off by default, so turn it on only
+   * when the multiplicity of a solution is part of the answer you need.
+   */
+  preserveCardinality?: boolean;
+}
 
 /**
  * Rewrites a single triple pattern and namespaces every internal (non user-query) variable it introduces, so
@@ -77,8 +89,13 @@ export function unfoldTriplePatternsAgainstMapping(
  * The pipeline step replacing every triple pattern of the user query by the mapping body producing the
  * triples it could match.
  * @param mapping - The mapping to unfold, from {@link mapping!mappingFromConstructQueries}
+ * @param options - What to configure the unfolding with
  * @returns the transformation
  */
-export function unfoldingTransformation(mapping: Mapping): QueryTransformation {
-  return (context, operation) => unfoldTriplePatternsAgainstMapping(context, mapping, operation);
+export function unfoldingTransformation(mapping: Mapping, options: UnfoldingOptions = {}): QueryTransformation {
+  return (context, operation) => unfoldTriplePatternsAgainstMapping(
+    context,
+    options.preserveCardinality === true ? withDeduplicatedBody(context, mapping) : mapping,
+    operation,
+  );
 }

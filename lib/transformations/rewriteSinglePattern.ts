@@ -4,8 +4,10 @@ import { Algebra } from '@traqula/algebra-transformations-1-2';
 import type { ClusterSolver } from '../ClusterSolver.js';
 import { isTriplePosition, triplePositions } from '../datastructures/TermClusterSet.js';
 import { rangeOfPosition } from '../RangeSet.js';
+import { RewriteNoMatchError } from '../RewriteNoMatchError.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { Mapping, MappingHead } from '../types.js';
+import { createFilterFalse } from '../utils/operationhelpers.js';
 import { isRdfQuad, isRdfVar } from '../utils/typeGuards.js';
 
 /**
@@ -284,13 +286,14 @@ function bindEvaluationGuards(c: TransformationContext, expression: Alg.Expressi
 }
 
 /**
- * Rewrites a single triple pattern using a mapping definition.
+ * Unfolds a mapping within a single triple pattern, the two unified.
  * @param c - The transformation context
  * @param pattern - The triple pattern to rewrite
  * @param mapping - The mapping to unfold within it
  * @returns the subselect over the mapping body, with the pattern's variables bound on top of it
+ * @throws RewriteNoMatchError if the pattern and the mapping head cannot be unified
  */
-export function rewriteSinglePattern(
+function unfoldMappingWithinPattern(
   c: TransformationContext,
   pattern: Alg.Pattern,
   mapping: Mapping,
@@ -336,4 +339,29 @@ export function rewriteSinglePattern(
   }
   inProject = bindPatternTerms({ operation: inProject, triplePatternBinds, DF, AF });
   return wrapOperationInProject({ operation: inProject, triplePatternBinds, AF, DF });
+}
+
+/**
+ * Rewrites a single triple pattern using a mapping definition.
+ * @param c - The transformation context
+ * @param pattern - The triple pattern to rewrite
+ * @param mapping - The mapping to unfold within it
+ * @returns the subselect over the mapping body, or `FILTER(FALSE)` where the pattern cannot match the
+ * mapping at all
+ */
+export function rewriteSinglePattern(
+  c: TransformationContext,
+  pattern: Alg.Pattern,
+  mapping: Mapping,
+): Alg.Operation {
+  try {
+    return unfoldMappingWithinPattern(c, pattern, mapping);
+  } catch (error: unknown) {
+    // A pattern that cannot match the mapping is ordinary - it contributes the empty solution multiset -
+    // where any other error is a bug, and has to keep propagating rather than become an empty branch.
+    if (error instanceof RewriteNoMatchError) {
+      return createFilterFalse(c);
+    }
+    throw error;
+  }
 }

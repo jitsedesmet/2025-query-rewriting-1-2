@@ -5,6 +5,7 @@ import type { TransformationContext } from './transformContext.js';
 import { createTransformationContext, parseQuery, prefixVarsInOperation } from './transformContext.js';
 import type { QueryTransformation } from './types.js';
 import { assertUserQueryIsSupported } from './userQueryRestrictions.js';
+import { solutionModifierChainOf } from './utils/solutionModifierChain.js';
 
 /**
  * @fileoverview The pipeline runner: a list of {@link QueryTransformation}s applied to a query in order.
@@ -12,8 +13,13 @@ import { assertUserQueryIsSupported } from './userQueryRestrictions.js';
  * Around that list sits the bookkeeping every rewrite needs and no single pass should have to know about.
  * The user query's variables are renamed under {@link VAR_PREFIX_USER_QUERY} before anything runs, so that
  * a mapping variable and a user variable of the same name cannot be unified by accident; the query's own
- * solution modifiers are peeled off first and put back afterwards, over an `EXTEND` per projected variable
- * restoring the name the user wrote.
+ * solution modifiers - {@link solutionModifierChainOf} - are peeled off first and rebuilt afterwards, one
+ * rule per query form.
+ *
+ * **Which form the query has matters only at the top.** A `SELECT` gets its projection rebuilt over an
+ * `EXTEND` per projected variable, restoring the name the user wrote; an `ASK` has no names to restore; a
+ * `CONSTRUCT` template and the terms of a `DESCRIBE` name variables the pattern below binds, so they are
+ * renamed along with it rather than restored. Updates never reach here, the precheck rejecting them.
  *
  * Every rewrite gets a {@link TransformationContext} of its own: the {@link ClusterSolver} in it is
  * stateful, and the pipeline is asynchronous, so two concurrent rewrites sharing one context would
@@ -61,7 +67,116 @@ function hasGroupInTopLevelChain(op: Algebra.Operation): boolean {
 }
 
 /**
- * Runs the pipeline over the pattern of a query, restoring the solution modifiers it was peeled out of.
+ * The operations that say what a query *answers with*. Exactly one of them is the query's own, and it ends
+ * the chain: a `PROJECT` below it is a sub-SELECT, part of the pattern the pipeline rewrites.
+ */
+const queryFormTypes = new Set<string>([
+  Algebra.Types.PROJECT,
+  Algebra.Types.ASK,
+  Algebra.Types.CONSTRUCT,
+  Algebra.Types.DESCRIBE,
+]);
+
+/** The operations a query's solution-modifier chain can be made of, the query form among them. */
+type SolutionModifier =
+  Algebra.Ask | Algebra.Construct | Algebra.Describe | Algebra.Project |
+  Algebra.Distinct | Algebra.Reduced | Algebra.Slice | Algebra.From;
+
+/**
+ * Splits a parsed query into the solution modifiers at its top and the pattern below them.
+ * @param root - The parsed user query
+ * @returns the modifiers, outermost first, and the pattern the pipeline runs over
+ */
+function peelSolutionModifiers(root: Algebra.Operation): {
+  solutionModifiers: SolutionModifier[];
+  pattern: Algebra.Operation;
+} {
+  const sealedChain = solutionModifierChainOf(root);
+  const solutionModifiers: SolutionModifier[] = [];
+  let pattern = root;
+  let reachedQueryForm = false;
+  while (!reachedQueryForm && sealedChain.has(pattern)) {
+    const solutionModifier = <SolutionModifier> pattern;
+    solutionModifiers.push(solutionModifier);
+    reachedQueryForm = queryFormTypes.has(solutionModifier.type);
+    pattern = solutionModifier.input;
+  }
+  return { solutionModifiers, pattern };
+}
+
+/**
+ * Rebuilds the projection of a `SELECT` over the rewritten pattern, restoring the variable names the user
+ * wrote.
+ * @param c - The transformation context of this rewrite
+ * @param project - The projection that was peeled off
+ * @param rewritten - The rewritten pattern, binding the prefixed variables
+ * @returns the projection, over an `EXTEND` per projected variable
+ */
+function rebuildProjection(
+  c: TransformationContext,
+  project: Algebra.Project,
+  rewritten: Algebra.Operation,
+): Algebra.Operation {
+  let rebuilt = rewritten;
+  // Because of the variable renaming, when we group,
+  // we need to group as part of a subquery and then rename afterwards.
+  if (hasGroupInTopLevelChain(rebuilt)) {
+    rebuilt = c.AF.createProject(rebuilt, project.variables
+      .map(variable => c.DF.variable(`${VAR_PREFIX_USER_QUERY}${variable.value}`)));
+  }
+  for (const variable of project.variables) {
+    rebuilt = c.AF.createExtend(
+      rebuilt,
+      variable,
+      c.AF.createTermExpression(c.DF.variable(`${VAR_PREFIX_USER_QUERY}${variable.value}`)),
+    );
+  }
+  return c.AF.createProject(rebuilt, project.variables);
+}
+
+/**
+ * Rebuilds one solution modifier over the rewritten operation below it.
+ * @param c - The transformation context of this rewrite
+ * @param solutionModifier - The modifier that was peeled off
+ * @param rewritten - What now stands where its input stood
+ * @returns the rebuilt modifier
+ */
+function rebuildSolutionModifier(
+  c: TransformationContext,
+  solutionModifier: SolutionModifier,
+  rewritten: Algebra.Operation,
+): Algebra.Operation {
+  switch (solutionModifier.type) {
+    case Algebra.Types.PROJECT:
+      return rebuildProjection(c, solutionModifier, rewritten);
+    case Algebra.Types.CONSTRUCT:
+      // The template names the variables the pattern binds, which are now the prefixed ones. Which name a
+      // template variable carries is invisible in the triples it constructs, so renaming beats restoring.
+      return c.AF.createConstruct(
+        rewritten,
+        prefixVarsInOperation(c, solutionModifier.template, VAR_PREFIX_USER_QUERY),
+      );
+    case Algebra.Types.DESCRIBE:
+      // Same again: a described variable has to be one the rewritten query projects.
+      return c.AF.createDescribe(
+        rewritten,
+        prefixVarsInOperation(c, solutionModifier.terms, VAR_PREFIX_USER_QUERY),
+      );
+    case Algebra.Types.ASK:
+      return c.AF.createAsk(rewritten);
+    case Algebra.Types.DISTINCT:
+      return c.AF.createDistinct(rewritten);
+    case Algebra.Types.REDUCED:
+      return c.AF.createReduced(rewritten);
+    case Algebra.Types.SLICE:
+      return c.AF.createSlice(rewritten, solutionModifier.start, solutionModifier.length);
+    case Algebra.Types.FROM:
+      return c.AF.createFrom(rewritten, solutionModifier.default, solutionModifier.named);
+  }
+}
+
+/**
+ * Runs the pipeline over the pattern of a query, rebuilding the solution modifiers it was peeled out of.
  * @param c - The transformation context of this rewrite
  * @param transformations - The pipeline to run
  * @param operation - The parsed user query
@@ -74,50 +189,16 @@ async function rewriteParsedQuery(
 ): Promise<Algebra.Operation> {
   assertUserQueryIsSupported(operation);
 
-  // Peel off a SLICE (LIMIT/OFFSET) modifier so we can reach the inner Project.
-  // SELECT ... LIMIT/OFFSET produces Slice(Project(...)) (or Slice(Distinct/Reduced(Project(...)))).
-  const slice = operation.type === Algebra.Types.SLICE ? operation : undefined;
-  const afterSlice: Algebra.Operation = slice ? slice.input : operation;
+  const { solutionModifiers, pattern } = peelSolutionModifiers(operation);
 
-  // Peel off a DISTINCT or REDUCED modifier so we can reach the inner Project.
-  // SELECT DISTINCT/REDUCED produce Distinct/Reduced(Project(...)) in the algebra.
-  const isDistinct = afterSlice.type === Algebra.Types.DISTINCT;
-  const isReduced = afterSlice.type === Algebra.Types.REDUCED;
-  const innerAlgebra: Algebra.Operation = (isDistinct || isReduced) ? afterSlice.input : afterSlice;
-
-  let rewritten = innerAlgebra.type === Algebra.Types.PROJECT ? innerAlgebra.input : innerAlgebra;
-  rewritten = prefixVarsInOperation(c, rewritten, VAR_PREFIX_USER_QUERY);
+  let rewritten = prefixVarsInOperation(c, pattern, VAR_PREFIX_USER_QUERY);
   for (const transformation of transformations) {
     rewritten = await transformation(c, rewritten);
   }
 
-  if (innerAlgebra.type === Algebra.Types.PROJECT) {
-    // Because of the variable renaming, when we group,
-    // we need to group as part of a subquery and then rename afterwards.
-    if (hasGroupInTopLevelChain(rewritten)) {
-      rewritten = c.AF.createProject(rewritten, innerAlgebra.variables
-        .map(variable => c.DF.variable(`${VAR_PREFIX_USER_QUERY}${variable.value}`)));
-    }
-
-    // Wrap the rewritten query in extends to the original variable names and project those.
-    for (const variable of innerAlgebra.variables) {
-      rewritten = c.AF.createExtend(
-        rewritten,
-        variable,
-        c.AF.createTermExpression(c.DF.variable(`${VAR_PREFIX_USER_QUERY}${variable.value}`)),
-      );
-    }
-    rewritten = c.AF.createProject(rewritten, innerAlgebra.variables);
-  }
-
-  if (isDistinct) {
-    rewritten = c.AF.createDistinct(rewritten);
-  } else if (isReduced) {
-    rewritten = c.AF.createReduced(rewritten);
-  }
-
-  if (slice) {
-    rewritten = c.AF.createSlice(rewritten, slice.start, slice.length);
+  // Innermost modifier first, so each is rebuilt over what its own input became.
+  for (const solutionModifier of [ ...solutionModifiers ].reverse()) {
+    rewritten = rebuildSolutionModifier(c, solutionModifier, rewritten);
   }
   return rewritten;
 }

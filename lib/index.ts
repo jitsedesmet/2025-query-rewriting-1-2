@@ -28,7 +28,7 @@
  */
 export * from './consts.js';
 export { mappingFromConstructQueries } from './mapping.js';
-export { createQueryRewriter } from './queryRewriter.js';
+export { createDefaultTransformationPipeline, createQueryRewriter } from './queryRewriter.js';
 export type { QueryRewriter } from './queryRewriter.js';
 export type { TransformationContext } from './transformContext.js';
 export type { Mapping, MappingHead, QueryTransformation } from './types.js';

@@ -21,6 +21,11 @@ import { createFilterFalse } from '../utils/operationhelpers.js';
  *
  * The replacement wraps the operation rather than dropping it, so the metadata this traversal carries still
  * describes the tree; {@link transformFilterFalse} drops it afterwards.
+ *
+ * **Not in the default pipeline.** Its proof is one nothing else in the repository can make, but nothing
+ * the unfolding generates today has an empty range, so on a rewritten query it fires on nothing. It is
+ * exported for a caller whose mapping or query gives it something to decide, and belongs in the default
+ * the day the unfolding starts producing empty ranges of its own.
  */
 
 /** Metadata is a cache to carry along, never a tree to iterate into: its sets do not survive that. */

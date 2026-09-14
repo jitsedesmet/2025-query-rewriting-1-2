@@ -40,14 +40,13 @@ import { nonTripleTermConstruct, testQuery, tripleTermConstruct } from './queryC
  * the honest end-to-end figure and the least sensitive one - the memos need a bigger conjunction than a
  * hand-written filter builds before they reach it. The pushdown is where
  * {@link utils/assertionConjunction!AssertionConjunction} does its work, and so where a change to the
- * memos shows up: it is not part of the standard chain the integration tests run, being a transformation
- * a caller opts into, so it is measured both ways below.
+ * memos shows up, so it is measured both with and without below.
  */
 
 // Built once: parsing the mappers is not what any of this is measuring.
 const mapping = mappingFromConstructQueries([ tripleTermConstruct, nonTripleTermConstruct ]);
 
-/** The chain the integration tests run, which does not include the pushdown. */
+/** The default pipeline without the assertion pushdown, which is the baseline Θ is measured against. */
 const standardPipeline: QueryTransformation[] = [
   unfoldingTransformation(mapping),
   filterFalseTransformation(),
@@ -58,7 +57,7 @@ const standardPipeline: QueryTransformation[] = [
   removeProjectionsTransformation(),
 ];
 
-/** The same chain with the assertion pushdown in it, which is what drives Θ. */
+/** The same chain with the assertion pushdown in it - the default pipeline - which is what drives Θ. */
 const withPushdown: QueryTransformation[] = [
   unfoldingTransformation(mapping),
   pushDownAssertionsTransformation(),

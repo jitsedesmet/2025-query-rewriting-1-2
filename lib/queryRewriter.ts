@@ -1,9 +1,19 @@
 import { toAst } from '@traqula/algebra-sparql-1-2';
 import { Algebra } from '@traqula/algebra-transformations-1-2';
 import { VAR_PREFIX_USER_QUERY } from './consts.js';
-import type { TransformationContext } from './transformContext.js';
+import { filterFalseTransformation } from './transformations/filterFalse.js';
+import {
+  nullifyJoinOverIncompatibleBoundsTransformation,
+} from './transformations/nullifyJoinOverIncompatibleBounds.js';
+import { rewriteNonRecursivePathsTransformation } from './transformations/pathTransformation.js';
+import { pullUpExtendsTransformation } from './transformations/pullUpExtends.js';
+import { pushDownAssertionsTransformation } from './transformations/pushDownAssertions.js';
+import { removeProjectionsTransformation } from './transformations/removeProjections.js';
+import type { UnfoldingOptions } from './transformations/unfolding.js';
+import { unfoldingTransformation } from './transformations/unfolding.js';
 import { createTransformationContext, parseQuery, prefixVarsInOperation } from './transformContext.js';
-import type { QueryTransformation } from './types.js';
+import type { TransformationContext } from './transformContext.js';
+import type { Mapping, QueryTransformation } from './types.js';
 import { assertUserQueryIsSupported } from './userQueryRestrictions.js';
 import { solutionModifierChainOf } from './utils/solutionModifierChain.js';
 
@@ -227,4 +237,44 @@ export function createQueryRewriter(transformations: readonly QueryTransformatio
       return rewriteParsedQuery(createTransformationContext(), transformations, operation);
     },
   };
+}
+
+/**
+ * The pipeline to reach for when you have no reason to build your own.
+ *
+ * The order is not a preference, it is what each step needs to see. Paths are expanded *before* the
+ * unfolding, which only knows triple patterns. `FILTER(FALSE)` is collapsed after every step that can
+ * produce one, so the next step has less to walk. The pushdown drives terms into the leaves and the
+ * pull-up floats the binds it leaves behind back out, in that order, because the pushdown is what creates
+ * them. `nullifyJoinOverIncompatibleBounds` comes last, after `removeProjections` and `pullUpExtends`: it
+ * reads each join operand's top-level `EXTEND` chain and halts at a `PROJECT`, so anywhere earlier it sees
+ * nothing at all.
+ *
+ * {@link transformations/nullifyUnbindableVars!nullifyUnbindableVars} is deliberately absent - nothing the
+ * unfolding generates gives it anything to decide - and so are the blank node materialisations, which are
+ * a choice about the data source rather than an optimisation.
+ * @param mapping - The mapping to unfold, from {@link mapping!mappingFromConstructQueries}
+ * @param options - What to configure the unfolding with
+ * @returns the pipeline, to hand to {@link createQueryRewriter}
+ * @example
+ * const rewriter = createQueryRewriter(createDefaultTransformationPipeline(
+ *   mappingFromConstructQueries([ tripleTermConstruct, nonTripleTermConstruct ]),
+ * ));
+ */
+export function createDefaultTransformationPipeline(
+  mapping: Mapping,
+  options: UnfoldingOptions = {},
+): QueryTransformation[] {
+  return [
+    rewriteNonRecursivePathsTransformation(),
+    unfoldingTransformation(mapping, options),
+    filterFalseTransformation(),
+    pushDownAssertionsTransformation(),
+    filterFalseTransformation(),
+    pullUpExtendsTransformation(),
+    filterFalseTransformation(),
+    removeProjectionsTransformation(),
+    nullifyJoinOverIncompatibleBoundsTransformation(),
+    filterFalseTransformation(),
+  ];
 }

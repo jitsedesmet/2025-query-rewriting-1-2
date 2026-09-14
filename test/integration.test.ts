@@ -4,16 +4,7 @@ import * as arrayifyStreamNS from 'arrayify-stream';
 import { DataFactory, Store } from 'n3';
 import { describe, it } from 'vitest';
 import { mappingFromConstructQueries } from '../lib/mapping.js';
-import { createQueryRewriter } from '../lib/queryRewriter.js';
-import { filterFalseTransformation } from '../lib/transformations/filterFalse.js';
-import {
-  nullifyJoinOverIncompatibleBoundsTransformation,
-} from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
-import { nullifyUnbindableVarsTransformation } from '../lib/transformations/nullifyUnbindableVars.js';
-import { pullUpExtendsTransformation } from '../lib/transformations/pullUpExtends.js';
-import { removeProjectionsTransformation } from '../lib/transformations/removeProjections.js';
-import { unfoldingTransformation } from '../lib/transformations/unfolding.js';
-import type { QueryTransformation } from '../lib/types.js';
+import { createDefaultTransformationPipeline, createQueryRewriter } from '../lib/queryRewriter.js';
 import {
   nonSingletonTripleConstruct,
   nonTripleTermConstruct,
@@ -38,18 +29,9 @@ describe('integration tests', () => {
   const engine = new QueryEngine();
   const DF = DataFactory;
 
-  /** The pipeline every comparison below is run through, the unfolding of these mappings first. */
-  function standardPipelineFor(mappers: string[]): QueryTransformation[] {
-    return [
-      unfoldingTransformation(mappingFromConstructQueries(mappers)),
-      filterFalseTransformation(),
-      nullifyJoinOverIncompatibleBoundsTransformation(),
-      nullifyUnbindableVarsTransformation(),
-      filterFalseTransformation(),
-      pullUpExtendsTransformation(),
-      // TODO: remove once https://github.com/comunica/comunica/pull/1734 is merged
-      removeProjectionsTransformation(),
-    ];
+  /** Every comparison below goes through the default pipeline, which is what these tests are here to check. */
+  function rewriterFor(mappers: string[]): ReturnType<typeof createQueryRewriter> {
+    return createQueryRewriter(createDefaultTransformationPipeline(mappingFromConstructQueries(mappers)));
   }
 
   async function sourceToStore(
@@ -85,7 +67,7 @@ describe('integration tests', () => {
     const store12 = await storeTo12Store(store11, mappers);
     const resOnMappedData = (await sourceToStore([ store12 ], userQuery)).getQuads(null, null, null, null);
 
-    const rewrittenQuery = await createQueryRewriter(standardPipelineFor(mappers)).rewriteQuery(userQuery);
+    const rewrittenQuery = await rewriterFor(mappers).rewriteQuery(userQuery);
     const resUsingRewriter = (await sourceToStore([ store11 ], rewrittenQuery)).getQuads(null, null, null, null);
 
     return { resOnMappedData, resUsingRewriter };
@@ -119,7 +101,7 @@ describe('integration tests', () => {
       await engine.queryBindings(userQuery, { sources: [ store12 ]}),
     );
 
-    const rewrittenQuery = await createQueryRewriter(standardPipelineFor(mappers)).rewriteQuery(userQuery);
+    const rewrittenQuery = await rewriterFor(mappers).rewriteQuery(userQuery);
     const rewrittenBindings: RDF.Bindings[] = await arrayifyStream(
       await engine.queryBindings(rewrittenQuery, { sources: [ store11 ]}),
     );

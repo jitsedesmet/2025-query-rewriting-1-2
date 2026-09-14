@@ -44,15 +44,11 @@ export function unfoldTriplePatternsAgainstMapping(
   mapping: Mapping,
   input: Algebra.Operation,
 ): Algebra.Operation {
-  // Counter shared across every BGP of the query, so that the existence variables of distinct pattern
-  // rewrites stay distinct - not even two sibling BGPs later combined by a JOIN/LEFT JOIN (a pattern and
-  // an OPTIONAL block, say) may share one.
-  let patternCounter = 0;
   return algebraUtils.mapOperation<'unsafe', typeof input>(
     input,
     { [Algebra.Types.BGP]: { transform: input =>
       c.AF.createJoin(
-        input.patterns.map(pattern => rewriteSinglePattern(c, pattern, mapping, patternCounter++)),
+        input.patterns.map(pattern => rewriteSinglePattern(c, pattern, mapping)),
         true,
       ),
     }},

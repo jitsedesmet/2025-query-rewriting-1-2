@@ -83,8 +83,9 @@ Nothing namespaces the *patterns* apart: each is unfolded into a sub-SELECT proj
 query) variables, so the mapping variables of two patterns are in two scopes already. Only the `uq_`
 variables are meant to be shared between patterns, being the natural join keys. The one exception is the
 existence variable a pattern binding nothing projects in place of an empty projection — that one leaves the
-sub-SELECT, so it is named after the pattern (`mExists0`, `mExists1`, …). Two patterns sharing it would
-share a join key, and a `MINUS` decides compatibility on exactly the variables its two sides share.
+sub-SELECT, so the context coins it (`mExists0`, `mExists1`, …), holding the count for the whole rewrite.
+Two patterns sharing it would share a join key, and a `MINUS` decides compatibility on exactly the
+variables its two sides share.
 
 ## Blank nodes
 

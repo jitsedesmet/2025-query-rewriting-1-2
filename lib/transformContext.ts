@@ -1,4 +1,5 @@
 /* eslint-disable jsdoc/check-param-names */
+import type * as RDF from '@rdfjs/types';
 import { toAlgebra } from '@traqula/algebra-sparql-1-2';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { AlgebraFactory } from '@traqula/algebra-transformations-1-2';
@@ -32,6 +33,12 @@ export interface TransformationContext {
   astTransformer: AstTransformer;
   /** Solver for variable clustering and unification during rewriting */
   clusterSolver: ClusterSolver;
+  /**
+   * Coins the variable a pattern that binds nothing projects, SPARQL having no sub-ASK and no empty
+   * projection. It is the one variable the unfolding lets out of a pattern's sub-SELECT, so every call
+   * hands back a name no other pattern of this rewrite uses.
+   */
+  coinExistenceVariable: () => RDF.Variable;
 }
 
 /**
@@ -86,13 +93,16 @@ export function prefixVarsInOperation<T extends object>(
  * @returns the context
  */
 export function createTransformationContext(): TransformationContext {
+  const DF = new DataFactory();
+  let existenceVariablesCoined = 0;
   return {
     parser: new Parser(),
     generator: new MyGenerator(),
     astFactory: new AstFactory(),
     AF: new AlgebraFactory(),
-    DF: new DataFactory(),
+    DF,
     astTransformer: new AstTransformer(),
     clusterSolver: new ClusterSolver(),
+    coinExistenceVariable: () => DF.variable(`mExists${existenceVariablesCoined++}`),
   };
 }

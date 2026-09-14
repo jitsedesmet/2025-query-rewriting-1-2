@@ -215,11 +215,10 @@ function collectMappingHeadBindsAndFilters({ clusterSolver, mappingHeadVars, AF 
  * @returns the subselect; where the pattern binds nothing, a dummy variable is projected instead, SPARQL
  * having no sub-ASK and no empty projection
  */
-function wrapOperationInProject({ triplePatternBinds, operation, patternIndex, DF, AF }: {
+function wrapOperationInProject({ triplePatternBinds, operation, coinExistenceVariable, DF, AF }: {
   triplePatternBinds: Record<string, Alg.Expression>;
   operation: Alg.Operation;
-  patternIndex: number;
-} & Pick<TransformationContext, 'DF' | 'AF'>): Alg.Project {
+} & Pick<TransformationContext, 'DF' | 'AF' | 'coinExistenceVariable'>): Alg.Project {
   let buildOperation = operation;
   // All variables required from subselect -- recursive search needed for triple terms
   const variablesToSelect = Object.keys(triplePatternBinds).map(x => DF.variable(x));
@@ -228,9 +227,10 @@ function wrapOperationInProject({ triplePatternBinds, operation, patternIndex, D
     // You cannot have a subAsk, but you can do a select over a dummy var: SELECT (1 as ?dummy)
     // [proof this works](https://query.comunica.dev/#transientDatasources=%2F%2Ffragments.dbpedia.org%2F2016-04%2Fen&query=SELECT%20*%0AWHERE%20%7B%0A%20%20%3Fs%20%3Fp%20%3Fo%20.%0A%20%20%7B%20SELECT%20%281%20as%20%3Fdummy%29%20WHERE%20%7B%0A%20%20%20%20%20%20%3Chttp%3A%2F%2F0-access.newspaperarchive.com.lib.utep.edu%2Fus%2Fmississippi%2Fbiloxi%2Fbiloxi-daily-herald%2F1899%2F05-06%2Fpage-6%3Ftag%3Dtierce%2Bwine%26rtserp%3Dtags%2Ftierce-wine%3Fpage%3D2%3E%0A%20%20%20%20%20%20%3Chttp%3A%2F%2Fdbpedia.org%2Fproperty%2Fdate%3E%0A%20%20%20%20%20%20%221899-05-05%22%5E%5E%3Chttp%3A%2F%2Fwww.w3.org%2F2001%2FXMLSchema%23date%3E%0A%20%20%20%20%20%20%23%20%221899-05-06%22%5E%5E%3Chttp%3A%2F%2Fwww.w3.org%2F2001%2FXMLSchema%23date%3E%0A%20%20%20%7D%20%7D%0A%7D)
     // This is the one variable that leaves the subselect without being a user query variable, so it is
-    // the one that has to be named per pattern: two patterns sharing it would share a join key, and a
-    // MINUS decides compatibility on exactly the variables its two sides share.
-    const existenceVar = DF.variable(`mExists${patternIndex}`);
+    // the one that has to differ per pattern: two patterns sharing it would share a join key, and a
+    // MINUS decides compatibility on exactly the variables its two sides share. The context coins it,
+    // holding the count for the whole rewrite.
+    const existenceVar = coinExistenceVariable();
     buildOperation = AF.createExtend(
       buildOperation,
       existenceVar,
@@ -292,7 +292,6 @@ function bindEvaluationGuards(c: TransformationContext, expression: Alg.Expressi
  * @param c - The transformation context
  * @param pattern - The triple pattern to rewrite
  * @param mapping - The mapping to unfold within it
- * @param patternIndex - This pattern's index among the query's patterns, naming the existence variable
  * @returns the subselect over the mapping body, with the pattern's variables bound on top of it
  * @throws RewriteNoMatchError if the pattern and the mapping head cannot be unified
  */
@@ -300,9 +299,8 @@ function unfoldMappingWithinPattern(
   c: TransformationContext,
   pattern: Alg.Pattern,
   mapping: Mapping,
-  patternIndex: number,
 ): Alg.Project | Alg.Extend {
-  const { clusterSolver, AF, DF } = c;
+  const { clusterSolver, coinExistenceVariable, AF, DF } = c;
   clusterSolver.clear();
   // Set of variables in the mapping head
   const mappingHeadVars: Record<string, RDF.Variable> = {};
@@ -342,7 +340,7 @@ function unfoldMappingWithinPattern(
     inProject = AF.createFilter(inProject, expression);
   }
   inProject = bindPatternTerms({ operation: inProject, triplePatternBinds, DF, AF });
-  return wrapOperationInProject({ operation: inProject, triplePatternBinds, patternIndex, AF, DF });
+  return wrapOperationInProject({ operation: inProject, triplePatternBinds, coinExistenceVariable, AF, DF });
 }
 
 /**
@@ -350,7 +348,6 @@ function unfoldMappingWithinPattern(
  * @param c - The transformation context
  * @param pattern - The triple pattern to rewrite
  * @param mapping - The mapping to unfold within it
- * @param patternIndex - This pattern's index among the query's patterns, naming the existence variable
  * @returns the subselect over the mapping body, or `FILTER(FALSE)` where the pattern cannot match the
  * mapping at all
  */
@@ -358,10 +355,9 @@ export function rewriteSinglePattern(
   c: TransformationContext,
   pattern: Alg.Pattern,
   mapping: Mapping,
-  patternIndex: number,
 ): Alg.Operation {
   try {
-    return unfoldMappingWithinPattern(c, pattern, mapping, patternIndex);
+    return unfoldMappingWithinPattern(c, pattern, mapping);
   } catch (error: unknown) {
     // A pattern that cannot match the mapping is ordinary - it contributes the empty solution multiset -
     // where any other error is a bug, and has to keep propagating rather than become an empty branch.

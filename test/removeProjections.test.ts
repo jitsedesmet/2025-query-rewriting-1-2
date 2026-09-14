@@ -4,8 +4,7 @@ import type { expect as Expect } from 'vitest';
 import { describe, it } from 'vitest';
 import { removeProjections } from '../lib/transformations/removeProjections.js';
 import { queryTransform } from '../lib/transformBgp.js';
-import { transformContextFromConstructs } from '../lib/transformContext.js';
-import { nonTripleTermConstruct } from './queryConsts.js';
+import { createPartialContext, type TransformContext } from '../lib/transformContext.js';
 
 // Crazy workaround to support both CJS and ESM
 const arrayifyStream =
@@ -15,7 +14,7 @@ describe('removeProjections', () => {
   // The pass through mapping leaves every pattern as it was, so the output only shows what
   // removeProjections itself did.
   function transform(query: string): string {
-    return queryTransform(transformContextFromConstructs([ nonTripleTermConstruct ]), query, [ removeProjections ]);
+    return queryTransform(<TransformContext> createPartialContext(), query, [ removeProjections ]);
   }
 
   const engine = new QueryEngine();

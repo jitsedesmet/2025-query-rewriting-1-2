@@ -11,16 +11,18 @@
  * @module query-rewriting-1-2
  * @see {@link https://w3c.github.io/rdf-interop/spec/} RDF 1.2 Interoperability Spec
  * @example
- * import { operationTransform, queryTransform, transformContextFromConstructs } from 'query-rewriting-1-2';
+ * import { createPartialContext, mappingFromConstructQueries, operationTransform, queryTransform }
+ *   from 'traqula-sparql-1-2-rewriter';
  *
- * const context = transformContextFromConstructs([
+ * const context = { ...createPartialContext(), mapping: mappingFromConstructQueries([
  *   'CONSTRUCT { ?t rdf:reifies <<( ?s ?p ?o )>> } WHERE { ... RDF 1.1 pattern ... }'
- * ]);
+ * ]) };
  * const rewrittenQuery =
  *   queryTransform(context, 'SELECT * WHERE { ?x rdf:reifies <<( ?s ?p ?o )>> }', [ operationTransform ]);
  */
 export { operationTransform, queryTransform } from './transformBgp.js';
-export { createPartialContext, transformContextFromConstructs } from './transformContext.js';
+export { mappingFromConstructQueries } from './mapping.js';
+export { createPartialContext } from './transformContext.js';
 export type { TransformContext } from './transformContext.js';
 export type { Mapping, MappingHead } from './types.js';
 export { simplifyStaticExpressions } from './utils/staticExpressionEvaluation.js';

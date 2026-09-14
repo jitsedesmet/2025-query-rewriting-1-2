@@ -1,12 +1,11 @@
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { describe, it } from 'vitest';
 import type { expect as Expect } from 'vitest';
+import { mappingFromConstructQueries } from '../lib/mapping.js';
 import { transformExtendsToValues } from '../lib/transformations/extendsToValues.js';
 import { operationTransform, queryTransform } from '../lib/transformBgp.js';
 import type { TransformContext } from '../lib/transformContext.js';
-import {
-  transformContextFromConstructs,
-} from '../lib/transformContext.js';
+import { createPartialContext } from '../lib/transformContext.js';
 import {
   expectedQuery,
   expectedQueryToValues,
@@ -22,7 +21,7 @@ describe('dummy', () => {
     mappers: string[],
     transformations: ((c: TransformContext, op: Algebra.Operation) => Algebra.Operation)[] = [ operationTransform ],
   ): string {
-    const transformerContext = transformContextFromConstructs(mappers);
+    const transformerContext = { ...createPartialContext(), mapping: mappingFromConstructQueries(mappers) };
     return queryTransform(transformerContext, userQuery, transformations);
   }
 

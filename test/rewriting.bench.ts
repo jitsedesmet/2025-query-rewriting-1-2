@@ -8,7 +8,7 @@ import { pushDownAssertions } from '../lib/transformations/pushDownAssertions.js
 import { removeProjections } from '../lib/transformations/removeProjections.js';
 import { operationTransform, queryTransform } from '../lib/transformBgp.js';
 import type { TransformContext } from '../lib/transformContext.js';
-import { createPartialContext, parseQuery, transformContextFromConstructs } from '../lib/transformContext.js';
+import { createPartialContext, parseQuery } from '../lib/transformContext.js';
 import { nonTripleTermConstruct, testQuery, tripleTermConstruct } from './queryConsts.js';
 
 /**
@@ -64,7 +64,10 @@ const withPushdown = <const>[
 ];
 
 // Built once: parsing the mappers is not what any of this is measuring.
-const mapped = transformContextFromConstructs([ tripleTermConstruct, nonTripleTermConstruct ]);
+const mapped = {
+  ...createPartialContext(),
+  mapping: mappingFromConstructQueries([ tripleTermConstruct, nonTripleTermConstruct ]),
+};
 const bare = <TransformContext> createPartialContext();
 
 const prefixes = `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>

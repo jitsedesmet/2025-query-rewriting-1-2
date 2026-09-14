@@ -11,6 +11,13 @@ export const DT_INTERNAL_BNODE = 'https://sparql-extension.knows.idlab.ugent.be/
 export const EXTENSION_FUNCTION_BNODE = 'internal://blank';
 
 /**
+ * The public spelling of {@link EXTENSION_FUNCTION_BNODE}, the one a mapping body is written against.
+ * {@link mapping!mappingFromConstructQueries} rewrites it to the internal IRI, which is what every pass
+ * recognises.
+ */
+export const EXTENSION_FUNCTION_BNODE_PUBLIC = 'https://sparql-extension.knows.idlab.ugent.be/bnodeConsistent';
+
+/**
  * IRI prefix used when skolemizing blank nodes as named nodes (IRIs).
  * Combined with a hash of the blank node's identifying values to create unique IRIs.
  */

@@ -3,13 +3,14 @@ import type * as RDF from '@rdfjs/types';
 import * as arrayifyStreamNS from 'arrayify-stream';
 import { DataFactory, Store } from 'n3';
 import { describe, it } from 'vitest';
+import { mappingFromConstructQueries } from '../lib/mapping.js';
 import { transformFilterFalse } from '../lib/transformations/filterFalse.js';
 import { nullifyJoinOverIncompatibleBounds } from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
 import { nullifyUnbindableVars } from '../lib/transformations/nullifyUnbindableVars.js';
 import { pullUpExtends } from '../lib/transformations/pullUpExtends.js';
 import { removeProjections } from '../lib/transformations/removeProjections.js';
 import { operationTransform, queryTransform } from '../lib/transformBgp.js';
-import { transformContextFromConstructs } from '../lib/transformContext.js';
+import { createPartialContext } from '../lib/transformContext.js';
 import {
   nonSingletonTripleConstruct,
   nonTripleTermConstruct,
@@ -78,7 +79,7 @@ describe('integration tests', () => {
     const store12 = await storeTo12Store(store11, mappers);
     const resOnMappedData = (await sourceToStore([ store12 ], userQuery)).getQuads(null, null, null, null);
 
-    const transformerContext = transformContextFromConstructs(mappers);
+    const transformerContext = { ...createPartialContext(), mapping: mappingFromConstructQueries(mappers) };
     const rewrittenQuery = queryTransform(transformerContext, userQuery, [ ...standardTransformations ]);
     const resUsingRewriter = (await sourceToStore([ store11 ], rewrittenQuery)).getQuads(null, null, null, null);
 
@@ -113,7 +114,7 @@ describe('integration tests', () => {
       await engine.queryBindings(userQuery, { sources: [ store12 ]}),
     );
 
-    const transformerContext = transformContextFromConstructs(mappers);
+    const transformerContext = { ...createPartialContext(), mapping: mappingFromConstructQueries(mappers) };
     const rewrittenQuery = queryTransform(transformerContext, userQuery, [ ...standardTransformations ]);
     const rewrittenBindings: RDF.Bindings[] = await arrayifyStream(
       await engine.queryBindings(rewrittenQuery, { sources: [ store11 ]}),

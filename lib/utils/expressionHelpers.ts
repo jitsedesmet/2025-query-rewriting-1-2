@@ -69,7 +69,7 @@ export function createBooleanExpression(c: TransformContext, value: boolean): Al
  * query execution must return the same value" (SPARQL 1.1 §17.4.5.1) - where `BNODE` is present because
  * §17.4.2.14 fixes a blank node per solution mapping *and* argument.
  */
-const unstableOperators = new Set([ 'bnode', 'rand', 'uuid', 'struuid' ]);
+export const unstableOperators = new Set([ 'bnode', 'rand', 'uuid', 'struuid' ]);
 
 /**
  * The extension functions declared stable, which is what lets a `BIND` over one of them move.

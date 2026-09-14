@@ -6,13 +6,14 @@ import { Store } from 'n3';
 import { DataFactory } from 'rdf-data-factory';
 import type { ExpectStatic } from 'vitest';
 import { describe, it } from 'vitest';
+import { mappingFromConstructQueries } from '../lib/mapping.js';
 import { transformFilterFalse } from '../lib/transformations/filterFalse.js';
 import { nullifyJoinOverIncompatibleBounds } from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
 import { nullifyUnbindableVars } from '../lib/transformations/nullifyUnbindableVars.js';
 import { pullUpExtends } from '../lib/transformations/pullUpExtends.js';
 import { operationTransform, queryTransform } from '../lib/transformBgp.js';
 import type { TransformContext } from '../lib/transformContext.js';
-import { createPartialContext, parseQuery, transformContextFromConstructs } from '../lib/transformContext.js';
+import { createPartialContext, parseQuery } from '../lib/transformContext.js';
 import { nonTripleTermConstruct, tripleTermConstruct } from './queryConsts.js';
 import './matchers/toBeRdfIsomorphic.js';
 
@@ -76,7 +77,10 @@ describe('evaluation tests', () => {
       // Querying a normal query over store 1.2 should give same result as altered query over store 1.1
       const userQuery = 'CONSTRUCT WHERE { ?s ?p ?o }';
       const resOnMappedData = await sourceToStore([ store12 ], userQuery);
-      const transformerContext = transformContextFromConstructs([ tripleTermConstruct, nonTripleTermConstruct ]);
+      const transformerContext = {
+        ...createPartialContext(),
+        mapping: mappingFromConstructQueries([ tripleTermConstruct, nonTripleTermConstruct ]),
+      };
       const resUsingMapper = await sourceToStore([ store11 ], queryTransform(transformerContext, userQuery, [
         operationTransform,
         transformFilterFalse,

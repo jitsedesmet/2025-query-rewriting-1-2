@@ -4,6 +4,7 @@ import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import * as arrayifyStreamNS from 'arrayify-stream';
 import type { expect as Expect } from 'vitest';
 import { describe, it } from 'vitest';
+import { mappingFromConstructQueries } from '../lib/mapping.js';
 import { transformFilterFalse } from '../lib/transformations/filterFalse.js';
 import { nullifyJoinOverIncompatibleBounds } from '../lib/transformations/nullifyJoinOverIncompatibleBounds.js';
 import { pullUpExtends } from '../lib/transformations/pullUpExtends.js';
@@ -11,8 +12,8 @@ import { pushDownAssertions } from '../lib/transformations/pushDownAssertions.js
 import { removeProjections } from '../lib/transformations/removeProjections.js';
 import { operationTransform, queryTransform } from '../lib/transformBgp.js';
 import type { TransformContext } from '../lib/transformContext.js';
-import { createPartialContext, parseQuery, transformContextFromConstructs } from '../lib/transformContext.js';
-import { nonReificationTripleConstruct, nonTripleTermConstruct, rdfReificationConstruct } from './queryConsts.js';
+import { createPartialContext, parseQuery } from '../lib/transformContext.js';
+import { nonReificationTripleConstruct, rdfReificationConstruct } from './queryConsts.js';
 
 // Crazy workaround to support both CJS and ESM
 const arrayifyStream =
@@ -204,8 +205,7 @@ OFFSET 5`,
 
     // The pass-through mapping leaves every pattern as it was.
     function rewriteWithFilterFalse(query: string): string {
-      const passThroughContext = transformContextFromConstructs([ nonTripleTermConstruct ]);
-      return queryTransform(passThroughContext, query, [ transformFilterFalse ]);
+      return queryTransform(<TransformContext> createPartialContext(), query, [ transformFilterFalse ]);
     }
 
     it('exposes the same variables and rows when a SELECT * loses an empty sub-SELECT', async({ expect }) => {
@@ -266,7 +266,11 @@ SELECT ?o ?source WHERE { << bkr:META_C0040300-INST bkr_sn:PART_OF ?o >> proveni
   function rewriteWithPipeline(
     pipeline: readonly ((c: TransformContext, op: Algebra.Operation) => Algebra.Operation)[],
   ): string {
-    return queryTransform(transformContextFromConstructs(mappers), query, [ ...pipeline ]);
+    return queryTransform(
+      { ...createPartialContext(), mapping: mappingFromConstructQueries(mappers) },
+      query,
+      [ ...pipeline ],
+    );
   }
 
   it('leaves no dead branch in the pushdown pipeline', ({ expect }) => {

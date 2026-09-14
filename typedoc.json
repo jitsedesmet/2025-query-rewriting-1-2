@@ -1,5 +1,5 @@
 {
-  "name": "Traqula",
+  "name": "traqula-sparql-1-2-rewriter",
   "out": "documentation",
   "theme": "default",
   "entryPointStrategy": "expand",

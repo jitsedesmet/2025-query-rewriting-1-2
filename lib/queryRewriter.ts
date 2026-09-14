@@ -4,6 +4,7 @@ import { VAR_PREFIX_USER_QUERY } from './consts.js';
 import type { TransformationContext } from './transformContext.js';
 import { createTransformationContext, parseQuery, prefixVarsInOperation } from './transformContext.js';
 import type { QueryTransformation } from './types.js';
+import { assertUserQueryIsSupported } from './userQueryRestrictions.js';
 
 /**
  * @fileoverview The pipeline runner: a list of {@link QueryTransformation}s applied to a query in order.
@@ -71,6 +72,8 @@ async function rewriteParsedQuery(
   transformations: readonly QueryTransformation[],
   operation: Algebra.Operation,
 ): Promise<Algebra.Operation> {
+  assertUserQueryIsSupported(operation);
+
   // Peel off a SLICE (LIMIT/OFFSET) modifier so we can reach the inner Project.
   // SELECT ... LIMIT/OFFSET produces Slice(Project(...)) (or Slice(Distinct/Reduced(Project(...)))).
   const slice = operation.type === Algebra.Types.SLICE ? operation : undefined;

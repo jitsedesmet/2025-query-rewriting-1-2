@@ -35,18 +35,23 @@ export interface TransformationContext {
 }
 
 /**
- * Parses a SPARQL query string into its algebra representation, in quad mode and with blank nodes converted
- * to variables.
+ * Parses a SPARQL query string into its algebra representation, with blank nodes converted to variables.
+ *
+ * Not in quad mode: a `GRAPH` then survives as an operation of its own rather than as the graph component
+ * of every pattern below it, which is what lets the GRAPH rules of the passes - and the precheck of
+ * {@link userQueryRestrictions!assertUserQueryIsSupported} - see it at all.
  * @param context - Object containing the parser
  * @param query - SPARQL query string to parse
+ * @param quads - Whether to parse in quad mode, every pattern carrying its graph
  * @returns the parsed algebra operation
  */
 export function parseQuery(
   { parser }: Pick<TransformationContext, 'parser'>,
   query: string,
+  quads = false,
 ): Algebra.Operation {
   const ast = parser.parse(query);
-  return <Algebra.Construct> toAlgebra(ast, { quads: true, blankToVariable: true });
+  return <Algebra.Construct> toAlgebra(ast, { quads, blankToVariable: true });
 }
 
 /**

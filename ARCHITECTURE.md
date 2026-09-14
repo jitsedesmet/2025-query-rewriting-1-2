@@ -79,9 +79,12 @@ Three prefixes, in `lib/consts.ts`, and two of them are load-bearing:
   is unfolded into.
 - `m_` — the three variables of the generic head several mappings are merged into.
 
-On top of those, `rewritePatternWithUniqueScope` namespaces each unfolded pattern's internal variables with
-`p<n>_`, so that two patterns of one BGP cannot join on a mapping variable by accident. Only the `uq_`
-variables are meant to be shared between patterns, being the natural join keys.
+Nothing namespaces the *patterns* apart: each is unfolded into a sub-SELECT projecting only its own (user
+query) variables, so the mapping variables of two patterns are in two scopes already. Only the `uq_`
+variables are meant to be shared between patterns, being the natural join keys. The one exception is the
+existence variable a pattern binding nothing projects in place of an empty projection — that one leaves the
+sub-SELECT, so it is named after the pattern (`mExists0`, `mExists1`, …). Two patterns sharing it would
+share a join key, and a `MINUS` decides compatibility on exactly the variables its two sides share.
 
 ## Blank nodes
 

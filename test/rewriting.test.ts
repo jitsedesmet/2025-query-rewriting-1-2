@@ -144,23 +144,7 @@ LIMIT 10`,
     [ extendsToValuesTransformation() ],
   ));
 
-  // It('simple & optimizeBinds', ({ expect }) => testConstructMappers(
-  //   expect,
-  //   testQuery,
-  //   expectedQueryOptimizedBounds,
-  //   [ tripleTermConstruct, nonTripleTermConstruct ],
-  //   [ operationTransform, substituteVarsThatArePreBoundToTerms ],
-  // ));
-  //
-  // it('simple & optimizeBinds & optimizeEmptyResultSets', ({ expect }) => testConstructMappers(
-  //   expect,
-  //   testQuery,
-  //   expectedQueryOptimizedBoundsAndEmptyRes,
-  //   [ tripleTermConstruct, nonTripleTermConstruct ],
-  //   [ operationTransform, substituteVarsThatArePreBoundToTerms, transformFilterFalse ],
-  // ));
-  //
-  // it('spo with blank in mapping head', ({ expect }) => {
+  // It('spo with blank in mapping head', ({ expect }) => {
   //   expect(() => transformQueryUsingConstructs(
   //     'SELECT * { { ?s <http://ex.org/a> ?a ; <http://ex.org/b> ?b } UNION { ?s <http://ex.org/b> ?b2 } }',
   //     [ `CONSTRUCT { ?s ?p _:blank } WHERE { ?s ?p ?o }` ],

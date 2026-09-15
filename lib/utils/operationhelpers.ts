@@ -30,3 +30,28 @@ export function isFilterFalse(c: TransformationContext, op: Algebra.Operation): 
 export function createFilterFalse(c: TransformationContext, op?: Algebra.Operation): Algebra.Filter {
   return c.AF.createFilter(op ?? c.AF.createBgp([]), c.AF.createTermExpression(termFalse));
 }
+
+/**
+ * Wraps an operation in the projection that asks whether it has any solution at all.
+ *
+ * SPARQL has neither a sub-ASK nor an empty projection, so the question is written as a projection onto a
+ * single variable bound to a constant: one solution comes out exactly when the operation has one, whatever
+ * that operation binds
+ * ([proof this works](https://query.comunica.dev/#transientDatasources=%2F%2Ffragments.dbpedia.org%2F2016-04%2Fen&query=SELECT%20*%0AWHERE%20%7B%0A%20%20%3Fs%20%3Fp%20%3Fo%20.%0A%20%20%7B%20SELECT%20%281%20as%20%3Fdummy%29%20WHERE%20%7B%0A%20%20%20%20%20%20%3Chttp%3A%2F%2F0-access.newspaperarchive.com.lib.utep.edu%2Fus%2Fmississippi%2Fbiloxi%2Fbiloxi-daily-herald%2F1899%2F05-06%2Fpage-6%3Ftag%3Dtierce%2Bwine%26rtserp%3Dtags%2Ftierce-wine%3Fpage%3D2%3E%0A%20%20%20%20%20%20%3Chttp%3A%2F%2Fdbpedia.org%2Fproperty%2Fdate%3E%0A%20%20%20%20%20%20%221899-05-05%22%5E%5E%3Chttp%3A%2F%2Fwww.w3.org%2F2001%2FXMLSchema%23date%3E%0A%20%20%20%20%20%20%23%20%221899-05-06%22%5E%5E%3Chttp%3A%2F%2Fwww.w3.org%2F2001%2FXMLSchema%23date%3E%0A%20%20%20%7D%20%7D%0A%7D)).
+ *
+ * The variable it binds leaves the projection, so the context coins it: two of them sharing a name would
+ * share a join key, and a MINUS decides compatibility on exactly the variables its two sides share.
+ * @param c - Object containing the factories and the existence variable generator
+ * @param operation - The operation to ask about
+ * @returns the projection, over the one variable it binds
+ */
+export function projectSolutionExistence(
+  c: Pick<TransformationContext, 'AF' | 'DF' | 'coinExistenceVariable'>,
+  operation: Algebra.Operation,
+): Algebra.Project {
+  const existenceVariable = c.coinExistenceVariable();
+  return c.AF.createProject(
+    c.AF.createExtend(operation, existenceVariable, c.AF.createTermExpression(c.DF.literal('dummy'))),
+    [ existenceVariable ],
+  );
+}

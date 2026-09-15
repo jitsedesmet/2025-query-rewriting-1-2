@@ -8,6 +8,7 @@ import { createTransformationContext, parseQuery, prefixVarsInOperation } from '
 import type { Mapping, MappingHead } from './types.js';
 import { withCpVars } from './utils/certainlyBoundVars.js';
 import { unstableOperators } from './utils/expressionHelpers.js';
+import { projectSolutionExistence } from './utils/operationhelpers.js';
 import { collectVariableNames } from './utils.js';
 
 /**
@@ -206,16 +207,31 @@ export function mappingFromConstructQueries(constructQueries: readonly string[])
  * them is deduplicating the triples the mapping produces - including a triple two merged mappings both
  * produce, the merged head being the three variables every branch binds. It is **hugely costly**: the
  * whole body of every unfolded pattern is materialised and sorted, where the unfolding otherwise streams.
- * @param context - Object containing the algebra factory
+ * @param context - Object containing the factories and the existence variable generator
  * @param mapping - The mapping to deduplicate
  * @returns the mapping, its body producing each triple once
  */
 export function withDeduplicatedBody(
-  { AF }: Pick<TransformationContext, 'AF'>,
+  c: Pick<TransformationContext, 'AF' | 'DF' | 'coinExistenceVariable'>,
   mapping: Mapping,
 ): Mapping {
+  const { AF } = c;
+  if (mapping.body.variables.length === 0) {
+    // A head of nothing but constants writes one triple, and writes it as soon as the body has any
+    // solution at all - so deduplicating it is asking whether the body has one, and the answer is a
+    // single row. Deduplicating over the head's (zero) variables cannot express that: a SELECT over no
+    // variables is not SPARQL, and generating one yields `SELECT *`, which deduplicates over the body's
+    // own variables and so does not deduplicate at all.
+    const existenceOfBody = projectSolutionExistence(c, mapping.body.input);
+    return {
+      head: mapping.head,
+      body: AF.createProject(AF.createDistinct(existenceOfBody), existenceOfBody.variables),
+    };
+  }
   return {
     head: mapping.head,
+    // By construction,
+    //  the selected variables of mapping.body.variables coincides with the vars used in the mapping head.
     body: AF.createProject(AF.createDistinct(mapping.body), mapping.body.variables),
   };
 }

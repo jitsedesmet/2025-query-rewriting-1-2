@@ -81,3 +81,77 @@ describe('preserveCardinality', () => {
       .toEqual([ 'n=2' ]);
   });
 });
+
+/**
+ * A mapping head of nothing but constants is the worst case for the bag semantics: where a head with
+ * variables needs two body solutions to coincide on a triple before it counts one twice, a ground head
+ * writes *the same* triple for every solution its body has, so the count is the body's.
+ *
+ * It is also where deduplicating over "the head's variables" has none to deduplicate over. A `SELECT` over
+ * no variables is not SPARQL, and generating one yields `SELECT *` - which deduplicates over the body's
+ * own variables and so does not deduplicate at all, leaving `preserveCardinality` a silent no-op.
+ */
+describe('preserveCardinality over a ground mapping head', () => {
+  const engine = new QueryEngine();
+  const DF = DataFactory;
+
+  // Bob is a father as soon as he has any child at all - one triple, however many children.
+  const groundHeadConstruct = `PREFIX : <ex://>
+    CONSTRUCT { :bob :is :father } WHERE {
+      { :bob :hasSon ?child } UNION { :bob :hasDaughter ?child }
+    }`;
+
+  // Three body solutions, so three chances to count the one triple more than once.
+  const store11 = new Store([
+    DF.quad(DF.namedNode('ex://bob'), DF.namedNode('ex://hasSon'), DF.namedNode('ex://sam')),
+    DF.quad(DF.namedNode('ex://bob'), DF.namedNode('ex://hasSon'), DF.namedNode('ex://tim')),
+    DF.quad(DF.namedNode('ex://bob'), DF.namedNode('ex://hasDaughter'), DF.namedNode('ex://ann')),
+  ]);
+
+  const userQuery = 'PREFIX : <ex://> SELECT * WHERE { :bob :is ?x }';
+
+  /** The solutions of a query, duplicates kept. */
+  async function solutionsOf(query: string, source: Store): Promise<string[]> {
+    const rows: RDF.Bindings[] = await arrayifyStream(await engine.queryBindings(query, { sources: [ source ]}));
+    return rows.map(row => [ ...row ].map(([ key, value ]) => `${key.value}=${value.value}`).sort().join('|'));
+  }
+
+  /** The user query answered over the RDF 1.2 graph the mapping denotes, which holds the triple once. */
+  async function solutionsOnMappedData(): Promise<string[]> {
+    const quads: RDF.Quad[] = await arrayifyStream(
+      await engine.queryQuads(groundHeadConstruct, { sources: [ store11 ]}),
+    );
+    return solutionsOf(userQuery, new Store(quads));
+  }
+
+  /** The user query answered through a rewriter over the RDF 1.1 data. */
+  async function solutionsUsingRewriter(
+    mappers: string[],
+    preserveCardinality: boolean,
+  ): Promise<string[]> {
+    const rewriter = createQueryRewriter([
+      unfoldingTransformation(mappingFromConstructQueries(mappers), { preserveCardinality }),
+      filterFalseTransformation(),
+    ]);
+    return solutionsOf(await rewriter.rewriteQuery(userQuery), store11);
+  }
+
+  it('counts the one triple once per body solution when it is off', async({ expect }) => {
+    expect(await solutionsUsingRewriter([ groundHeadConstruct ], false))
+      .toEqual([ 'x=ex://father', 'x=ex://father', 'x=ex://father' ]);
+  });
+
+  it('counts it once when it is on, as the mapped graph does', async({ expect }) => {
+    const onMappedData = await solutionsOnMappedData();
+    // Sanity: the mapped graph really does hold the one triple, whatever the body's solution count.
+    expect(onMappedData).toEqual([ 'x=ex://father' ]);
+    expect(await solutionsUsingRewriter([ groundHeadConstruct ], true)).toEqual(onMappedData);
+  });
+
+  it('counts it once when the head is merged behind ?m_s ?m_p ?m_o too', async({ expect }) => {
+    // With a second mapping the head is the generic one, which has three variables to deduplicate over -
+    // the path that worked all along, and has to keep working.
+    const mappers = [ groundHeadConstruct, 'CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }' ];
+    expect(await solutionsUsingRewriter(mappers, true)).toEqual(await solutionsOnMappedData());
+  });
+});

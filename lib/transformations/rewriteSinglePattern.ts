@@ -7,7 +7,7 @@ import { rangeOfPosition } from '../RangeSet.js';
 import { RewriteNoMatchError } from '../RewriteNoMatchError.js';
 import type { TransformationContext } from '../transformContext.js';
 import type { Mapping, MappingHead } from '../types.js';
-import { createFilterFalse } from '../utils/operationhelpers.js';
+import { createFilterFalse, projectSolutionExistence } from '../utils/operationhelpers.js';
 import { isRdfQuad, isRdfVar } from '../utils/typeGuards.js';
 
 /**
@@ -219,28 +219,15 @@ function wrapOperationInProject({ triplePatternBinds, operation, coinExistenceVa
   triplePatternBinds: Record<string, Alg.Expression>;
   operation: Alg.Operation;
 } & Pick<TransformationContext, 'DF' | 'AF' | 'coinExistenceVariable'>): Alg.Project {
-  let buildOperation = operation;
   // All variables required from subselect -- recursive search needed for triple terms
   const variablesToSelect = Object.keys(triplePatternBinds).map(x => DF.variable(x));
   if (variablesToSelect.length === 0) {
-    // You cannot select nothing, but actually we just want this subquery to validate if data exists.
-    // You cannot have a subAsk, but you can do a select over a dummy var: SELECT (1 as ?dummy)
-    // [proof this works](https://query.comunica.dev/#transientDatasources=%2F%2Ffragments.dbpedia.org%2F2016-04%2Fen&query=SELECT%20*%0AWHERE%20%7B%0A%20%20%3Fs%20%3Fp%20%3Fo%20.%0A%20%20%7B%20SELECT%20%281%20as%20%3Fdummy%29%20WHERE%20%7B%0A%20%20%20%20%20%20%3Chttp%3A%2F%2F0-access.newspaperarchive.com.lib.utep.edu%2Fus%2Fmississippi%2Fbiloxi%2Fbiloxi-daily-herald%2F1899%2F05-06%2Fpage-6%3Ftag%3Dtierce%2Bwine%26rtserp%3Dtags%2Ftierce-wine%3Fpage%3D2%3E%0A%20%20%20%20%20%20%3Chttp%3A%2F%2Fdbpedia.org%2Fproperty%2Fdate%3E%0A%20%20%20%20%20%20%221899-05-05%22%5E%5E%3Chttp%3A%2F%2Fwww.w3.org%2F2001%2FXMLSchema%23date%3E%0A%20%20%20%20%20%20%23%20%221899-05-06%22%5E%5E%3Chttp%3A%2F%2Fwww.w3.org%2F2001%2FXMLSchema%23date%3E%0A%20%20%20%7D%20%7D%0A%7D)
-    // This is the one variable that leaves the subselect without being a user query variable, so it is
-    // the one that has to differ per pattern: two patterns sharing it would share a join key, and a
-    // MINUS decides compatibility on exactly the variables its two sides share. The context coins it,
-    // holding the count for the whole rewrite.
-    const existenceVar = coinExistenceVariable();
-    buildOperation = AF.createExtend(
-      buildOperation,
-      existenceVar,
-      AF.createTermExpression(DF.literal('dummy')),
-    );
-    variablesToSelect.push(existenceVar);
+    // Nothing to select, so all this subquery has to say is whether the data is there.
+    return projectSolutionExistence({ AF, DF, coinExistenceVariable }, operation);
   }
   // Sort allows for stable tests but does not practically change anything.
   variablesToSelect.sort((a, b) => a.value.localeCompare(b.value));
-  return AF.createProject(buildOperation, variablesToSelect);
+  return AF.createProject(operation, variablesToSelect);
 }
 
 /**

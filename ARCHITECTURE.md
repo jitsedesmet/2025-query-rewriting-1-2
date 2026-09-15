@@ -90,11 +90,9 @@ variables its two sides share.
 ## Blank nodes
 
 An RDF 1.1 dataset cannot reference a blank node consistently across queries, so a mapping that has to
-*construct* a blank node identity uses the extension function
-`<https://sparql-extension.knows.idlab.ugent.be/bnodeConsistent>(?a, ?b, …)`: same inputs, same identity.
-`mappingFromConstructQueries` rewrites it to the internal `internal://blank`, which two transformations
-then materialise — `internalBnodeAsSpecialLiteral` as a typed literal, `internalBnodeAsSpecialIri` as a
-prefixed IRI whose length SHA-1 keeps manageable.
+*construct* a blank node identity uses the extension function `<internal://blank>(?a, ?b, …)`: same inputs,
+same identity. Two transformations materialise it — `internalBnodeAsSpecialLiteral` as a typed literal,
+`internalBnodeAsSpecialIri` as a prefixed IRI whose length SHA-1 keeps manageable.
 
 ## SPARQL quirks worth knowing
 

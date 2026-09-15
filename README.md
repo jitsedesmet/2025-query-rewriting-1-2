@@ -114,9 +114,8 @@ answer you need.
 ### Blank nodes
 
 An RDF 1.1 dataset cannot reference a blank node consistently across queries, so a mapping that has to
-construct a blank node identity uses the extension function
-`<https://sparql-extension.knows.idlab.ugent.be/bnodeConsistent>(?a, ?b, …)`: the same inputs always give
-the same identity. Add `internalBnodeAsSpecialLiteralTransformation()` or
+construct a blank node identity uses the extension function `<internal://blank>(?a, ?b, …)`: the same inputs
+always give the same identity. Add `internalBnodeAsSpecialLiteralTransformation()` or
 `internalBnodeAsSpecialIriTransformation()` to your pipeline to materialise those identities as a typed
 literal or as a prefixed IRI respectively.
 

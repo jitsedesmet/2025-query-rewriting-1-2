@@ -166,11 +166,9 @@ multi-triple case becomes the caller-facing convenience it should always have be
    `lib/utils/expressionHelpers.ts` (`bnode`, `rand`, `uuid`, `struuid`) instead of the ad-hoc
    `bnode`-only check. `NOW` stays allowed — SPARQL 1.1 §17.4.5.1 fixes it per query execution.
    Error messages name the offending function.
-5. **Accept the documented `bnodeConsistent` IRI.**
-   `https://sparql-extension.knows.idlab.ugent.be/bnodeConsistent` appears in the README but is
-   recognised nowhere in `lib`; only the internal `internal://blank` (`EXTENSION_FUNCTION_BNODE`) is.
-   Rewrite the public IRI to the internal one while building the mapping, so a body written against
-   the documented function is treated as the stable function it is.
+5. **`internal://blank` (`EXTENSION_FUNCTION_BNODE`) is the function a mapping body writes**, there
+   being no second public spelling of it. Document that IRI instead of the
+   `https://sparql-extension.knows.idlab.ugent.be/bnodeConsistent` the README used to name.
 6. Merge several mappings into the generic `?m_s ?m_p ?m_o` head exactly as
    `transformContextFromConstructs` does today (an `EXTEND` per head position, then a `UNION` of the
    bodies, then a `PROJECT`). **A single mapping keeps its specific head** — that is the decided
@@ -180,7 +178,6 @@ multi-triple case becomes the caller-facing convenience it should always have be
 
 - A two-triple template becomes a mapping equivalent to passing the two CONSTRUCTs separately.
 - A body using `RAND`/`UUID`/`STRUUID`/`BNODE` is rejected, one test each; `NOW` is accepted.
-- A body using the public `bnodeConsistent` IRI produces the same mapping as the internal one.
 - One mapping keeps its head; two mappings merge to `?m_s ?m_p ?m_o`.
 
 ### Done
@@ -434,8 +431,8 @@ sub-SELECT are invisible to it. The optimisation is real and currently missed by
 3. **`ARCHITECTURE.md`** (new) takes the seven-step algorithm, `assets/schematic-plan.png`,
    `assets/query-rewritten.jpg`, the SPARQL-quirks notes and the "to check" list. The README links it
    once. Keep it tight: it is a map, not a paper.
-4. Document `bnodeConsistent` concisely: the IRI, that it yields the same blank node identity for the
-   same inputs, and the two transformations that materialise it (`internalBnodeAsSpecialLiteral`,
+4. Document `<internal://blank>` concisely: the IRI, that it yields the same blank node identity for
+   the same inputs, and the two transformations that materialise it (`internalBnodeAsSpecialLiteral`,
    `internalBnodeAsSpecialIri`).
 5. **Delete the stale claims**: the four skolem template types (`TemplateIri`, `TemplateLiteral`,
    `TemplateBlank`, `TemplateQuad`) no longer exist — `AlgebraTemplateFactory` was an empty subclass

@@ -115,13 +115,4 @@ describe('mappingFromConstructQueries', () => {
       expect(mappingWithBodyBinding('NOW()')).not.toThrow();
     });
   });
-
-  it('reads the public bnodeConsistent function as the internal one', ({ expect }) => {
-    const bodyCalling = (functionIri: string): string => `
-      PREFIX : <ex://>
-      CONSTRUCT { ?s :p ?blank } WHERE { ?s :src ?o . BIND(<${functionIri}>(?s, ?o) AS ?blank) }`;
-    expect(mappingAsStrings(mappingFromConstructQueries([
-      bodyCalling('https://sparql-extension.knows.idlab.ugent.be/bnodeConsistent'),
-    ]))).toEqual(mappingAsStrings(mappingFromConstructQueries([ bodyCalling('internal://blank') ])));
-  });
 });

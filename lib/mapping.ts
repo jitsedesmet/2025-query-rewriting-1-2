@@ -2,12 +2,7 @@
 import type * as RDF from '@rdfjs/types';
 import type { Algebra } from '@traqula/algebra-transformations-1-2';
 import { algebraUtils } from '@traqula/algebra-transformations-1-2';
-import {
-  EXTENSION_FUNCTION_BNODE,
-  EXTENSION_FUNCTION_BNODE_PUBLIC,
-  VAR_PREFIX_MAPPING,
-  VAR_PREFIX_MERGED_HEAD,
-} from './consts.js';
+import { VAR_PREFIX_MAPPING, VAR_PREFIX_MERGED_HEAD } from './consts.js';
 import type { TransformationContext } from './transformContext.js';
 import { createTransformationContext, parseQuery, prefixVarsInOperation } from './transformContext.js';
 import type { Mapping, MappingHead } from './types.js';
@@ -89,26 +84,6 @@ function assertBodyCallsNoUnstableFunction(body: Algebra.Operation): void {
 }
 
 /**
- * Rewrites the public `bnodeConsistent` extension function to the internal IRI every pass recognises.
- * @param tools - The factories to build with
- * @param body - The mapping body to rewrite
- * @returns the body, calling {@link EXTENSION_FUNCTION_BNODE} where it called the public IRI
- */
-function withPublicBnodeFunctionRewrittenToInternal<T extends Algebra.Operation>(
-  { AF, DF }: Pick<MappingConstructionTools, 'AF' | 'DF'>,
-  body: T,
-): T {
-  return algebraUtils.mapOperationSub<'unsafe', T>(body, {}, {
-    expression: { named: { transform: (namedExpression) => {
-      if (namedExpression.name.value === EXTENSION_FUNCTION_BNODE_PUBLIC) {
-        return AF.createNamedExpression(DF.namedNode(EXTENSION_FUNCTION_BNODE), namedExpression.args);
-      }
-      return namedExpression;
-    } }},
-  });
-}
-
-/**
  * Builds the mapping one triple of a CONSTRUCT template denotes over that CONSTRUCT's body.
  * @param tools - The factories to build with
  * @param templateTriple - The one template triple becoming the head
@@ -153,7 +128,7 @@ function mappingOfSingleTemplateTriple(
  */
 function mappingsOfConstructQuery(tools: MappingConstructionTools, constructQuery: string): Mapping[] {
   const construct = <Algebra.Construct> parseQuery(tools, constructQuery);
-  const body = withPublicBnodeFunctionRewrittenToInternal(tools, construct.input);
+  const body = construct.input;
   assertBodyCallsNoUnstableFunction(body);
   // The mappings share this body object, which is safe because `prefixVarsInOperation` copies what it
   // renames, so every mapping leaving `mappingFromConstructQueries` owns its own tree.

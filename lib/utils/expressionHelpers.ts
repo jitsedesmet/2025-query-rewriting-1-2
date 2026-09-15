@@ -73,8 +73,8 @@ export const unstableOperators = new Set([ 'bnode', 'rand', 'uuid', 'struuid' ])
 
 /**
  * The extension functions declared stable, which is what lets a `BIND` over one of them move.
- * `EXTENSION_FUNCTION_BNODE` is the internal form of the README's `bnodeConsistent`, whose "same inputs =
- * same identity" is stability spelled out; every other `named` expression is opaque and so unstable.
+ * `EXTENSION_FUNCTION_BNODE`, whose "same inputs = same identity" is stability spelled out, is the only one;
+ * every other `named` expression is opaque and so unstable.
  */
 const stableNamedFunctions = new Set<string>([ EXTENSION_FUNCTION_BNODE ]);
 

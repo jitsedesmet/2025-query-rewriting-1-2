@@ -103,6 +103,7 @@ export function createTransformationContext(): TransformationContext {
     DF,
     astTransformer: new AstTransformer(),
     clusterSolver: new ClusterSolver(),
+    // Since we prefix with `m` we know it will not name-clash
     coinExistenceVariable: () => DF.variable(`mExists${existenceVariablesCoined++}`),
   };
 }
